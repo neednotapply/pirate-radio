@@ -58,7 +58,12 @@ define Package/slate-ui/install
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
 	$(INSTALL_BIN) ./files/95-slate-ui $(1)/etc/uci-defaults/95-slate-ui
 	$(INSTALL_BIN) ./root/etc/uci-defaults/95-slate-recon-gpsd $(1)/etc/uci-defaults/95-slate-recon-gpsd
+	# GPS plug and play: gpsd only while a GPS is plugged in
+	$(INSTALL_DIR) $(1)/etc/init.d $(1)/etc/hotplug.d/tty
+	$(INSTALL_BIN) ./root/etc/init.d/slate-gps $(1)/etc/init.d/slate-gps
+	$(INSTALL_DATA) ./root/etc/hotplug.d/tty/20-slate-gps $(1)/etc/hotplug.d/tty/20-slate-gps
 	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/libexec $(1)/usr/libexec/rpcd $(1)/usr/share/rpcd/acl.d
+	$(INSTALL_BIN) ./root/usr/sbin/slate-gps $(1)/usr/sbin/slate-gps
 	# Router basics
 	$(INSTALL_BIN) ./root/usr/sbin/slate-router $(1)/usr/sbin/slate-router
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/luci.slate-router $(1)/usr/libexec/rpcd/luci.slate-router

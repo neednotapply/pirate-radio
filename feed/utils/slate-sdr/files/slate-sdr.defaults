@@ -1,6 +1,7 @@
 #!/bin/sh
-# First boot: mount the microSD card labelled SLATESDR at /mnt/sdcard, and
-# serve its contents (directory listings) on port 8081.
+# First boot: mount the microSD card labelled SLATESDR at /mnt/sdcard, serve
+# its contents (directory listings) on port 8081, and leave the aircraft map
+# to the ADS-B job.
 
 [ -f /etc/config/fstab ] || touch /etc/config/fstab
 uci -q get fstab.slatesdr > /dev/null || uci -q batch <<-EOT
@@ -24,5 +25,13 @@ uci -q get uhttpd.slatesdr > /dev/null || uci -q batch <<-EOT
 	set uhttpd.slatesdr.http_keepalive='20'
 	commit uhttpd
 EOT
+
+# The aircraft map on port 8080 runs with the ADS-B job (slate-sdr-job), not
+# around the clock: drop the always-on instance that dump1090's own first-boot
+# script (00_uhttpd_dump1090, which runs before this one) adds.
+if uci -q get uhttpd.dump1090 > /dev/null; then
+	uci -q delete uhttpd.dump1090
+	uci commit uhttpd
+fi
 
 exit 0

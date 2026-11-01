@@ -1,0 +1,41 @@
+#!/bin/sh
+# Plug and play for the SDRs (/etc/hotplug.d/usb/20-slate-sdr). When an
+# RTL-SDR or a HackRF is plugged in or removed, reload slate-sdr: its init
+# script starts only the jobs whose radio is on USB, so their receivers (and
+# SoapySDRServer) run only while a radio is there. Other USB devices are
+# ignored; the supported ones are listed in lib.sh (slate_radio_kind).
+
+[ "$DEVTYPE" = usb_device ] || exit 0
+case "$ACTION" in
+add) what="plugged in" ;;
+remove) what=removed ;;
+*) exit 0 ;;
+esac
+
+. /usr/share/slate-sdr/lib.sh
+
+# PRODUCT is "<vid>/<pid>/<bcd>" in hex without leading zeros (bda/2838/100).
+vid=${PRODUCT%%/*}
+pid=${PRODUCT#*/}
+pid=${pid%%/*}
+vid=$(printf %04x "0x$vid" 2>/dev/null) || exit 0
+pid=$(printf %04x "0x$pid" 2>/dev/null) || exit 0
+kind=$(slate_radio_kind "$vid" "$pid")
+[ -n "$kind" ] || exit 0
+
+# Only once the service has started since boot, and not been stopped since:
+# at boot the init script finds the radios itself.
+[ -e "$SLATE_STATE/active" ] || exit 0
+
+# A removed radio may linger in sysfs a moment; the reload must not see it.
+if [ "$ACTION" = remove ]; then
+	n=0
+	while [ -e "${SLATE_SYSFS:-/sys}$DEVPATH" ] && [ "$n" -lt 5 ]; do
+		sleep 1
+		n=$((n + 1))
+	done
+fi
+
+logger -t slate-sdr "$kind $what: reloading the jobs"
+# SLATE_INIT: another init script to reload (tests)
+exec "${SLATE_INIT:-/etc/init.d/slate-sdr}" reload

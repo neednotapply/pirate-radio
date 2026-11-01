@@ -122,6 +122,9 @@ EOF
 mock dump1090 <<-'EOF'
 	while :; do echo '{ "now" : 1, "aircraft" : [ { "hex" : "abc123" } ] }' > /var/run/dump1090/aircraft.json; sleep 1; done
 EOF
+mock uhttpd <<-'EOF'
+	while :; do sleep 1; done
+EOF
 mock SoapySDRServer <<-'EOF'
 	while :; do sleep 1; done
 EOF
@@ -235,7 +238,8 @@ run_job adsb 11
 check "adsb: dump1090 arguments" has "$T/calls.log" "dump1090 --quiet --net --device-index 0 --write-json /var/run/dump1090 --lat 51.5 --lon -0.1"
 n=$(grep -c abc123 "$DATA/adsb/$TODAY/aircraft-$(date +%Y%m%d).json" 2>/dev/null)
 check "adsb: aircraft snapshots on the card ($n)" [ "${n:-0}" -ge 2 ]
-check "adsb: no stray receivers" no_strays
+check "adsb: map server runs with the job" has "$T/calls.log" "uhttpd -f -h /usr/share/dump1090 .*-p 0.0.0.0:8080"
+check "adsb: no stray receivers (map server stopped too)" no_strays
 
 echo "# job: soapy server"
 : > "$T/calls.log"
@@ -277,6 +281,7 @@ slate_spectral_sweep "$T/spec" "5g" 2>/dev/null
 check "spectral: band filter" sh -c "! ls $T/spec/2g-* >/dev/null 2>&1 && ls $T/spec/5g-* >/dev/null 2>&1"
 
 echo "# init script (procd calls stubbed)"
+export SLATE_STATE="$T/state"
 cp "$T/slate-sdr.default" /etc/config/slate-sdr
 cat > "$T/init-harness.sh" <<-'EOF'
 	. /lib/functions.sh
@@ -297,6 +302,43 @@ check "init: second job on the RTL-SDR is refused" sh -c "grep -q \"job 'ism' no
 check "init: wifi job skipped without spectral scan" grep -q "job 'wifi' not started: this firmware has no Wi-Fi spectral scan" "$T/init.out"
 sh "$T/init-harness.sh" > "$T/init.out" 2>&1
 check "init: wifi job starts with spectral scan" grep -q "instance wifi:" "$T/init.out"
+
+echo "# plug and play: jobs run only while their radio is on USB"
+cp "$T/slate-sdr.default" /etc/config/slate-sdr
+check "pnp: supported radio kinds, others ignored" sh -c '. /usr/share/slate-sdr/lib.sh; [ "$(slate_radio_kind 0bda 2838) $(slate_radio_kind 1d50 6089) x$(slate_radio_kind 148f 5370)" = "rtlsdr hackrf x" ]'
+rm -f "$T/state/active"
+SLATE_DEBUGFS="$T/nodbg" sh "$T/init-harness.sh" > "$T/init.out" 2>&1
+check "pnp: start marks the service active (for the hotplug hook)" [ -e "$T/state/active" ]
+mv "$T/sys/bus/usb/devices/1-2" "$T/hackrf-unplugged"
+SLATE_DEBUGFS="$T/nodbg" sh "$T/init-harness.sh" > "$T/init.out" 2>&1
+check "pnp: HackRF job waits while the HackRF is unplugged" sh -c "grep -q \"job 'survey' waits: no hackrf on USB\" $T/init.out && ! grep -q 'instance survey' $T/init.out"
+check "pnp: RTL-SDR and SoapySDR jobs still start" sh -c "grep -q 'instance adsb:' $T/init.out && grep -q 'instance soapy:' $T/init.out"
+mv "$T/sys/bus/usb/devices/1-1" "$T/rtlsdr-unplugged"
+SLATE_DEBUGFS="$T/nodbg" sh "$T/init-harness.sh" > "$T/init.out" 2>&1
+check "pnp: no radios, no jobs (SoapySDR server included)" sh -c "! grep -q '^instance' $T/init.out && grep -q \"job 'soapy' waits: no SDR on USB\" $T/init.out"
+mock ubus <<-'EOF'
+	echo '{"slate-sdr":{"instances":{}}}'
+EOF
+slate-sdr status > "$T/status-pnp.out" 2>&1
+check "pnp: status shows enabled jobs without their radio as waiting" sh -c "grep -q 'adsb .*adsb .*rtlsdr .*waiting' $T/status-pnp.out && grep -q 'soapy .*soapy_server .*- .*waiting' $T/status-pnp.out && grep -q 'ism .*ism .*rtlsdr .*off' $T/status-pnp.out"
+
+# The USB hotplug hook (hotplug-call sources it; here it runs under sh).
+HP=/etc/hotplug.d/usb/20-slate-sdr
+cat > "$T/fake-init" <<-'EOF'
+	#!/bin/sh
+	echo "$*" >> "$SLATE_TEST_CALLS"
+EOF
+chmod +x "$T/fake-init"
+hp() { : > "$T/hp.log"; env SLATE_INIT="$T/fake-init" SLATE_TEST_CALLS="$T/hp.log" "$@" sh "$HP" > /dev/null 2>&1; cat "$T/hp.log"; }
+: > "$T/state/active"
+check "pnp hotplug: RTL-SDR plugged in reloads slate-sdr" [ "$(hp ACTION=add DEVTYPE=usb_device PRODUCT=bda/2838/100)" = reload ]
+check "pnp hotplug: HackRF removed reloads slate-sdr" [ "$(hp ACTION=remove DEVTYPE=usb_device PRODUCT=1d50/6089/101 DEVPATH=/devices/gone/1-2)" = reload ]
+check "pnp hotplug: other USB devices are ignored" [ -z "$(hp ACTION=add DEVTYPE=usb_device PRODUCT=148f/5370/101)" ]
+check "pnp hotplug: interface events are ignored" [ -z "$(hp ACTION=add DEVTYPE=usb_interface PRODUCT=bda/2838/100)" ]
+rm -f "$T/state/active"
+check "pnp hotplug: nothing until the service has started" [ -z "$(hp ACTION=add DEVTYPE=usb_device PRODUCT=bda/2838/100)" ]
+mv "$T/hackrf-unplugged" "$T/sys/bus/usb/devices/1-2"
+mv "$T/rtlsdr-unplugged" "$T/sys/bus/usb/devices/1-1"
 
 echo "# command line and status page"
 cp "$T/slate-sdr.default" /etc/config/slate-sdr
@@ -585,6 +627,37 @@ check "firmware: clear discards the staged image" sh -c 'slate-firmware clear >/
 check "upload CGI: stages the posted body" sh -c 'printf hello | CONTENT_LENGTH=5 sh /www/cgi-bin/slate-upload | tail -1 | jsonfilter -e "@.ok" | grep -qx true && [ -s "$SLATE_FIRMWARE_IMG" ]'
 check "upload CGI: rejects an empty body" sh -c 'CONTENT_LENGTH=0 sh /www/cgi-bin/slate-upload </dev/null | tail -1 | jsonfilter -e "@.error" | grep -q "no data"'
 check "upload CGI: rejects an oversize body" sh -c 'CONTENT_LENGTH=100 SLATE_UPLOAD_MAX=10 sh /www/cgi-bin/slate-upload </dev/null | tail -1 | jsonfilter -e "@.error" | grep -q "too large"'
+
+echo "# slate-ui: GPS plug and play (slate-gps)"
+[ -f /etc/config/gpsd ] || : > /etc/config/gpsd
+uci -q batch <<-'EOF'
+	set gpsd.core=gpsd
+	delete gpsd.core.devices
+	add_list gpsd.core.devices=/dev/ttyACM0
+	add_list gpsd.core.devices=/dev/ttyUSB0
+	commit gpsd
+EOF
+GD="$T/gpsdev"; mkdir -p "$GD/dev"
+cat > "$T/fake-gpsd" <<-'EOF'
+	#!/bin/sh
+	echo "$*" >> "$SLATE_TEST_CALLS"
+EOF
+chmod +x "$T/fake-gpsd"
+gsync() { : > "$T/gsync.log"; env SLATE_GPSD_INIT="$T/fake-gpsd" SLATE_DEV_ROOT="$GD" SLATE_TEST_CALLS="$T/gsync.log" slate-gps sync "$@" > /dev/null 2>&1; cat "$T/gsync.log"; }
+check "gps pnp: no GPS plugged in -> gpsd stopped" [ "$(gsync)" = stop ]
+: > "$GD/dev/ttyACM0"
+check "gps pnp: GPS plugged in -> gpsd started" [ "$(gsync)" = start ]
+check "gps pnp: the device being removed counts as gone" [ "$(gsync /dev/ttyACM0)" = stop ]
+check "gps pnp: present reports a plugged-in GPS" env SLATE_DEV_ROOT="$GD" slate-gps present
+# The tty hotplug hook (hotplug-call sources it; here it runs under sh).
+GH=/etc/hotplug.d/tty/20-slate-gps
+ghp() { : > "$T/gsync.log"; env SLATE_GPS_ACTIVE="$T/gps.active" SLATE_GPSD_INIT="$T/fake-gpsd" SLATE_DEV_ROOT="$GD" SLATE_TEST_CALLS="$T/gsync.log" "$@" sh "$GH" > /dev/null 2>&1; cat "$T/gsync.log"; }
+: > "$T/gps.active"
+check "gps hotplug: GPS plugged in starts gpsd" [ "$(ghp ACTION=add DEVNAME=ttyACM0)" = start ]
+check "gps hotplug: GPS removed stops gpsd" [ "$(ghp ACTION=remove DEVNAME=ttyACM0)" = stop ]
+check "gps hotplug: other serial devices are ignored" [ -z "$(ghp ACTION=add DEVNAME=ttyS1)" ]
+rm -f "$T/gps.active"
+check "gps hotplug: nothing while slate-gps is stopped" [ -z "$(ghp ACTION=add DEVNAME=ttyACM0)" ]
 
 echo
 echo "$PASS passed, $FAIL failed"

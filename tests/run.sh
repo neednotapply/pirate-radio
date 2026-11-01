@@ -38,6 +38,8 @@ cp "$f/job.sh" "$ov/usr/libexec/slate-sdr-job"
 cp "$f/slate-sdr.cli" "$ov/usr/sbin/slate-sdr"
 cp "$f/lib.sh" "$ov/usr/share/slate-sdr/lib.sh"
 cp "$f/status.cgi" "$ov/www/cgi-bin/slate-sdr"
+mkdir -p "$ov/etc/hotplug.d/usb"
+cp "$f/slate-sdr.hotplug" "$ov/etc/hotplug.d/usb/20-slate-sdr"
 chmod 755 "$ov/etc/init.d/slate-sdr" "$ov/usr/libexec/slate-sdr-job" \
 	"$ov/usr/sbin/slate-sdr" "$ov/www/cgi-bin/slate-sdr"
 
@@ -59,6 +61,11 @@ cp "$u/usr/share/rpcd/acl.d/luci-app-slate-router.json" "$u/usr/share/rpcd/acl.d
 	"$u/usr/share/rpcd/acl.d/luci-app-slate-sdr.json" "$u/usr/share/rpcd/acl.d/luci-app-slate-recon.json" \
 	"$ov/usr/share/rpcd/acl.d/"
 cp "$u/etc/uci-defaults/95-slate-recon-gpsd" "$ov/etc/uci-defaults/"
+mkdir -p "$ov/etc/init.d" "$ov/etc/hotplug.d/tty"
+cp "$u/usr/sbin/slate-gps" "$ov/usr/sbin/"
+cp "$u/etc/init.d/slate-gps" "$ov/etc/init.d/"
+cp "$u/etc/hotplug.d/tty/20-slate-gps" "$ov/etc/hotplug.d/tty/"
+chmod 755 "$ov/usr/sbin/slate-gps" "$ov/etc/init.d/slate-gps"
 cp "$here/feed/utils/slate-ui/files/slate-upload" "$ov/www/cgi-bin/slate-upload"
 chmod 755 "$ov/usr/sbin/slate-router" "$ov/usr/sbin/slate-capture" "$ov/usr/sbin/slate-handshake" \
 	"$ov/usr/sbin/slate-firmware" "$ov/usr/sbin/slate-recon" "$ov/usr/sbin/slate-survey" \

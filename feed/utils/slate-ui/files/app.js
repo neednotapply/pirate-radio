@@ -439,7 +439,7 @@
 	}
 	// "  adsb       adsb           rtlsdr   running" -> {name,type,radio,state}
 	function parseJobs(status) {
-		var jobs = [], re = /^ {2}(\S+) +(\S+) +(\S+) +(running|stopped|off) *$/mg, m;
+		var jobs = [], re = /^ {2}(\S+) +(\S+) +(\S+) +(running|stopped|waiting|off) *$/mg, m;
 		while ((m = re.exec(status || "")) !== null)
 			jobs.push({ name: m[1], type: m[2], radio: m[3], state: m[4] });
 		return jobs;
@@ -672,7 +672,7 @@
 
 	function gpsText(g) {
 		if (!g || g.installed === false) return "No GPS tools installed. Add a USB GPS and gpsd to tag sightings.";
-		if (!g.running) return "gpsd is not running. Plug in a USB GPS (started on boot).";
+		if (!g.running) return "No GPS plugged in. Plug in a USB GPS and gpsd starts by itself.";
 		var where = g.device ? " on " + g.device : "";
 		if (g.fix === "2D" || g.fix === "3D")
 			return "GPS fix (" + g.fix + ")" + where + ": " + g.lat.toFixed(6) + ", " + g.lon.toFixed(6) +
@@ -853,7 +853,7 @@
 
 		var jobsPanel = panel("Jobs");
 		jobsPanel.appendChild(el("p", { class: "descr", text:
-			"Each radio runs one job at a time. Hand a radio to another job and the service switches it over." }));
+			"Each radio runs one job at a time. Hand a radio to another job and the service switches it over. A job starts when its radio is plugged in and stops when it is removed." }));
 		var jobsWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
 		jobsPanel.appendChild(jobsWrap);
 		var raw = el("details", { class: "raw" }, el("summary", { text: "Raw status" }));
@@ -883,6 +883,7 @@
 				var s = jobsMap[job] && jobsMap[job].state;
 				if (s === "running") return badge("on", "sec-ok");
 				if (s === "stopped") return badge("stopped", "sec-warn");
+				if (s === "waiting") return badge("radio unplugged", "sec-neutral");
 				if (s === "off") return badge("off", "sec-neutral");
 				return badge("job " + job, "sec-neutral");
 			}
@@ -911,6 +912,8 @@
 				clear(jobsWrap).appendChild(tableEl(["Job", "Radio", "Type", "State", ""], jobs.map(function (j) {
 					var action = j.state === "running"
 						? el("span", { class: "muted", text: "—" })
+						: j.state === "waiting"
+						? el("span", { class: "muted", text: "plug in " + (j.radio === "-" ? "an SDR" : "the " + j.radio) })
 						: btn("Use " + j.radio, { cls: "small", onclick: function () { handTo(j.name); } });
 					return [el("strong", { text: j.name }), j.radio, j.type, badge(j.state, stateCls(j.state)), action];
 				})));

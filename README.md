@@ -121,6 +121,15 @@ U-Boot recovery page above stays the backstop if a flash ever goes wrong.
 
 ## Use
 
+**Plug and play:** nothing runs for a device that isn't plugged in, so the
+128 MB of RAM goes to what is. An enabled job starts when its radio (an
+RTL-SDR or a HackRF) is plugged in and stops when it's removed; the SoapySDR
+server runs while either radio is in, and the aircraft map on port 8080 only
+while the ADS-B job runs. gpsd starts when a USB GPS appears (the devices in
+`/etc/config/gpsd`) and stops when it goes. Jobs whose radio is missing show
+as *waiting*. Other USB devices are left alone; the supported radios are
+listed in `slate_radio_kind` (`/usr/share/slate-sdr/lib.sh`).
+
 **Status page:** `http://192.168.1.1/cgi-bin/slate-sdr` shows the radios,
 card and jobs, with links to the aircraft map, the ISM live view and the
 recorded files (`http://192.168.1.1:8081/slate-sdr/`).
@@ -235,8 +244,11 @@ Tested in this repository's tests and builds:
   (slate-router, slate-capture, slate-handshake and slate-firmware: their rpcd
   plugins, input validation and JSON shapes, including the set-password, Wi-Fi
   join/scan/status and firmware verify/apply/upload methods — the flasher runs
-  against a mock sysupgrade, so no real flash is ever attempted), against mock
-  radios and tools on that same userland: 185 checks.
+  against a mock sysupgrade, so no real flash is ever attempted), and plug and
+  play (jobs held back while their radio is unplugged, the USB and tty hotplug
+  hooks, gpsd started and stopped with the GPS, the map server living and
+  dying with the ADS-B job), against mock radios and tools on that same
+  userland: 205 checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -247,6 +259,11 @@ Not yet run:
   throughput over the router's USB, the card reader's write speed, and Wi-Fi
   spectral scan on this hardware. `ath10k` spectral on the QCA9887
   specifically has not been confirmed.
+- Plug and play with real hardware being plugged in. On the device, the hooks
+  were driven with stand-in devices (a fake sysfs RTL-SDR and HackRF, a fake
+  `/dev/ttyACM0`): jobs and gpsd started and stopped through procd as
+  expected, untouched jobs kept running. A real RTL-SDR, HackRF or GPS being
+  plugged in, and the boot-time start with one already in, are not yet run.
 - The web UI's first-run screen on a freshly flashed device (settings not
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that

@@ -1,7 +1,16 @@
 # Shared helpers for slate-sdr (sourced; busybox ash).
 # Callers source /lib/functions.sh first and run config_load slate-sdr.
 
-SLATE_STATE=/var/run/slate-sdr
+SLATE_STATE=${SLATE_STATE:-/var/run/slate-sdr}
+
+# The SDRs slate-sdr supports. slate_radio_kind <vid> <pid> (4-digit lowercase
+# hex, as in sysfs) prints rtlsdr, hackrf, or nothing for any other device.
+slate_radio_kind() {
+	case "$1:$2" in
+	0bda:2832|0bda:2838) echo rtlsdr ;;
+	1d50:6089|1d50:604b|1d50:cc15) echo hackrf ;;
+	esac
+}
 
 # Print one line per SDR on the USB bus: "<kind> <vid>:<pid> <serial> <product>"
 slate_usb_radios() {
@@ -10,11 +19,8 @@ slate_usb_radios() {
 		[ -r "$d/idVendor" ] && [ -r "$d/idProduct" ] || continue
 		read -r vid < "$d/idVendor"
 		read -r pid < "$d/idProduct"
-		case "$vid:$pid" in
-		0bda:2832|0bda:2838) kind=rtlsdr ;;
-		1d50:6089|1d50:604b|1d50:cc15) kind=hackrf ;;
-		*) continue ;;
-		esac
+		kind=$(slate_radio_kind "$vid" "$pid")
+		[ -n "$kind" ] || continue
 		serial=-
 		product='?'
 		[ -r "$d/serial" ] && read -r serial < "$d/serial"
@@ -38,6 +44,25 @@ slate_job_radio() {
 	*) radio= ;;
 	esac
 	echo "$radio"
+}
+
+# What a job type needs on USB before it runs: rtlsdr, hackrf, any (an SDR of
+# either kind; the SoapySDR server holds none of its own) or nothing.
+# slate_job_needs <section> <type>
+slate_job_needs() {
+	case "$2" in
+	soapy_server) echo any ;;
+	*) slate_job_radio "$1" "$2" ;;
+	esac
+}
+
+# slate_need_met <rtlsdr|hackrf|any|''>: is what a job needs on USB now?
+slate_need_met() {
+	case "$1" in
+	'') return 0 ;;
+	any) [ -n "$(slate_usb_radios)" ] ;;
+	*) slate_radio_present "$1" ;;
+	esac
 }
 
 # Loads STORE_MOUNT, STORE_ROOT, STORE_MIN_FREE_MB, STORE_REQUIRE_MOUNT.

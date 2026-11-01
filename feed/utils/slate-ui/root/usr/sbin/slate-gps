@@ -1,0 +1,37 @@
+#!/bin/sh
+# slate-gps: plug and play for a USB GPS. gpsd runs only while a GPS is
+# plugged in; a GPS is any device listed in gpsd's config (gpsd.core.devices,
+# /dev/ttyACM0 and /dev/ttyUSB0 by default) that exists. The slate-gps init
+# script syncs at boot, the tty hotplug hook on every plug and unplug.
+#
+#   slate-gps sync [gone]   start or stop gpsd to match; [gone] is a device
+#                           being removed, counted as absent
+#   slate-gps present       exit 0 if a GPS is plugged in
+
+# Overridable for tests.
+GPSD_INIT=${SLATE_GPSD_INIT:-/etc/init.d/gpsd}
+DEV_ROOT=${SLATE_DEV_ROOT:-}
+
+present() {
+	local d gone="$1"
+	for d in $(uci -q get gpsd.core.devices); do
+		[ "$d" = "$gone" ] && continue
+		[ -e "$DEV_ROOT$d" ] && return 0
+	done
+	return 1
+}
+
+case "$1" in
+present) present ;;
+sync)
+	if present "$2"; then
+		"$GPSD_INIT" start
+	else
+		"$GPSD_INIT" stop
+	fi > /dev/null 2>&1
+	;;
+*)
+	echo "usage: slate-gps sync [gone-device] | present" >&2
+	exit 1
+	;;
+esac

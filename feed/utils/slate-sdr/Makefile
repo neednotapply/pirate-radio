@@ -51,6 +51,8 @@ define Package/slate-sdr/install
 	$(INSTALL_DIR) $(1)/etc/config $(1)/etc/init.d $(1)/etc/uci-defaults $(1)/etc/sysctl.d
 	$(INSTALL_CONF) ./files/slate-sdr.config $(1)/etc/config/slate-sdr
 	$(INSTALL_BIN) ./files/slate-sdr.init $(1)/etc/init.d/slate-sdr
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/usb
+	$(INSTALL_DATA) ./files/slate-sdr.hotplug $(1)/etc/hotplug.d/usb/20-slate-sdr
 	$(INSTALL_BIN) ./files/slate-sdr.defaults $(1)/etc/uci-defaults/90-slate-sdr
 	$(INSTALL_DATA) ./files/slate-sdr.sysctl $(1)/etc/sysctl.d/20-slate-sdr.conf
 	$(INSTALL_DIR) $(1)/usr/libexec $(1)/usr/sbin $(1)/usr/share/slate-sdr

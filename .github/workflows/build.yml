@@ -23,7 +23,7 @@ jobs:
         run: |
           pip install --quiet shellcheck-py
           cd feed/utils/slate-sdr/files
-          shellcheck -s sh -e SC1091,SC3043 -x job.sh slate-sdr.cli status.cgi slate-sdr.defaults
+          shellcheck -s sh -e SC1091,SC3043 -x job.sh slate-sdr.cli status.cgi slate-sdr.defaults slate-sdr.hotplug
           shellcheck -s sh -e SC3043,SC2034 lib.sh
           shellcheck -s sh -e SC1091,SC2034,SC3043,SC2154 slate-sdr.init
           cd "$GITHUB_WORKSPACE"
@@ -35,6 +35,7 @@ jobs:
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-handshake feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-handshake
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-firmware feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-firmware
           shellcheck -s sh -e SC1091,SC3043 feed/utils/slate-ui/files/slate-upload
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-gps feed/utils/slate-ui/root/etc/init.d/slate-gps feed/utils/slate-ui/root/etc/hotplug.d/tty/20-slate-gps
           shellcheck -s sh build.sh build-full.sh scripts/*.sh tests/run.sh
           shellcheck -s sh -e SC3043,SC2016,SC2012,SC1091,SC2015 tests/rootfs-test.sh
 

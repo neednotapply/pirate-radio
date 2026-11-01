@@ -1,0 +1,16 @@
+#!/bin/sh
+# Plug and play for a USB GPS (/etc/hotplug.d/tty/20-slate-gps): when a serial
+# device a GPS shows up as is plugged in or removed, start or stop gpsd to
+# match (slate-gps; the GPS devices are gpsd's configured ones).
+
+case "$ACTION" in add|remove) ;; *) exit 0 ;; esac
+case "$DEVNAME" in ttyACM*|ttyUSB*) ;; *) exit 0 ;; esac
+
+# Only once slate-gps has started since boot, and not been stopped since.
+[ -e "${SLATE_GPS_ACTIVE:-/var/run/slate-gps.active}" ] || exit 0
+
+gone=
+[ "$ACTION" = remove ] && gone="/dev/$DEVNAME"
+logger -t slate-gps "$DEVNAME $ACTION: matching gpsd to the GPS devices"
+# SLATE_GPS: another slate-gps to run (tests)
+exec "${SLATE_GPS:-/usr/sbin/slate-gps}" sync "$gone"

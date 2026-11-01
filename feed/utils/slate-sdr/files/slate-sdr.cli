@@ -44,6 +44,9 @@ show_job() {
 	radio=$(slate_job_radio "$cfg" "$type")
 	if [ "$enabled" = 1 ]; then
 		state=$(job_state "$cfg")
+		# Enabled, but its radio is not plugged in: it starts when one is.
+		[ "$state" = stopped ] && ! slate_need_met "$(slate_job_needs "$cfg" "$type")" &&
+			state=waiting
 	else
 		state=off
 	fi

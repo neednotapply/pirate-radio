@@ -8,12 +8,14 @@
 JOB="$1"
 CHILD=
 WATCH=
+MAP=
 
 log() { echo "$JOB: $*" >&2; }
 
 stop_children() {
 	[ -n "$WATCH" ] && kill "$WATCH" 2>/dev/null
 	[ -n "$CHILD" ] && kill -TERM "$CHILD" 2>/dev/null
+	[ -n "$MAP" ] && kill "$MAP" 2>/dev/null
 	wait
 }
 trap 'stop_children; exit 0' TERM INT
@@ -171,8 +173,10 @@ job_rtl_tcp() {
 
 # --- decoders ----------------------------------------------------------------
 
-# ADS-B: dump1090 serves the map (port 8080) and the SBS/Beast feeds; every
-# log_every seconds the aircraft table is appended to the card.
+# ADS-B: dump1090 serves the SBS/Beast feeds and writes the aircraft table;
+# the map on port 8080 (dump1090's web page, on a uhttpd of its own) runs only
+# while this job does. Every log_every seconds (0: never) the aircraft table is
+# appended to the card.
 job_adsb() {
 	local dev gain ppm lat lon every last f day
 	config_get dev "$JOB" device 0
@@ -183,17 +187,17 @@ job_adsb() {
 	config_get every "$JOB" log_every 60
 	wait_radio rtlsdr
 	mkdir -p /var/run/dump1090
+	uhttpd -f -h /usr/share/dump1090 -n 3 -N 20 -R -p 0.0.0.0:8080 -p '[::]:8080' &
+	MAP=$!
 	set -- dump1090 --quiet --net --device-index "$dev" --write-json /var/run/dump1090
 	[ -n "$gain" ] && set -- "$@" --gain "$gain"
 	[ -n "$ppm" ] && set -- "$@" --ppm "$ppm"
 	[ -n "$lat" ] && [ -n "$lon" ] && set -- "$@" --lat "$lat" --lon "$lon"
-	# shellcheck disable=SC2086
-	[ "$every" -gt 0 ] 2>/dev/null || exec "$@" $EXTRA
 
 	# shellcheck disable=SC2086
 	"$@" $EXTRA &
 	CHILD=$!
-	while kill -0 "$CHILD" 2>/dev/null; do
+	while [ "$every" -gt 0 ] 2>/dev/null && kill -0 "$CHILD" 2>/dev/null; do
 		nap "$every"
 		have_storage || continue
 		[ -s /var/run/dump1090/aircraft.json ] || continue
@@ -204,6 +208,8 @@ job_adsb() {
 		cat /var/run/dump1090/aircraft.json >> "$f"
 	done
 	wait "$CHILD"
+	kill "$MAP" 2>/dev/null
+	MAP=
 }
 
 add_freq() {
