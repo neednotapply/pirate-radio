@@ -252,24 +252,27 @@ Tested in this repository's tests and builds:
   play (jobs held back while their radio is unplugged, the USB and tty hotplug
   hooks, gpsd started and stopped with the GPS, the map server living and
   dying with the ADS-B job), against mock radios and tools on that same
-  userland: 211 checks.
+  userland: 212 checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
 
 Not yet run:
 
-- On a real GL-AR750S, with real radios. Untested there: the radios'
-  throughput over the router's USB, the card reader's write speed, and Wi-Fi
-  spectral scan on this hardware. `ath10k` spectral on the QCA9887
-  specifically has not been confirmed.
-- Plug and play with a real HackRF or GPS, and the boot-time start with a
-  radio already plugged in. A real RTL-SDR has been plugged in and pulled out
-  on the device: the ISM job and the SoapySDR server started when it went in
-  and stopped when it came out, while the HackRF job waited throughout. The
-  HackRF and GPS hooks were driven only with stand-in devices (a fake sysfs
-  HackRF, a fake `/dev/ttyACM0`): jobs and gpsd started and stopped through
-  procd as expected, and untouched jobs kept running.
+- Most of the radio work on a real GL-AR750S. So far, rtl_433 decodes from a
+  real RTL-SDR there, and hackrf_sweep surveys 1 MHz – 6 GHz from a real
+  HackRF (a PortaPack in HackRF mode) in under a second per sweep. Untested
+  there: high-rate streaming over the router's USB (raw IQ capture, rtl_tcp,
+  SoapySDR clients), the card reader's write speed, and Wi-Fi spectral scan on
+  this hardware. `ath10k` spectral on the QCA9887 specifically has not been
+  confirmed.
+- Plug and play: pulling out a HackRF, a real USB GPS, and the boot-time start
+  with a radio already plugged in. On the device, a real RTL-SDR has been
+  plugged in and pulled out (the ISM job and the SoapySDR server started and
+  stopped with it), and a real HackRF plugged in (the survey job and SoapySDR
+  started); a PortaPack in Mayhem mode was rightly taken for neither a radio
+  nor a GPS. The GPS hook was driven only with a stand-in `/dev/ttyACM0`:
+  gpsd started and stopped through procd as expected.
 - The web UI's first-run screen on a freshly flashed device (settings not
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that

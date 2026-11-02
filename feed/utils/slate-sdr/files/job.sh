@@ -285,7 +285,10 @@ sweep_exec() {
 		config_get vga "$JOB" vga 20
 		config_get_bool amp "$JOB" amp 0
 		config_get dev "$JOB" device
-		set -- hackrf_sweep -f "$range" -w "$bin" -l "$lna" -g "$vga" -a "$amp"
+		# -P estimate: hackrf_sweep's default FFTW plan ("measure") times FFT
+		# algorithms first, which on this FPU-less CPU took minutes per sweep
+		# (and every one-shot sweep plans again); a sweep itself takes ~1 s.
+		set -- hackrf_sweep -f "$range" -w "$bin" -l "$lna" -g "$vga" -a "$amp" -P estimate
 		[ -n "$dev" ] && set -- "$@" -d "$dev"
 	else
 		config_get range "$JOB" range 24M:1766M:250k

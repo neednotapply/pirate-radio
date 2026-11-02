@@ -24,6 +24,7 @@ echo "# binaries on the target userland"
 # No USB bus in the container: hackrf_info gets as far as libusb's init.
 check "hackrf_info runs" sh -c 'hackrf_info 2>&1 | grep -q -e "hackrf_info version" -e "hackrf_init()"'
 check "hackrf_sweep runs" sh -c 'hackrf_sweep -h 2>&1 | grep -q "Usage"'
+check "hackrf_sweep takes -P estimate (the survey job uses it)" sh -c 'hackrf_sweep -h 2>&1 | grep -q -- "-P estimate"'
 check "hackrf_transfer runs" sh -c 'hackrf_transfer -h 2>&1 | grep -q "Usage"'
 check "SoapySDR loads the HackRF module" sh -c 'SoapySDRUtil --info 2>&1 | grep -q "Available factories.*hackrf"'
 check "SoapySDR loads the RTL-SDR module" sh -c 'SoapySDRUtil --info 2>&1 | grep -q "Available factories.*rtlsdr"'
@@ -185,7 +186,7 @@ echo "# job: survey (hackrf, one sweep every 5 s)"
 : > "$T/calls.log"
 set_job survey interval=5
 run_job survey 17
-check "survey: hackrf_sweep arguments" has "$T/calls.log" "hackrf_sweep -f 1:6000 -w 1000000 -l 16 -g 20 -a 0 -1"
+check "survey: hackrf_sweep arguments" has "$T/calls.log" "hackrf_sweep -f 1:6000 -w 1000000 -l 16 -g 20 -a 0 -P estimate -1"
 n=$(grep -c hackrf_sweep "$T/calls.log")
 check "survey: 3 or 4 sweeps in 17 s ($n)" sh -c "[ $n -ge 3 ] && [ $n -le 4 ]"
 csv=$DATA/survey/$TODAY/sweep-hackrf-$(date +%Y%m%d-%H)00.csv
