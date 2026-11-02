@@ -171,14 +171,15 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
 
 **Also in the image:**
 
-- **Ad blocking** for the router's clients (*Services → Adblock*). On a
-  router with 128 MB of RAM, start with one list such as OISD small.
-- **MQTT broker** (mosquitto, *Services → Mosquitto*) — in the **complete**
+- **Ad blocking** for the router's clients (on/off on the Slate UI's *Router*
+  tab). On a router with 128 MB of RAM, start with one list such as OISD small.
+- **MQTT broker** (mosquitto, set up over SSH) — in the **complete**
   build only (`SLATE_EXTRAS=1`, see *Build*). rtl_433 publishes what it decodes
   to it with `option extra_args '-F mqtt://127.0.0.1:1883,retain=1'` in the
-  `ism` job, under `rtl_433/<hostname>/`.
+  `ism` job, under `rtl_433/<hostname>/`. Leave that option out on the default
+  (lean) image: it has no broker, and rtl_433 would keep trying to reach one.
 - **tcpdump** (mini) and **horst**, a Wi-Fi analyzer for monitor mode.
-- **Network recon** (*Services → Network Recon*):
+- **Network recon** (the Slate UI's *Hosts*, *Wi-Fi Survey* and *Threats* tabs):
   - **Dashboard:** one glance at where the Slate is and what it sees — the
     joined network and whether it is online, hosts and access points logged,
     GPS, threats, the radios and the running SDR jobs, each tile linking to
