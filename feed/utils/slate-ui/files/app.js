@@ -905,11 +905,16 @@
 			var jobs = parseJobs(status);
 			jobsMap = {};
 			jobs.forEach(function (j) { jobsMap[j.name] = j; });
+			clear(jobsWrap);
+			// "  note: ..." lines: a radio plugged in but in a mode it can't be used in.
+			var note, noteRe = /^ {2}note: (.+)$/mg;
+			while ((note = noteRe.exec(status || "")) !== null)
+				jobsWrap.appendChild(alertEl("warn", note[1]));
 			if (!jobs.length) {
-				clear(jobsWrap).appendChild(el("div", { class: "muted", text:
+				jobsWrap.appendChild(el("div", { class: "muted", text:
 					"No job status reported (is slate-sdr installed on this device?)." }));
 			} else {
-				clear(jobsWrap).appendChild(tableEl(["Job", "Radio", "Type", "State", ""], jobs.map(function (j) {
+				jobsWrap.appendChild(tableEl(["Job", "Radio", "Type", "State", ""], jobs.map(function (j) {
 					var action = j.state === "running"
 						? el("span", { class: "muted", text: "—" })
 						: j.state === "waiting"

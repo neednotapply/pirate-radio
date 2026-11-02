@@ -63,6 +63,7 @@ cmd_radios() {
 			printf '  %-7s %s  serial %s  %s\n' "$kind" "$id" "$serial" "$product"
 		done
 	fi
+	slate_usb_notes | sed 's/^/  note: /'
 }
 
 cmd_status() {

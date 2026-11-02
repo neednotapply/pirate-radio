@@ -1,8 +1,9 @@
 #!/bin/sh
 # slate-gps: plug and play for a USB GPS. gpsd runs only while a GPS is
 # plugged in; a GPS is any device listed in gpsd's config (gpsd.core.devices,
-# /dev/ttyACM0 and /dev/ttyUSB0 by default) that exists. The slate-gps init
-# script syncs at boot, the tty hotplug hook on every plug and unplug.
+# /dev/ttyACM0 and /dev/ttyUSB0 by default) that exists and isn't a known
+# other kind of serial device. The slate-gps init script syncs at boot, the
+# tty hotplug hook on every plug and unplug.
 #
 #   slate-gps sync [gone]   start or stop gpsd to match; [gone] is a device
 #                           being removed, counted as absent
@@ -11,12 +12,33 @@
 # Overridable for tests.
 GPSD_INIT=${SLATE_GPSD_INIT:-/etc/init.d/gpsd}
 DEV_ROOT=${SLATE_DEV_ROOT:-}
+SYSFS=${SLATE_SYSFS:-/sys}
+
+# usb_id <device>: the vid:pid of the USB device a serial device belongs to.
+usb_id() {
+	local d
+	d=$(readlink -f "$1") || return 1
+	d="$SYSFS/class/tty/${d##*/}/device"
+	[ -e "$d" ] || return 1
+	d=$(readlink -f "$d") || return 1
+	while [ -n "$d" ] && [ ! -r "$d/idVendor" ]; do d=${d%/*}; done
+	[ -n "$d" ] && echo "$(cat "$d/idVendor"):$(cat "$d/idProduct")"
+}
+
+# is_gps <device>: not a serial device known to be something else, such as
+# a PortaPack's USB console under Mayhem firmware (1d50:6018), which takes
+# /dev/ttyACM0 like a GPS would.
+is_gps() {
+	case "$(usb_id "$1")" in
+	1d50:6018) return 1 ;;
+	esac
+}
 
 present() {
 	local d gone="$1"
 	for d in $(uci -q get gpsd.core.devices); do
 		[ "$d" = "$gone" ] && continue
-		[ -e "$DEV_ROOT$d" ] && return 0
+		[ -e "$DEV_ROOT$d" ] && is_gps "$DEV_ROOT$d" && return 0
 	done
 	return 1
 }

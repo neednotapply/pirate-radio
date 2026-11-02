@@ -656,6 +656,17 @@ ghp() { : > "$T/gsync.log"; env SLATE_GPS_ACTIVE="$T/gps.active" SLATE_GPSD_INIT
 check "gps hotplug: GPS plugged in starts gpsd" [ "$(ghp ACTION=add DEVNAME=ttyACM0)" = start ]
 check "gps hotplug: GPS removed stops gpsd" [ "$(ghp ACTION=remove DEVNAME=ttyACM0)" = stop ]
 check "gps hotplug: other serial devices are ignored" [ -z "$(ghp ACTION=add DEVNAME=ttyS1)" ]
+# A PortaPack on Mayhem firmware: its USB console takes /dev/ttyACM0.
+mkusb 1-3 1d50 6018 "" "PortaPack Mayhem"
+mkdir -p "$T/sys/bus/usb/devices/1-3/1-3:1.0" "$T/sys/class/tty/ttyACM0"
+ln -s "$T/sys/bus/usb/devices/1-3/1-3:1.0" "$T/sys/class/tty/ttyACM0/device"
+check "gps pnp: a PortaPack's console is not a GPS" [ "$(gsync)" = stop ]
+check "gps hotplug: a PortaPack plugged in leaves gpsd stopped" [ "$(ghp ACTION=add DEVNAME=ttyACM0)" = stop ]
+: > "$GD/dev/ttyUSB0"
+check "gps pnp: a GPS beside a PortaPack starts gpsd" [ "$(gsync)" = start ]
+rm -f "$GD/dev/ttyUSB0"
+check "status: notes a PortaPack in Mayhem mode" sh -c 'slate-sdr status | grep -q "^  note: PortaPack (1d50:6018) is in Mayhem mode"'
+check "status: a PortaPack in Mayhem mode is not a radio" sh -c '. /usr/share/slate-sdr/lib.sh; ! slate_usb_radios | grep -q 1d50:6018'
 rm -f "$T/gps.active"
 check "gps hotplug: nothing while slate-gps is stopped" [ -z "$(ghp ACTION=add DEVNAME=ttyACM0)" ]
 

@@ -29,6 +29,21 @@ slate_usb_radios() {
 	done
 }
 
+# Notes on SDRs plugged in but in a mode slate-sdr can't use, one per line. A
+# PortaPack on Mayhem firmware is only a USB serial console (1d50:6018) until
+# it's switched to HackRF mode.
+slate_usb_notes() {
+	local d vid pid
+	for d in "${SLATE_SYSFS:-/sys}"/bus/usb/devices/*; do
+		[ -r "$d/idVendor" ] && [ -r "$d/idProduct" ] || continue
+		read -r vid < "$d/idVendor"
+		read -r pid < "$d/idProduct"
+		case "$vid:$pid" in
+		1d50:6018) echo "PortaPack ($vid:$pid) is in Mayhem mode: switch it to HackRF mode to use it here" ;;
+		esac
+	done
+}
+
 # slate_radio_present <rtlsdr|hackrf>
 slate_radio_present() {
 	slate_usb_radios | grep -q "^$1 "

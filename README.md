@@ -128,7 +128,10 @@ server runs while either radio is in, and the aircraft map on port 8080 only
 while the ADS-B job runs. gpsd starts when a USB GPS appears (the devices in
 `/etc/config/gpsd`) and stops when it goes. Jobs whose radio is missing show
 as *waiting*. Other USB devices are left alone; the supported radios are
-listed in `slate_radio_kind` (`/usr/share/slate-sdr/lib.sh`).
+listed in `slate_radio_kind` (`/usr/share/slate-sdr/lib.sh`). A HackRF with a
+PortaPack on Mayhem firmware is only a USB serial console until you switch it
+to HackRF mode; the status page and the Slate UI say so, and gpsd doesn't
+take that console for a GPS.
 
 **Status page:** `http://192.168.1.1/cgi-bin/slate-sdr` shows the radios,
 card and jobs, with links to the aircraft map, the ISM live view and the
@@ -249,7 +252,7 @@ Tested in this repository's tests and builds:
   play (jobs held back while their radio is unplugged, the USB and tty hotplug
   hooks, gpsd started and stopped with the GPS, the map server living and
   dying with the ADS-B job), against mock radios and tools on that same
-  userland: 206 checks.
+  userland: 211 checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
