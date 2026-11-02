@@ -260,11 +260,13 @@ Not yet run:
   throughput over the router's USB, the card reader's write speed, and Wi-Fi
   spectral scan on this hardware. `ath10k` spectral on the QCA9887
   specifically has not been confirmed.
-- Plug and play with real hardware being plugged in. On the device, the hooks
-  were driven with stand-in devices (a fake sysfs RTL-SDR and HackRF, a fake
-  `/dev/ttyACM0`): jobs and gpsd started and stopped through procd as
-  expected, untouched jobs kept running. A real RTL-SDR, HackRF or GPS being
-  plugged in, and the boot-time start with one already in, are not yet run.
+- Plug and play with a real HackRF or GPS, and the boot-time start with a
+  radio already plugged in. A real RTL-SDR has been plugged in and pulled out
+  on the device: the ISM job and the SoapySDR server started when it went in
+  and stopped when it came out, while the HackRF job waited throughout. The
+  HackRF and GPS hooks were driven only with stand-in devices (a fake sysfs
+  HackRF, a fake `/dev/ttyACM0`): jobs and gpsd started and stopped through
+  procd as expected, and untouched jobs kept running.
 - The web UI's first-run screen on a freshly flashed device (settings not
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that
