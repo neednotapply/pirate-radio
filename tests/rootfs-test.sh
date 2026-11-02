@@ -94,9 +94,12 @@ mock() {
 	} > "$M/$1"
 	chmod +x "$M/$1"
 }
+# Its messages on stderr as the real one's; MOCK_SWEEP_FAIL (a file) makes it fail.
 mock hackrf_sweep <<-'EOF'
-	case " $* " in *" -1 "*) echo "2026-10-24, 12:00:00, 1000000, 6000000, 1000000.00, 20, -60.1, -61.2"; exit 0 ;; esac
-	while :; do echo "2026-10-24, 12:00:00, 1000000, 6000000, 1000000.00, 20, -60.1"; sleep 1; done
+	[ -e "${MOCK_SWEEP_FAIL:-/nonexistent}" ] && { echo "hackrf_open() failed: Resource busy (-1000)" >&2; exit 1; }
+	echo "call hackrf_sample_rate_set(20.000 MHz)" >&2
+	case " $* " in *" -1 "*) echo "2026-10-24, 12:00:00, 1000000, 6000000, 1000000.00, 20, -60.1, -61.2"; echo "Total sweeps: 1 in 0.80275 seconds (1.25 sweeps/second)" >&2; exit 0 ;; esac
+	while :; do echo "2026-10-24, 12:00:00, 1000000, 6000000, 1000000.00, 20, -60.1"; echo "1 total sweeps completed, 1.00 sweeps/second" >&2; sleep 1; done
 EOF
 mock rtl_power <<-'EOF'
 	case " $* " in *" -1 "*) echo "2026-10-24, 12:00:00, 24000000, 26000000, 250000, 4, -30.1"; exit 0 ;; esac
@@ -138,9 +141,10 @@ set_job() {
 	for kv; do uci set "slate-sdr.$s.$kv"; done
 	uci commit slate-sdr
 }
-# run_job <section> <seconds>: run the runner, stop it, return its output
+# run_job <section> <seconds>: run the runner, stop it, return its output.
+# SIGPIPE is ignored, as procd leaves it for the jobs it starts.
 run_job() {
-	/usr/libexec/slate-sdr-job "$1" > "$T/$1.out" 2>&1 &
+	sh -c 'trap "" PIPE; exec /usr/libexec/slate-sdr-job "$1"' _ "$1" > "$T/$1.out" 2>&1 &
 	local pid=$!
 	sleep "$2"
 	kill -TERM "$pid"
@@ -159,6 +163,8 @@ no_strays() {
 }
 DATA=/mnt/sdcard/slate-sdr
 TODAY=$(date +%Y-%m-%d)
+# Runtime state (/var/run/slate-sdr on the device).
+export SLATE_STATE="$T/state"
 card_in
 
 echo "# job: iq (hackrf, 12 s segments)"
@@ -191,6 +197,21 @@ n=$(grep -c hackrf_sweep "$T/calls.log")
 check "survey: 3 or 4 sweeps in 17 s ($n)" sh -c "[ $n -ge 3 ] && [ $n -le 4 ]"
 csv=$DATA/survey/$TODAY/sweep-hackrf-$(date +%Y%m%d-%H)00.csv
 check "survey: sweeps appended to the hour's CSV" [ "$(grep -c '^2026' "$csv")" -ge 3 ]
+check "survey: a working sweep's messages stay out of the log" sh -c "! grep -q -e 'call hackrf' -e 'Total sweeps' '$T/survey.out'"
+export MOCK_SWEEP_FAIL="$T/sweep-fail"
+: > "$MOCK_SWEEP_FAIL"
+run_job survey 13
+rm -f "$MOCK_SWEEP_FAIL"
+check "survey: a failed sweep is logged" has "$T/survey.out" "survey: sweep failed (exit 1):"
+check "survey: with its messages" has "$T/survey.out" "hackrf_open() failed: Resource busy"
+check "survey: its message file is cleaned up" [ ! -e "$SLATE_STATE/survey.sweep-err" ]
+check "survey: no write errors from the watchdog it cut short" sh -c "! grep -q 'Broken pipe' '$T/survey.out'"
+set_job survey interval=0
+run_job survey 4
+check "survey without pause: start-up messages logged" has "$T/survey.out" "call hackrf_sample_rate_set"
+check "survey without pause: progress lines are not" sh -c "! grep -q 'total sweeps completed' '$T/survey.out'"
+check "survey without pause: no stray receivers" no_strays
+set_job survey interval=60
 
 echo "# job: rtlsurvey (continuous, files rotated every 12 s and compressed)"
 : > "$T/calls.log"
@@ -282,7 +303,6 @@ slate_spectral_sweep "$T/spec" "5g" 2>/dev/null
 check "spectral: band filter" sh -c "! ls $T/spec/2g-* >/dev/null 2>&1 && ls $T/spec/5g-* >/dev/null 2>&1"
 
 echo "# init script (procd calls stubbed)"
-export SLATE_STATE="$T/state"
 cp "$T/slate-sdr.default" /etc/config/slate-sdr
 cat > "$T/init-harness.sh" <<-'EOF'
 	. /lib/functions.sh

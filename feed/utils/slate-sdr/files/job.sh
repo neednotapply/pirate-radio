@@ -17,6 +17,7 @@ stop_children() {
 	[ -n "$CHILD" ] && kill -TERM "$CHILD" 2>/dev/null
 	[ -n "$MAP" ] && kill "$MAP" 2>/dev/null
 	wait
+	rm -f "$SLATE_STATE/$JOB".sweep-*
 }
 trap 'stop_children; exit 0' TERM INT
 
@@ -102,13 +103,16 @@ sleep_rest() {
 # segment writes to the right place. Exits 2 when it stopped <pid>.
 watchdog() {
 	local left="$1" step was now
-	was=$(slate_storage_state)
+	# 2>/dev/null: run_for stops the watchdog as soon as the receiver exits,
+	# maybe mid-check; the check's output then meets a closed pipe and, with
+	# SIGPIPE ignored as under procd, the shell would log a write error.
+	was=$(slate_storage_state 2>/dev/null)
 	while [ "$left" -gt 0 ]; do
 		step=$((left < 30 ? left : 30))
 		sleep "$step"
 		left=$((left - step))
 		kill -0 "$2" 2>/dev/null || exit 0
-		now=$(slate_storage_state)
+		now=$(slate_storage_state 2>/dev/null)
 		if [ "$was" = ok ] && [ "$now" != ok ]; then
 			log "microSD card removed or full: closing this segment"
 			break
@@ -274,10 +278,11 @@ job_ais() {
 
 # --- spectrum sweeps ---------------------------------------------------------
 
-# sweep_exec <radio> <once|continuous> <file>: hackrf_sweep or rtl_power,
-# CSV appended to <file>
+# sweep_exec <radio> <once|continuous> <file> [errfile]: hackrf_sweep or
+# rtl_power, CSV appended to <file>, messages to [errfile] when given
 sweep_exec() {
-	local radio="$1" mode="$2" file="$3" range bin integ gain lna vga amp dev
+	local radio="$1" mode="$2" file="$3" err="$4" range bin integ gain lna vga amp dev
+	local fifo="$SLATE_STATE/$JOB.sweep-fifo"
 	if [ "$radio" = hackrf ]; then
 		config_get range "$JOB" range 1:6000
 		config_get bin "$JOB" bin_width 1000000
@@ -302,16 +307,26 @@ sweep_exec() {
 	# shellcheck disable=SC2086
 	set -- "$@" $EXTRA
 	[ "$radio" = rtlsdr ] && set -- "$@" -
+	# At one sweep a minute, every sweep's start-up and exit messages would
+	# crowd everything else out of the log: a one-shot sweep's go to [errfile]
+	# for job_sweep to log if it fails. Sweeping without pause, all but
+	# hackrf_sweep's once-a-second progress line are logged.
+	[ -n "$err" ] && exec "$@" >> "$file" 2> "$err"
+	if [ "$radio" = hackrf ] && rm -f "$fifo" && mkfifo "$fifo"; then
+		awk '!/ total sweeps completed, / { print; fflush() }' < "$fifo" >&2 &
+		exec "$@" >> "$file" 2> "$fifo"
+	fi
 	exec "$@" >> "$file"
 }
 
 # Spectrum survey: one sweep every <interval> seconds (0: sweep without
 # pause), CSV rotated every hour or day and compressed when closed.
 job_sweep() {
-	local radio interval rotate out last start
+	local radio interval rotate out last start err="$SLATE_STATE/$JOB.sweep-err"
 	config_get radio "$JOB" radio rtlsdr
 	config_get interval "$JOB" interval 60
 	config_get rotate "$JOB" rotate hour
+	mkdir -p "$SLATE_STATE"
 	while :; do
 		wait_radio "$radio"
 		wait_storage
@@ -321,8 +336,12 @@ job_sweep() {
 		if [ "$interval" -gt 0 ]; then
 			start=$(date +%s)
 			QUICK_OK=1
-			run_for 900 sweep_exec "$radio" once "$out"
+			run_for 900 sweep_exec "$radio" once "$out" "$err" || {
+				log "sweep failed (exit $?):"
+				tail -n 20 "$err" >&2
+			}
 			QUICK_OK=''
+			rm -f "$err"
 			sleep_rest "$start" "$interval"
 		else
 			run_for "$(slate_secs_to_boundary "$rotate")" sweep_exec "$radio" continuous "$out"

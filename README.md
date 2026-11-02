@@ -252,7 +252,7 @@ Tested in this repository's tests and builds:
   play (jobs held back while their radio is unplugged, the USB and tty hotplug
   hooks, gpsd started and stopped with the GPS, the map server living and
   dying with the ADS-B job), against mock radios and tools on that same
-  userland: 212 checks.
+  userland: 222 checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
