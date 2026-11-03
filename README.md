@@ -234,6 +234,12 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
     that form is not ported, so the site's configure page won't find the
     Slate.
 
+  - **DMZ** (off by default; a tick on the tab): everything that comes in
+    from the internet unasked goes to the Dreamcast, as DreamPi's guides
+    advise for games that take incoming connections. Behind another router,
+    make the Slate that router's DMZ host too; the tab shows its address
+    there.
+
   Not ported: DreamPi's Netlink (peer-to-peer modem games and XBAND), its
   VPN, its UPnP port forwarding, and its per-game helpers `dcgamespy`,
   `dc2k2` and `dcvoip`, which DreamPi ships only as Raspberry Pi binaries.
@@ -287,8 +293,8 @@ Tested in this repository's tests and builds:
   dying with the ADS-B job), and DreamPi (the modem daemon against
   `tests/fakemodem`, a modem with a Dreamcast dialling on a pseudo-terminal;
   the call script, NAT rules, Dreamcast Now and its name form, init script,
-  hotplug hook and the UI's backend), against mock radios and tools on that
-  same userland: 279 checks.
+  hotplug hook, DMZ and the UI's backend), against mock radios and tools on
+  that same userland: 285 checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.

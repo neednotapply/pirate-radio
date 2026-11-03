@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Pirate Radio</title>
-<link rel="stylesheet" href="style.css">
+<style>body { opacity: 0; background: #0b0f14; }</style>
 </head>
 <body>
 <header class="topbar">
@@ -55,6 +55,28 @@
 	</form>
 </div>
 
-<script src="app.js"></script>
+<script>
+/* uhttpd sends no cache headers, so a browser may keep using an old app.js
+   or style.css after an update. They load under the version in ui-version
+   (written when the package is built), which is fetched past the cache. */
+(function () {
+	function load(v) {
+		var q = v ? "?v=" + encodeURIComponent(v) : "";
+		var css = document.createElement("link"), js = document.createElement("script");
+		function show() { document.body.style.opacity = "1"; }
+		css.rel = "stylesheet";
+		css.href = "style.css" + q;
+		css.onload = css.onerror = show;
+		setTimeout(show, 3000);
+		document.head.appendChild(css);
+		js.src = "app.js" + q;
+		document.body.appendChild(js);
+	}
+	if (!window.fetch) return load("");
+	fetch("ui-version", { cache: "no-store" }).then(function (r) {
+		return r.ok ? r.text() : "";
+	}).then(function (v) { load(v.trim()); }, function () { load(""); });
+})();
+</script>
 </body>
 </html>

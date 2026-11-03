@@ -113,10 +113,10 @@
 		files: [ { name: "home-hs-ch6-20261029-1310.pcap", size: 28672, mtime: "2026-10-29 13:10" } ]
 	};
 	var DEMO_FW = { staged: false, size: 0, verified: false };
-	var DEMO_DP = { enabled: true, service: "ppp", dial_tone: true, dcnow: true };
+	var DEMO_DP = { enabled: true, service: "ppp", dial_tone: true, dcnow: true, dmz: false };
 	var DEMO_DCNOW = { name: "Unnamed_2bec1b" };
 	function demoDreampi() {
-		var s = { installed: true, local_ip: "192.168.169.1", dreamcast_ip: "192.168.169.2",
+		var s = { installed: true, local_ip: "192.168.169.1", dreamcast_ip: "192.168.169.2", wan_ip: "192.168.1.185",
 			modems: [{ device: "/dev/ttyACM0", id: "0572:1340", name: "Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)" }],
 			state: DEMO_DP.enabled ? "connected" : "off", call_service: "ppp", number: "5551234",
 			since: Math.round(Date.now() / 1000) - 754, link: DEMO_DP.enabled, rx_bytes: 482113, tx_bytes: 2310442,
@@ -340,7 +340,7 @@
 		},
 		"luci.slate-dreampi:status": demoDreampi,
 		"luci.slate-dreampi:set": function (p) {
-			["enabled", "service", "dial_tone", "dcnow"].forEach(function (k) { if (p[k] != null) DEMO_DP[k] = p[k]; });
+			["enabled", "service", "dial_tone", "dcnow", "dmz"].forEach(function (k) { if (p[k] != null) DEMO_DP[k] = p[k]; });
 			return demoDreampi();
 		},
 		"luci.slate-dreampi:dcnow": function () { return { name: DEMO_DCNOW.name }; },
@@ -1544,6 +1544,8 @@
 		var enChk = el("input", { type: "checkbox" });
 		var toneChk = el("input", { type: "checkbox" });
 		var nowChk = el("input", { type: "checkbox" });
+		var dmzChk = el("input", { type: "checkbox" });
+		var dmzNote = el("p", { class: "descr" });
 		var saveStatus = el("span", { class: "status" });
 		var setWrap = el("div", { hidden: "" });
 		setWrap.appendChild(el("div", { class: "form" },
@@ -1551,12 +1553,14 @@
 		setWrap.appendChild(el("div", { class: "toolbar" },
 			el("label", { class: "chkline" }, enChk, document.createTextNode(" Answer the Dreamcast")),
 			el("label", { class: "chkline" }, toneChk, document.createTextNode(" Dial tone")),
-			el("label", { class: "chkline" }, nowChk, document.createTextNode(" Dreamcast Now"))));
+			el("label", { class: "chkline" }, nowChk, document.createTextNode(" Dreamcast Now")),
+			el("label", { class: "chkline" }, dmzChk, document.createTextNode(" DMZ"))));
 		setWrap.appendChild(el("div", { class: "toolbar" }, btn("Save", { primary: true, onclick: save }), saveStatus));
 		setWrap.appendChild(el("p", { class: "descr", text:
 			"Dial *69 before the number to send one call to DCNet. Turn the dial tone off only for a Dreamcast set to blind dial. " +
 			"Dreamcast Now lists what you play on dreamcast.online/now; during PPP calls it sends a hash of this router's MAC address " +
 			"and of the game server names the Dreamcast looks up." }));
+		setWrap.appendChild(dmzNote);
 		setPanel.appendChild(setWrap);
 
 		var nowPanel = panel("Dreamcast Now");
@@ -1621,8 +1625,12 @@
 			if (setWrap.hidden) {
 				svcSel.value = s.service;
 				enChk.checked = !!s.enabled; toneChk.checked = !!s.dial_tone; nowChk.checked = !!s.dcnow;
+				dmzChk.checked = !!s.dmz;
 				setWrap.hidden = false;
 			}
+			dmzNote.textContent = "DMZ, which DreamPi's guides advise for games that take incoming connections: everything that " +
+				"comes in from the internet unasked goes to the Dreamcast, none of it to the Slate. If the Slate is behind another " +
+				"router, make " + (s.wan_ip ? "the Slate (" + s.wan_ip + " there)" : "the Slate") + " that router's DMZ host too.";
 		}
 		function showLog(r) {
 			var lines = (r && r.lines) || [];
@@ -1665,7 +1673,7 @@
 		function save() {
 			saveStatus.className = "status"; saveStatus.textContent = "saving…";
 			call("luci.slate-dreampi", "set", { enabled: enChk.checked, service: svcSel.value,
-				dial_tone: toneChk.checked, dcnow: nowChk.checked }).then(function (r) {
+				dial_tone: toneChk.checked, dcnow: nowChk.checked, dmz: dmzChk.checked }).then(function (r) {
 				if (r.error) { saveStatus.className = "status err"; saveStatus.textContent = r.error; return; }
 				saveStatus.className = "status ok-text"; saveStatus.textContent = "saved";
 				showStatus(r);

@@ -10,6 +10,32 @@ STOP=10
 USE_PROCD=1
 
 RUN=${DREAMPI_RUN:-/var/run/dreampi}
+FIREWALL=${DREAMPI_FIREWALL:-/etc/init.d/firewall}
+
+# DMZ: a firewall redirect of everything that comes in from the internet
+# unasked to the Dreamcast; the firewall reloads only when it changes
+dmz_sync() {
+	local want="$1" dc_ip="$2"
+	if [ "$want" = 1 ]; then
+		[ "$(uci -q get firewall.dreamcast_dmz.dest_ip)" = "$dc_ip" ] && return
+		uci -q batch <<-EOF
+			set firewall.dreamcast_dmz=redirect
+			set firewall.dreamcast_dmz.name='Dreamcast-DMZ'
+			set firewall.dreamcast_dmz.src='wan'
+			set firewall.dreamcast_dmz.dest='dreamcast'
+			set firewall.dreamcast_dmz.dest_ip='$dc_ip'
+			set firewall.dreamcast_dmz.proto='all'
+			set firewall.dreamcast_dmz.family='ipv4'
+			set firewall.dreamcast_dmz.target='DNAT'
+			set firewall.dreamcast_dmz.reflection='0'
+		EOF
+	else
+		uci -q get firewall.dreamcast_dmz > /dev/null || return
+		uci -q delete firewall.dreamcast_dmz
+	fi
+	uci -q commit firewall
+	"$FIREWALL" reload > /dev/null 2>&1
+}
 
 # The PPP link's address on this router, for the Dreamcast's DNS server
 dns_conf() {
@@ -45,7 +71,7 @@ pap_secrets() {
 }
 
 start_service() {
-	local enabled device baud service dial_tone local_ip
+	local enabled device baud service dial_tone local_ip dc_ip dmz
 
 	. /usr/share/dreampi/lib.sh
 	mkdir -p "$RUN"
@@ -56,6 +82,11 @@ start_service() {
 	config_get service main service ppp
 	config_get_bool dial_tone main dial_tone 1
 	config_get local_ip main local_ip 192.168.169.1
+	config_get dc_ip main dreamcast_ip 192.168.169.2
+	config_get_bool dmz main dmz 0
+
+	[ "$enabled" = 1 ] || dmz=0
+	dmz_sync "$dmz" "$dc_ip"
 
 	[ -n "$device" ] || device=$(dreampi_modems | head -n 1 | cut -d' ' -f1)
 	if [ "$enabled" != 1 ] || [ -z "$device" ] || [ ! -e "$device" ]; then

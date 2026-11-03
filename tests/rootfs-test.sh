@@ -702,7 +702,7 @@ for p in 1-4:ttyACM1 1-5:ttyACM2; do
 	mkdir -p "$T/sys/bus/usb/devices/${p%:*}/${p%:*}:1.0" "$T/sys/class/tty/${p#*:}"
 	ln -s "$T/sys/bus/usb/devices/${p%:*}/${p%:*}:1.0" "$T/sys/class/tty/${p#*:}/device"
 done
-for m in nft pppd dcnet uclient-fetch init; do
+for m in nft pppd dcnet uclient-fetch init firewall; do
 	cat > "$DP/bin/$m" <<-'EOF'
 		#!/bin/sh
 		# A mock: records how it was called (nft: its rules, from stdin)
@@ -715,7 +715,7 @@ for m in nft pppd dcnet uclient-fetch init; do
 	EOF
 	chmod +x "$DP/bin/$m"
 done
-dpenv() { env PATH="$DP/bin:$PATH" DREAMPI_INIT="$DP/bin/init" "$@"; }
+dpenv() { env PATH="$DP/bin:$PATH" DREAMPI_INIT="$DP/bin/init" DREAMPI_FIREWALL="$DP/bin/firewall" "$@"; }
 DPMODEM="/dev/ttyACM1 0572:1340 Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)"
 check "dreampi: daemon and DCNet client run" sh -c 'dreampi -h 2>&1 | grep -q "usage: dreampi" && dcnet -x 2>&1 | grep -q Usage'
 check "dreampi: finds the modem, not the GPS or the PortaPack" [ "$(. /usr/share/dreampi/lib.sh; dreampi_modems)" = "$DPMODEM" ]
@@ -844,6 +844,26 @@ rm -f /dev/ttyACM1
 dpinit
 check "init: nothing runs without the modem" sh -c "! grep -q instance '$DP/init.out'"
 
+# DMZ: a firewall redirect of everything from the internet to the Dreamcast,
+# the firewall reloaded only when that changes
+[ -f /etc/config/firewall ] || : > /etc/config/firewall
+check "init: no DMZ by default" sh -c "! uci -q get firewall.dreamcast_dmz"
+uci set dreampi.main.dmz=1
+uci commit dreampi
+: > "$DP_CALLS"
+dpinit
+check "init: DMZ to the Dreamcast" sh -c "[ \"\$(uci get firewall.dreamcast_dmz.dest_ip) \$(uci get firewall.dreamcast_dmz.proto) \$(uci get firewall.dreamcast_dmz.src)\" = '192.168.169.2 all wan' ] && grep -qx 'firewall reload' '$DP_CALLS'"
+: > "$DP_CALLS"
+dpinit
+check "init: the firewall left alone when the DMZ is unchanged" sh -c "! grep -q firewall '$DP_CALLS'"
+uci set dreampi.main.enabled=0
+uci commit dreampi
+dpinit
+check "init: no DMZ when turned off" sh -c "! uci -q get firewall.dreamcast_dmz && grep -qx 'firewall reload' '$DP_CALLS'"
+uci set dreampi.main.enabled=1
+uci set dreampi.main.dmz=0
+uci commit dreampi
+
 # The hotplug hook: a modem plugged in, any serial device gone
 dphp() { : > "$DP_CALLS"; dpenv "$@" sh /etc/hotplug.d/tty/30-dreampi > /dev/null 2>&1; cat "$DP_CALLS"; }
 check "hotplug: a modem plugged in starts answering" [ "$(dphp ACTION=add DEVNAME=ttyACM1)" = "init reload" ]
@@ -863,8 +883,12 @@ check "ui: set rejects an unknown service" sh -c 'slate-dreampi set "" bogus "" 
 dpenv slate-dreampi set 0 dcnet "" 1 > "$DP/status.json"
 check "ui: set saves and reloads" sh -c "[ \"\$(uci get dreampi.main.service) \$(uci get dreampi.main.enabled)\" = 'dcnet 0' ] && grep -qx 'init reload' '$DP_CALLS'"
 check "ui: turned off -> off" [ "$(jsonfilter -i "$DP/status.json" -e '@.state')" = off ]
+dpenv slate-dreampi set "" "" "" "" 1 > "$DP/status.json"
+check "ui: DMZ saved" sh -c "[ \"\$(uci get dreampi.main.dmz)\" = 1 ] && [ \"\$(jsonfilter -i '$DP/status.json' -e '@.dmz')\" = true ]"
+check "ui: rpcd plugin takes DMZ" sh -c '"'"$RD"'" list | jsonfilter -e "@.set.dmz" | grep -qx true'
 uci set dreampi.main.enabled=1
 uci set dreampi.main.service=ppp
+uci set dreampi.main.dmz=0
 uci commit dreampi
 check "ui: log is valid JSON" sh -c 'slate-dreampi log | jsonfilter -e "@.lines" >/dev/null'
 check "ui: rpcd plugin offers the Dreamcast Now name" sh -c '"'"$RD"'" list | jsonfilter -e "@.dcnow_name.name" | grep -qx str && "'"$RD"'" list | jsonfilter -e "@.dcnow" >/dev/null'

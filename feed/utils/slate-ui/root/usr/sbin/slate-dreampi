@@ -5,7 +5,7 @@
 # returns).
 #
 #   slate-dreampi status
-#   slate-dreampi set <enabled> <service> <dial_tone> <dcnow>   ("" = as is)
+#   slate-dreampi set <enabled> <service> <dial_tone> <dcnow> <dmz>   ("" = as is)
 #   slate-dreampi log
 #   slate-dreampi dcnow              the name Dreamcast Now lists this router under
 #   slate-dreampi dcnow_name <name>  list it under <name>
@@ -39,8 +39,11 @@ cmd_status() {
 	json_add_string service "$(opt service ppp)"
 	json_add_boolean dial_tone "$(opt dial_tone 1)"
 	json_add_boolean dcnow "$(opt dcnow 1)"
+	json_add_boolean dmz "$(opt dmz 0)"
 	json_add_string local_ip "$(opt local_ip 192.168.169.1)"
 	json_add_string dreamcast_ip "$(opt dreamcast_ip 192.168.169.2)"
+	# This router's address upstream: the DMZ host for a router in front of it
+	json_add_string wan_ip "$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
 
 	modems=$(dreampi_modems)
 	json_add_array modems
@@ -129,15 +132,16 @@ cmd_dcnow_name() {
 }
 
 cmd_set() {
-	local enabled="$1" service="$2" dial_tone="$3" dcnow="$4"
+	local enabled="$1" service="$2" dial_tone="$3" dcnow="$4" dmz="$5"
 
 	[ -r "$LIB" ] || { echo '{ "error": "DreamPi is not installed" }'; return; }
-	case "$enabled$dial_tone$dcnow" in *[!01]*) echo '{ "error": "bad setting" }'; return ;; esac
+	case "$enabled$dial_tone$dcnow$dmz" in *[!01]*) echo '{ "error": "bad setting" }'; return ;; esac
 	case "$service" in "" | ppp | dcnet) ;; *) echo '{ "error": "service is ppp or dcnet" }'; return ;; esac
 	[ -n "$enabled" ] && uci set "dreampi.main.enabled=$enabled"
 	[ -n "$service" ] && uci set "dreampi.main.service=$service"
 	[ -n "$dial_tone" ] && uci set "dreampi.main.dial_tone=$dial_tone"
 	[ -n "$dcnow" ] && uci set "dreampi.main.dcnow=$dcnow"
+	[ -n "$dmz" ] && uci set "dreampi.main.dmz=$dmz"
 	uci commit dreampi
 	"$INIT" reload > /dev/null 2>&1
 	cmd_status
@@ -162,7 +166,7 @@ log) cmd_log ;;
 dcnow) cmd_dcnow ;;
 dcnow_name) cmd_dcnow_name "$2" ;;
 *)
-	echo "usage: slate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> | log | dcnow | dcnow_name <name>" >&2
+	echo "usage: slate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> <dmz> | log | dcnow | dcnow_name <name>" >&2
 	exit 1
 	;;
 esac

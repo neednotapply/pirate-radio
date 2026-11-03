@@ -53,6 +53,9 @@ define Package/slate-ui/install
 	$(INSTALL_DATA) ./files/index.html $(1)/www/index.html
 	$(INSTALL_DATA) ./files/app.js $(1)/www/app.js
 	$(INSTALL_DATA) ./files/style.css $(1)/www/style.css
+	# The version index.html loads app.js and style.css under, so browsers
+	# take the new ones after an update (uhttpd sends no cache headers)
+	cat ./files/app.js ./files/style.css | md5sum | cut -c1-12 > $(1)/www/ui-version
 	$(INSTALL_DIR) $(1)/www/cgi-bin
 	$(INSTALL_BIN) ./files/slate-upload $(1)/www/cgi-bin/slate-upload
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
