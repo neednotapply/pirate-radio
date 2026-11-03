@@ -35,7 +35,7 @@ ppp)
 
 	reporter=
 	if [ "$dcnow" = 1 ]; then
-		"$LIBEXEC/dcnow" &
+		"$LIBEXEC/dcnow" report &
 		reporter=$!
 	fi
 	set -- "$DREAMPI_TTY" "$DREAMPI_BAUD" "$local_ip:$dc_ip" nodetach auth \

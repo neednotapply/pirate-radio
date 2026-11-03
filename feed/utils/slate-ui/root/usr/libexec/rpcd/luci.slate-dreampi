@@ -5,10 +5,20 @@
 #   ubus call luci.slate-dreampi status
 #   ubus call luci.slate-dreampi log
 #   ubus call luci.slate-dreampi set '{"enabled":true,"service":"ppp","dial_tone":true,"dcnow":true}'
+#   ubus call luci.slate-dreampi dcnow
+#   ubus call luci.slate-dreampi dcnow_name '{"name":"Pirate Radio"}'
 
 . /usr/share/libubox/jshn.sh
 
 TOOL=${SLATE_DREAMPI:-/usr/sbin/slate-dreampi}
+
+run_dcnow_name() {
+	local input name
+	read -r input
+	json_load "$input"
+	json_get_var name name
+	"$TOOL" dcnow_name "$name"
+}
 
 run_set() {
 	local input enabled service dial_tone dcnow
@@ -23,13 +33,15 @@ run_set() {
 
 case "$1" in
 list)
-	echo '{ "status": {}, "log": {}, "set": { "enabled": true, "service": "str", "dial_tone": true, "dcnow": true } }'
+	echo '{ "status": {}, "log": {}, "set": { "enabled": true, "service": "str", "dial_tone": true, "dcnow": true }, "dcnow": {}, "dcnow_name": { "name": "str" } }'
 	;;
 call)
 	case "$2" in
-	status) "$TOOL" status ;;
-	log)    "$TOOL" log ;;
-	set)    run_set ;;
+	status)     "$TOOL" status ;;
+	log)        "$TOOL" log ;;
+	set)        run_set ;;
+	dcnow)      "$TOOL" dcnow ;;
+	dcnow_name) run_dcnow_name ;;
 	esac
 	;;
 esac

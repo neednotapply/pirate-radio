@@ -7,12 +7,15 @@
 #   slate-dreampi status
 #   slate-dreampi set <enabled> <service> <dial_tone> <dcnow>   ("" = as is)
 #   slate-dreampi log
+#   slate-dreampi dcnow              the name Dreamcast Now lists this router under
+#   slate-dreampi dcnow_name <name>  list it under <name>
 
 . /usr/share/libubox/jshn.sh
 
 LIB=${SLATE_DREAMPI_LIB:-/usr/share/dreampi/lib.sh}
 RUN=${DREAMPI_RUN:-/var/run/dreampi}
 INIT=${DREAMPI_INIT:-/etc/init.d/dreampi}
+DCNOW=${DREAMPI_LIBEXEC:-/usr/libexec/dreampi}/dcnow
 SYSFS=${SLATE_SYSFS:-/sys}
 
 opt() { uci -q get "dreampi.main.$1" || echo "$2"; }
@@ -68,15 +71,60 @@ cmd_status() {
 	fi
 	json_add_string state "${state:-starting}"
 
-	# The PPP link, while a PPP call is up
+	# The PPP link, while a PPP call is up, and the name the Dreamcast last
+	# looked up (Dreamcast Now tells the game from it)
 	if [ -d "$SYSFS/class/net/dc0" ]; then
 		link=1
 		read -r rx < "$SYSFS/class/net/dc0/statistics/rx_bytes"
 		read -r tx < "$SYSFS/class/net/dc0/statistics/tx_bytes"
+		json_add_string lookup "$(sed -n 's/.*query\[A\] \([^ ]*\) from .*/\1/p' "$RUN/dns.log" 2> /dev/null | tail -n 1)"
 	fi
 	json_add_boolean link "$link"
 	json_add_int rx_bytes "${rx:-0}"
 	json_add_int tx_bytes "${tx:-0}"
+
+	# Dreamcast Now's listing: the name set from here, else the site's default
+	id=$("$DCNOW" id 2> /dev/null)
+	name=$(opt dcnow_name "")
+	[ -n "$name" ] || name="Unnamed_$(echo "$id" | cut -c1-6)"
+	json_add_string dcnow_name "$name"
+	json_dump
+}
+
+cmd_dcnow() {
+	local name
+	if name=$("$DCNOW" name 2> /tmp/slate-dreampi.err); then
+		json_init
+		json_add_string name "$name"
+		json_dump
+	else
+		json_init
+		json_add_string error "$(cat /tmp/slate-dreampi.err)"
+		json_dump
+	fi
+	rm -f /tmp/slate-dreampi.err
+}
+
+cmd_dcnow_name() {
+	local name="$1" saved
+
+	json_init
+	case "$name" in
+	"" | " "* | *" ") json_add_string error "enter a name without leading or trailing spaces" ;;
+	*[[:cntrl:]]*) json_add_string error "the name has control characters" ;;
+	*)
+		if [ "${#name}" -gt 40 ]; then
+			json_add_string error "use 40 characters at most"
+		elif saved=$("$DCNOW" name "$name" 2> /tmp/slate-dreampi.err); then
+			uci set "dreampi.main.dcnow_name=$saved"
+			uci commit dreampi
+			json_add_string name "$saved"
+		else
+			json_add_string error "$(cat /tmp/slate-dreampi.err)"
+		fi
+		rm -f /tmp/slate-dreampi.err
+		;;
+	esac
 	json_dump
 }
 
@@ -111,8 +159,10 @@ case "$1" in
 status) cmd_status ;;
 set) shift; cmd_set "$@" ;;
 log) cmd_log ;;
+dcnow) cmd_dcnow ;;
+dcnow_name) cmd_dcnow_name "$2" ;;
 *)
-	echo "usage: slate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> | log" >&2
+	echo "usage: slate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> | log | dcnow | dcnow_name <name>" >&2
 	exit 1
 	;;
 esac

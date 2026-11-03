@@ -114,11 +114,13 @@
 	};
 	var DEMO_FW = { staged: false, size: 0, verified: false };
 	var DEMO_DP = { enabled: true, service: "ppp", dial_tone: true, dcnow: true };
+	var DEMO_DCNOW = { name: "Unnamed_2bec1b" };
 	function demoDreampi() {
 		var s = { installed: true, local_ip: "192.168.169.1", dreamcast_ip: "192.168.169.2",
 			modems: [{ device: "/dev/ttyACM0", id: "0572:1340", name: "Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)" }],
 			state: DEMO_DP.enabled ? "connected" : "off", call_service: "ppp", number: "5551234",
-			since: Math.round(Date.now() / 1000) - 754, link: DEMO_DP.enabled, rx_bytes: 482113, tx_bytes: 2310442 };
+			since: Math.round(Date.now() / 1000) - 754, link: DEMO_DP.enabled, rx_bytes: 482113, tx_bytes: 2310442,
+			lookup: "dc.dreamcastlive.net", dcnow_name: DEMO_DCNOW.name };
 		for (var k in DEMO_DP) s[k] = DEMO_DP[k];
 		return s;
 	}
@@ -340,6 +342,12 @@
 		"luci.slate-dreampi:set": function (p) {
 			["enabled", "service", "dial_tone", "dcnow"].forEach(function (k) { if (p[k] != null) DEMO_DP[k] = p[k]; });
 			return demoDreampi();
+		},
+		"luci.slate-dreampi:dcnow": function () { return { name: DEMO_DCNOW.name }; },
+		"luci.slate-dreampi:dcnow_name": function (p) {
+			if (!p.name || /^\s|\s$/.test(p.name)) return { error: "enter a name without leading or trailing spaces" };
+			DEMO_DCNOW.name = p.name;
+			return { name: p.name };
 		},
 		"luci.slate-dreampi:log": { lines: [
 			stamp(790) + " daemon.err dreampi[2210]: listening on /dev/ttyACM0",
@@ -1551,6 +1559,19 @@
 			"and of the game server names the Dreamcast looks up." }));
 		setPanel.appendChild(setWrap);
 
+		var nowPanel = panel("Dreamcast Now");
+		nowPanel.style.marginTop = "14px";
+		var nowLine = el("div", { class: "status", text: "Loading…" });
+		var nameIn = el("input", { class: "inp", type: "text", maxlength: "40", placeholder: "your name on the list" });
+		var nameStatus = el("span", { class: "status" });
+		nowPanel.appendChild(nowLine);
+		nowPanel.appendChild(el("div", { class: "form" },
+			el("label", {}, el("span", { class: "lbl", text: "Name" }), nameIn)));
+		nowPanel.appendChild(el("div", { class: "toolbar" }, btn("Set name", { primary: true, onclick: setName }), nameStatus));
+		nowPanel.appendChild(el("p", { class: "descr", text:
+			"During PPP calls the Slate reports to Dreamcast Now as a DreamPi does, and the site works out the game from the " +
+			"servers the Dreamcast looks up. The name is public there; until one is set, the site shows \"Unnamed_\" and an id." }));
+
 		var howPanel = panel("Connecting the Dreamcast");
 		howPanel.style.marginTop = "14px";
 		howPanel.appendChild(el("p", { class: "descr", text:
@@ -1566,7 +1587,7 @@
 		logPanel.appendChild(el("div", { class: "toolbar" }, btn("Refresh", { onclick: refresh })));
 		logPanel.appendChild(logPre);
 
-		VIEW.appendChild(stPanel); VIEW.appendChild(setPanel);
+		VIEW.appendChild(stPanel); VIEW.appendChild(setPanel); VIEW.appendChild(nowPanel);
 		VIEW.appendChild(howPanel); VIEW.appendChild(logPanel);
 
 		function kv(pairs) {
@@ -1592,8 +1613,10 @@
 				// rx on the router's end of the link is what the Dreamcast sent
 				["PPP link", s.link ? s.dreamcast_ip + " ⇄ " + s.local_ip + " · " + size(s.rx_bytes) + " up, " +
 					size(s.tx_bytes) + " down" : null],
+				["Last lookup", s.link ? s.lookup : null],
 				["Calls go to", DP_SERVICES[s.service] || s.service]
 			]));
+			showListing(s.dcnow_name, s.dcnow);
 			// The form follows the saved settings until it is shown
 			if (setWrap.hidden) {
 				svcSel.value = s.service;
@@ -1604,6 +1627,30 @@
 		function showLog(r) {
 			var lines = (r && r.lines) || [];
 			logPre.textContent = lines.length ? lines.join("\n") : "Nothing logged yet.";
+		}
+		// The name as the site has it, once fetched; until then the last one set here
+		var siteName = null;
+		function showListing(name, on) {
+			if (siteName) name = siteName;
+			clear(nowLine);
+			if (!name) { nowLine.textContent = "Loading…"; return; }
+			nowLine.appendChild(document.createTextNode((on === false ? "Reporting is off. " : "") + "Listed as "));
+			nowLine.appendChild(el("strong", { text: name }));
+			nowLine.appendChild(document.createTextNode(" on "));
+			nowLine.appendChild(el("a", { href: "https://dreamcast.online/now/", target: "_blank", rel: "noopener", text: "dreamcast.online/now" }));
+			if (!nameIn.value) nameIn.value = /^Unnamed_/.test(name) ? "" : name;
+		}
+		function setName() {
+			nameStatus.className = "status"; nameStatus.textContent = "setting…";
+			call("luci.slate-dreampi", "dcnow_name", { name: nameIn.value.trim() }).then(function (r) {
+				if (r.error) { nameStatus.className = "status err"; nameStatus.textContent = r.error; return; }
+				siteName = r.name;
+				nameStatus.className = "status ok-text"; nameStatus.textContent = "listed as " + r.name;
+				status();
+			}).catch(function (e) {
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				nameStatus.className = "status err"; nameStatus.textContent = String(e.message || e);
+			});
 		}
 		function status() {
 			return call("luci.slate-dreampi", "status").then(showStatus).catch(function (e) {
@@ -1636,6 +1683,10 @@
 			status();
 		}, 5000);
 		refresh();
+		// The site's current name, which may have been set elsewhere
+		call("luci.slate-dreampi", "dcnow").then(function (r) {
+			if (r.name) { siteName = r.name; nameIn.value = ""; showListing(r.name); }
+		}).catch(function () {});
 	}
 
 	/* ---------- fallback for an unknown route ---------- */

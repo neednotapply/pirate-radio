@@ -73,6 +73,8 @@ start_service() {
 		-c /usr/libexec/dreampi/call -S "$RUN/state"
 	[ "$dial_tone" = 1 ] || procd_append_param command -n
 	procd_set_param respawn 3600 5 0
+	# Time to hang the modem up on the way out
+	procd_set_param term_timeout 10
 	procd_set_param stderr 1
 	procd_close_instance
 

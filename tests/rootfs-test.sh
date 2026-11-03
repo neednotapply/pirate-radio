@@ -756,7 +756,7 @@ check "call: DCNet's second-port numbers" has "$DP_CALLS" "^dcnet -t /dev/ttyACM
 mkdir -p "$T/sys/class/net/br-lan"
 echo 94:83:c4:90:c2:d4 > "$T/sys/class/net/br-lan/address"
 : > "$DP_CALLS"
-env PATH="$DP/bin:$PATH" DREAMPI_DCNOW_INTERVAL=1 /usr/libexec/dreampi/dcnow &
+env PATH="$DP/bin:$PATH" DREAMPI_DCNOW_INTERVAL=1 /usr/libexec/dreampi/dcnow report &
 dcn=$!
 sleep 2
 q() { echo "Nov  2 16:39:24 dnsmasq[1]: query[A] $1 from 192.168.169.2" >> "$DP/run/dns.log"; }
@@ -774,6 +774,39 @@ check "dcnow: an empty update before any lookup" has "$DP_CALLS" "--post-data= "
 check "dcnow: the game server's hash" has "$DP_CALLS" "--post-data=dns_query=$(sha master.quake3arena.com) "
 check "dcnow: appspot lookups are not reported" sh -c "! grep -q '$(sha dcnow-2016.appspot.com)' '$DP_CALLS'"
 check "dcnow: a shared name once" [ "$(grep -c "$(sha gameloft.example.net)" "$DP_CALLS")" = 1 ]
+
+# The name on the list: the site's configure form, over plain HTTP (nc
+# mocked as dreamcast.online: the form for a GET, the form as saved for a
+# POST, a 403 when told to refuse)
+cat > "$DP/bin/nc" <<-'EOF'
+	#!/bin/sh
+	req=$(cat)
+	echo "$req" >> "$DP_CALLS.nc"
+	case "$req" in
+	GET*) name=$(cat "$DP/site-name") ;;
+	POST*)
+		[ -e "$DP/site-refuse" ] && { printf 'HTTP/1.0 403 Forbidden\r\n\r\n'; exit 0; }
+		name=$(cat "$DP/site-name-next")
+		;;
+	esac
+	printf 'HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nset-cookie: csrftoken=COOKIE123; expires=x; Path=/\r\n\r\n'
+	printf '<form method="POST" action="/now/configure/x/">\n<input type="hidden" name="csrfmiddlewaretoken" value="TOKEN456">\n'
+	printf '<input type="text" name="username" value="%s" maxlength="500" required id="id_username">\n</form>\n' "$name"
+EOF
+chmod +x "$DP/bin/nc"
+echo Unnamed_2bec1b > "$DP/site-name"
+echo "Pirate Radio &amp; Co" > "$DP/site-name-next"
+dcn_fails() { ! dpenv /usr/libexec/dreampi/dcnow name "$1" > /dev/null 2>&1; }
+check "dcnow: the id is the MAC's hash" [ "$(dpenv /usr/libexec/dreampi/dcnow id)" = "$(sha 94:83:C4:90:C2:D4)" ]
+check "dcnow: reads the name it's listed under" [ "$(dpenv /usr/libexec/dreampi/dcnow name)" = Unnamed_2bec1b ]
+: > "$DP_CALLS.nc"
+check "dcnow: sets a new name" [ "$(dpenv /usr/libexec/dreampi/dcnow name 'Pirate Radio & Co')" = "Pirate Radio & Co" ]
+check "dcnow: with the form's cookie and token, the name encoded" sh -c "grep -q '^Cookie: csrftoken=COOKIE123' '$DP_CALLS.nc' && grep -q '^csrfmiddlewaretoken=TOKEN456&username=%50%69%72%61%74%65%20%52%61%64%69%6F%20%26%20%43%6F&email_hash=$' '$DP_CALLS.nc'"
+echo "Someone Else" > "$DP/site-name-next"
+check "dcnow: a name the site didn't keep is an error" dcn_fails "Pirate Radio & Co"
+: > "$DP/site-refuse"
+check "dcnow: a refused name is an error" dcn_fails "Pirate Radio"
+rm -f "$DP/site-refuse"
 
 # The init script (procd calls stubbed)
 cat > "$DP/init-harness.sh" <<-'EOF'
@@ -834,6 +867,16 @@ uci set dreampi.main.enabled=1
 uci set dreampi.main.service=ppp
 uci commit dreampi
 check "ui: log is valid JSON" sh -c 'slate-dreampi log | jsonfilter -e "@.lines" >/dev/null'
+check "ui: rpcd plugin offers the Dreamcast Now name" sh -c '"'"$RD"'" list | jsonfilter -e "@.dcnow_name.name" | grep -qx str && "'"$RD"'" list | jsonfilter -e "@.dcnow" >/dev/null'
+check "ui: listed under the site's default name until one is set" [ "$(dpenv slate-dreampi status | jsonfilter -e '@.dcnow_name')" = "Unnamed_$(sha 94:83:C4:90:C2:D4 | cut -c1-6)" ]
+check "ui: a name with a trailing space is refused" sh -c 'slate-dreampi dcnow_name "Pirate " | jsonfilter -e "@.error" | grep -q "trailing"'
+check "ui: a name over 40 characters is refused" sh -c 'slate-dreampi dcnow_name "$(printf "%041d" 0)" | jsonfilter -e "@.error" | grep -q "40"'
+echo "Pirate Radio" > "$DP/site-name-next"
+check "ui: sets the name on the site, and keeps it" sh -c "[ \"\$(env PATH='$DP/bin:$PATH' slate-dreampi dcnow_name 'Pirate Radio' | jsonfilter -e '@.name')\" = 'Pirate Radio' ] && [ \"\$(uci get dreampi.main.dcnow_name)\" = 'Pirate Radio' ]"
+check "ui: status shows the name set" [ "$(dpenv slate-dreampi status | jsonfilter -e '@.dcnow_name')" = "Pirate Radio" ]
+check "ui: the site's own name for this router" [ "$(dpenv slate-dreampi dcnow | jsonfilter -e '@.name')" = Unnamed_2bec1b ]
+uci delete dreampi.main.dcnow_name
+uci commit dreampi
 
 # The modem daemon against the fake modem: *69 then a number goes to DCNet,
 # a Netlink number is ignored, a plain number to PPP; each call ends with

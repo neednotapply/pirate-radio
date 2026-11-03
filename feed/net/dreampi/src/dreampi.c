@@ -547,11 +547,13 @@ int main(int argc, char **argv)
 			break;
 	}
 	if (fd >= 0) {
-		/* Leave the modem on-hook */
+		/* Leave the modem on-hook. It plays out the dial tone it has
+		   buffered after <DLE><ETX>, and takes no command until then. */
 		stopping = 0;
 		send_raw("\0\x10\x03\r\n", 5);
-		pause_for(0.3);
-		at("ATZ0", 2, 0);
+		pause_for(1);
+		at("ATH0", 3, 0);
+		modem_close();
 	}
 	unlink(statefile);
 	return 0;
