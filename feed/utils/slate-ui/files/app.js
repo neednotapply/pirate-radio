@@ -113,6 +113,15 @@
 		files: [ { name: "home-hs-ch6-20261029-1310.pcap", size: 28672, mtime: "2026-10-29 13:10" } ]
 	};
 	var DEMO_FW = { staged: false, size: 0, verified: false };
+	var DEMO_DP = { enabled: true, service: "ppp", dial_tone: true, dcnow: true };
+	function demoDreampi() {
+		var s = { installed: true, local_ip: "192.168.169.1", dreamcast_ip: "192.168.169.2",
+			modems: [{ device: "/dev/ttyACM0", id: "0572:1340", name: "Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)" }],
+			state: DEMO_DP.enabled ? "connected" : "off", call_service: "ppp", number: "5551234",
+			since: Math.round(Date.now() / 1000) - 754, link: DEMO_DP.enabled, rx_bytes: 482113, tx_bytes: 2310442 };
+		for (var k in DEMO_DP) s[k] = DEMO_DP[k];
+		return s;
+	}
 
 	var MOCK = {
 		"luci.slate-recon:dashboard": {
@@ -326,7 +335,23 @@
 		"luci.slate-firmware:clear": function () {
 			DEMO_FW.staged = false; DEMO_FW.size = 0; DEMO_FW.verified = false;
 			return { ok: true };
-		}
+		},
+		"luci.slate-dreampi:status": demoDreampi,
+		"luci.slate-dreampi:set": function (p) {
+			["enabled", "service", "dial_tone", "dcnow"].forEach(function (k) { if (p[k] != null) DEMO_DP[k] = p[k]; });
+			return demoDreampi();
+		},
+		"luci.slate-dreampi:log": { lines: [
+			stamp(790) + " daemon.err dreampi[2210]: listening on /dev/ttyACM0",
+			stamp(770) + " daemon.err dreampi[2210]: heard 5551234",
+			stamp(768) + " user.notice dreampi: call to 5551234: ppp",
+			stamp(760) + " daemon.err dreampi[2210]: answering (ppp)",
+			stamp(741) + " daemon.err dreampi[2210]: CONNECT 33600",
+			stamp(735) + " daemon.notice pppd[2290]: pppd 2.5.2 started by root, uid 0",
+			stamp(731) + " daemon.notice pppd[2290]: PAP peer authentication succeeded for dream",
+			stamp(730) + " daemon.notice pppd[2290]: local  IP address 192.168.169.1",
+			stamp(730) + " daemon.notice pppd[2290]: remote IP address 192.168.169.2"
+		] }
 	};
 
 	/* ---------- dom helpers ---------- */
@@ -1480,6 +1505,139 @@
 		refresh();
 	}
 
+	/* ---------- DreamPi ---------- */
+
+	// dreampi's states: badge, badge class, what it means
+	var DP_STATES = {
+		"listening": ["ready", "sec-ok", "Playing a dial tone: dial from the Dreamcast."],
+		"answering": ["answering", "sec-warn", "Heard the Dreamcast dial; answering."],
+		"connected": ["online", "sec-ok", "The Dreamcast is online."],
+		"hanging-up": ["hanging up", "sec-warn", "The call ended; resetting the modem."],
+		"starting": ["starting", "sec-warn", "Starting the modem."],
+		"no-modem": ["no modem", "sec-neutral", "Plug in a USB modem to answer the Dreamcast."],
+		"off": ["off", "sec-neutral", "Answering is turned off."]
+	};
+	var DP_SERVICES = { ppp: "DreamPi servers", dcnet: "DCNet" };
+	var DP_TIMER = null;
+
+	function renderDreampi() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("DreamPi", "a Dreamcast online through a USB modem"));
+
+		var stPanel = panel("Status");
+		var stWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		stPanel.appendChild(stWrap);
+
+		var setPanel = panel("Settings");
+		setPanel.style.marginTop = "14px";
+		var svcSel = el("select", { class: "sel" },
+			el("option", { value: "ppp", text: "DreamPi servers (PPP on the Slate)" }),
+			el("option", { value: "dcnet", text: "DCNet (Flycast's network)" }));
+		var enChk = el("input", { type: "checkbox" });
+		var toneChk = el("input", { type: "checkbox" });
+		var nowChk = el("input", { type: "checkbox" });
+		var saveStatus = el("span", { class: "status" });
+		var setWrap = el("div", { hidden: "" });
+		setWrap.appendChild(el("div", { class: "form" },
+			el("label", {}, el("span", { class: "lbl", text: "Calls go to" }), svcSel)));
+		setWrap.appendChild(el("div", { class: "toolbar" },
+			el("label", { class: "chkline" }, enChk, document.createTextNode(" Answer the Dreamcast")),
+			el("label", { class: "chkline" }, toneChk, document.createTextNode(" Dial tone")),
+			el("label", { class: "chkline" }, nowChk, document.createTextNode(" Dreamcast Now"))));
+		setWrap.appendChild(el("div", { class: "toolbar" }, btn("Save", { primary: true, onclick: save }), saveStatus));
+		setWrap.appendChild(el("p", { class: "descr", text:
+			"Dial *69 before the number to send one call to DCNet. Turn the dial tone off only for a Dreamcast set to blind dial. " +
+			"Dreamcast Now lists what you play on dreamcast.online/now; during PPP calls it sends a hash of this router's MAC address " +
+			"and of the game server names the Dreamcast looks up." }));
+		setPanel.appendChild(setWrap);
+
+		var howPanel = panel("Connecting the Dreamcast");
+		howPanel.style.marginTop = "14px";
+		howPanel.appendChild(el("p", { class: "descr", text:
+			"Dreamcast modem → line voltage inducer → USB voice modem (a DreamPi's: Conexant RD02-D400 / Dell NW147, Zoom 3095, …) → " +
+			"the Slate's USB port, through a hub if an SDR is plugged in too. The Slate plays the dial tone and answers; no phone line is involved." }));
+		howPanel.appendChild(el("p", { class: "descr", text:
+			"On the Dreamcast, set up the ISP as for a DreamPi: any phone number, any user name and password, DNS automatic. " +
+			"DCNet works with DCNet-patched games." }));
+
+		var logPanel = panel("Recent log");
+		logPanel.style.marginTop = "14px";
+		var logPre = el("pre", { class: "raw-pre", text: "Loading…" });
+		logPanel.appendChild(el("div", { class: "toolbar" }, btn("Refresh", { onclick: refresh })));
+		logPanel.appendChild(logPre);
+
+		VIEW.appendChild(stPanel); VIEW.appendChild(setPanel);
+		VIEW.appendChild(howPanel); VIEW.appendChild(logPanel);
+
+		function kv(pairs) {
+			var dl = el("dl", { class: "kv" });
+			pairs.forEach(function (p) {
+				if (p[1] == null || p[1] === "") return;
+				dl.appendChild(el("dt", { text: p[0] }));
+				dl.appendChild(el("dd", { text: String(p[1]) }));
+			});
+			return dl;
+		}
+		function showStatus(s) {
+			clear(stWrap);
+			if (!s.installed) { stWrap.appendChild(el("div", { class: "muted", text: "DreamPi is not installed in this image." })); return; }
+			var st = DP_STATES[s.state] || [s.state, "sec-neutral", ""];
+			var m = (s.modems || [])[0];
+			var inCall = s.state === "answering" || s.state === "connected";
+			stWrap.appendChild(el("div", { class: "toolbar" }, badge(st[0], st[1]), el("span", { class: "status", text: st[2] })));
+			stWrap.appendChild(kv([
+				["Modem", m ? m.name + " — " + m.device + " (" + m.id + ")" : "none plugged in"],
+				["Call", inCall ? (s.number || "?") + " · " + (DP_SERVICES[s.call_service] || s.call_service) +
+					(s.since ? " · " + dur(Date.now() / 1000 - s.since) : "") : null],
+				// rx on the router's end of the link is what the Dreamcast sent
+				["PPP link", s.link ? s.dreamcast_ip + " ⇄ " + s.local_ip + " · " + size(s.rx_bytes) + " up, " +
+					size(s.tx_bytes) + " down" : null],
+				["Calls go to", DP_SERVICES[s.service] || s.service]
+			]));
+			// The form follows the saved settings until it is shown
+			if (setWrap.hidden) {
+				svcSel.value = s.service;
+				enChk.checked = !!s.enabled; toneChk.checked = !!s.dial_tone; nowChk.checked = !!s.dcnow;
+				setWrap.hidden = false;
+			}
+		}
+		function showLog(r) {
+			var lines = (r && r.lines) || [];
+			logPre.textContent = lines.length ? lines.join("\n") : "Nothing logged yet.";
+		}
+		function status() {
+			return call("luci.slate-dreampi", "status").then(showStatus).catch(function (e) {
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				clear(stWrap).appendChild(alertEl("warn", String(e.message || e)));
+			});
+		}
+		function refresh() {
+			status();
+			call("luci.slate-dreampi", "log").then(showLog).catch(function (e) { logPre.textContent = String(e.message || e); });
+		}
+		function save() {
+			saveStatus.className = "status"; saveStatus.textContent = "saving…";
+			call("luci.slate-dreampi", "set", { enabled: enChk.checked, service: svcSel.value,
+				dial_tone: toneChk.checked, dcnow: nowChk.checked }).then(function (r) {
+				if (r.error) { saveStatus.className = "status err"; saveStatus.textContent = r.error; return; }
+				saveStatus.className = "status ok-text"; saveStatus.textContent = "saved";
+				showStatus(r);
+			}).catch(function (e) {
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				saveStatus.className = "status err"; saveStatus.textContent = String(e.message || e);
+			});
+		}
+
+		// The state changes as the Dreamcast calls: keep it current while
+		// this page is open.
+		if (DP_TIMER) clearInterval(DP_TIMER);
+		DP_TIMER = setInterval(function () {
+			if (current !== "dreampi") { clearInterval(DP_TIMER); DP_TIMER = null; return; }
+			status();
+		}, 5000);
+		refresh();
+	}
+
 	/* ---------- fallback for an unknown route ---------- */
 
 	function renderPlaceholder(name) {
@@ -1497,6 +1655,7 @@
 		["survey", "Wi-Fi Survey"],
 		["threats", "Threats"],
 		["router", "Router"],
+		["dreampi", "DreamPi"],
 		["capture", "Capture"],
 		["handshake", "Handshake"],
 		["firmware", "Firmware"]
@@ -1524,6 +1683,7 @@
 		if (id === "survey") return renderSurvey();
 		if (id === "threats") return renderThreats();
 		if (id === "router") return renderRouter();
+		if (id === "dreampi") return renderDreampi();
 		if (id === "capture") return renderCapture();
 		if (id === "handshake") return renderHandshake();
 		if (id === "firmware") return renderFirmware();

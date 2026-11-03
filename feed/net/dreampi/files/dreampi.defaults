@@ -1,0 +1,42 @@
+#!/bin/sh
+# dreampi's first-boot settings (also run by the package's postinst):
+#   - a firewall zone for the Dreamcast's PPP link (dc0): out to the internet,
+#     and to this router only for DNS and ping
+#   - the router's own dnsmasq leaves dc0 to the Dreamcast's DNS server
+
+if ! uci -q get firewall.dreamcast > /dev/null; then
+	uci -q batch <<-EOF
+		set firewall.dreamcast=zone
+		set firewall.dreamcast.name='dreamcast'
+		add_list firewall.dreamcast.device='dc0'
+		set firewall.dreamcast.input='REJECT'
+		set firewall.dreamcast.output='ACCEPT'
+		set firewall.dreamcast.forward='REJECT'
+		set firewall.dreamcast_wan=forwarding
+		set firewall.dreamcast_wan.src='dreamcast'
+		set firewall.dreamcast_wan.dest='wan'
+		set firewall.dreamcast_dns=rule
+		set firewall.dreamcast_dns.name='Allow-Dreamcast-DNS'
+		set firewall.dreamcast_dns.src='dreamcast'
+		add_list firewall.dreamcast_dns.proto='tcp'
+		add_list firewall.dreamcast_dns.proto='udp'
+		set firewall.dreamcast_dns.dest_port='53'
+		set firewall.dreamcast_dns.target='ACCEPT'
+		set firewall.dreamcast_ping=rule
+		set firewall.dreamcast_ping.name='Allow-Dreamcast-Ping'
+		set firewall.dreamcast_ping.src='dreamcast'
+		set firewall.dreamcast_ping.proto='icmp'
+		set firewall.dreamcast_ping.icmp_type='echo-request'
+		set firewall.dreamcast_ping.target='ACCEPT'
+		commit firewall
+	EOF
+	/etc/init.d/firewall reload > /dev/null 2>&1
+fi
+
+if ! uci -q get dhcp.@dnsmasq[0].notinterface | grep -qw dc0; then
+	uci -q add_list dhcp.@dnsmasq[0].notinterface='dc0'
+	uci -q commit dhcp
+	/etc/init.d/dnsmasq reload > /dev/null 2>&1
+fi
+
+exit 0

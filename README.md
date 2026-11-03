@@ -142,7 +142,7 @@ same status with every address the receivers serve, the aircraft map, the ISM
 devices rtl_433 has decoded (one row per device, with its latest readings) and
 the recorded files; using a radio hands the RTL-SDR to that job. The Dashboard,
 Hosts, Wi-Fi Survey, Threats, Router, Capture, Handshake and Firmware tabs cover
-the network, the router and firmware.
+the network, the router and firmware, and the DreamPi tab the Dreamcast (below).
 
 **Over SSH:**
 
@@ -206,6 +206,35 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
 
   Saved to the card under `recon/` and `survey/`. Receive/observe only — no
   attack features.
+- **DreamPi** (the Slate UI's *DreamPi* tab): a Sega Dreamcast gets online
+  through its own dial-up modem, as with a [DreamPi](https://github.com/Kazade/dreampi)
+  on a Raspberry Pi, using the same USB voice modem (Conexant RD02-D400 /
+  Dell NW147, Zoom 3095, …; listed in `/usr/share/dreampi/modems`). Cable:
+  Dreamcast → line voltage inducer → USB modem → the Slate's USB port (the
+  powered hub if a radio is plugged in too). When the modem is plugged in,
+  the Slate plays a dial tone into the line, hears the number the Dreamcast
+  dials, and answers. Set up the Dreamcast's ISP as for a DreamPi: any phone
+  number, user name and password.
+  - **PPP calls** (the default) run pppd here as DreamPi does: the Dreamcast
+    is `192.168.169.2` on a link of its own (`dc0`, firewall zone
+    `dreamcast`: out to the internet, and to the router only for DNS), with
+    DreamPi's DNS servers (which point retired game servers at their
+    revivals), its fixes for games' hard-coded server addresses (the
+    `dcnatrules` list, refreshed from DreamPi's source), TTL 64, and the
+    PowerSmash SYN fix.
+  - **DCNet** ([Flycast's](https://github.com/flyinghead/flycast) online
+    network, for DCNet-patched games): dial `*69` before the number for one
+    call, or make it the default on the tab.
+  - **Dreamcast Now** (on by default, as on a DreamPi): during PPP calls,
+    [dreamcast.online/now](https://dreamcast.online/now) is told what is being
+    played: a hash of the router's MAC address and of the game server names
+    looked up.
+
+  Not ported: DreamPi's Netlink (peer-to-peer modem games and XBAND), its
+  VPN, its UPnP port forwarding, and its per-game helpers `dcgamespy`,
+  `dc2k2` and `dcvoip`, which DreamPi ships only as Raspberry Pi binaries.
+  Settings are in `/etc/config/dreampi`; `logread -e dreampi -e pppd` shows the
+  calls.
 
 **On the card** (`slate-sdr/<job>/<date>/`):
 
@@ -251,8 +280,11 @@ Tested in this repository's tests and builds:
   against a mock sysupgrade, so no real flash is ever attempted), and plug and
   play (jobs held back while their radio is unplugged, the USB and tty hotplug
   hooks, gpsd started and stopped with the GPS, the map server living and
-  dying with the ADS-B job), against mock radios and tools on that same
-  userland: 222 checks.
+  dying with the ADS-B job), and DreamPi (the modem daemon against
+  `tests/fakemodem`, a modem with a Dreamcast dialling on a pseudo-terminal;
+  the call script, NAT rules, Dreamcast Now, init script, hotplug hook and the
+  UI's backend), against mock radios and tools on that same userland: 266
+  checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -273,6 +305,12 @@ Not yet run:
   started); a PortaPack in Mayhem mode was rightly taken for neither a radio
   nor a GPS. The GPS hook was driven only with a stand-in `/dev/ttyACM0`:
   gpsd started and stopped through procd as expected.
+- DreamPi with a real USB modem and a Dreamcast. On the device, against
+  `tests/fakemodem`: the dial tone, the number heard, the call answered, pppd
+  up with the Dreamcast's PAP login and DNS answered on the link, the hang-up
+  and back to listening; `*69` to DCNet (with a stand-in DCNet client), and
+  the service stopped mid-call. Dreamcast Now's update was accepted by its
+  server.
 - The web UI's first-run screen on a freshly flashed device (settings not
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that
@@ -282,8 +320,9 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `slate-sdr`, `slate-ui` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `slate-sdr`, `slate-ui`, `dreampi` |
 | `feed/utils/slate-sdr/files/` | the service: job runner, init script, CLI, status page, default config |
+| `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/slate-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
 | `feed/utils/slate-ui/root/` | the UI's rpcd/ubus backends: router basics, firmware, capture, handshake, and the SDR (`luci.slate-sdr`) and recon (`slate-recon` / `slate-survey` / `slate-threats` / `slate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
@@ -300,4 +339,6 @@ feed.
 The scripts in `feed/utils/slate-sdr/files/` and `tests/`, and the build
 scripts, are MIT. The OpenWrt package Makefiles follow OpenWrt's
 GPL-2.0. Each packaged program keeps its own licence (in its Makefile's
-`PKG_LICENSE`).
+`PKG_LICENSE`). In `feed/net/dreampi/`, `src/dreampi.c` and the scripts are
+MIT (`dreampi.c` is a port of DreamPi's modem code, MIT, © Luke Benstead);
+`src/dcnet.c` is Flycast's DCNet client, GPL-2.0-or-later.

@@ -19,14 +19,19 @@ ov=$(mktemp -d)
 trap 'rm -rf "$ov"' EXIT
 
 # Unpacked as root, then handed back to the caller so the steps below (and
-# the cleanup) can write to it.
+# the cleanup) can write to it. tests/fakemodem (a modem with a Dreamcast on
+# the line, for the dreampi tests) is built with the SDK's compiler.
 docker run --rm --user 0 -e OWNER="$(id -u):$(id -g)" \
-	-v "$pkgs:/pkgs:ro" -v "$ov:/ov" "$SDK_IMAGE" sh -c '
+	-v "$pkgs:/pkgs:ro" -v "$ov:/ov" -v "$here/tests:/tests:ro" "$SDK_IMAGE" sh -c '
+	set -e
 	for f in /pkgs/*.apk; do
 		case "${f##*/}" in slate-sdr-* | slate-ui-*) continue ;; esac
 		/builder/staging_dir/host/bin/apk extract --allow-untrusted --destination /ov "$f" > /dev/null
 	done
 	rm -rf /ov/lib/apk
+	cc=$(find /builder/staging_dir -path "*/toolchain-*/bin/*-openwrt-linux-musl-gcc" | head -n 1)
+	mkdir -p /ov/usr/bin
+	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakemodem /tests/fakemodem.c
 	chown -R "$OWNER" /ov'
 
 f="$here/feed/utils/slate-sdr/files"
@@ -66,6 +71,11 @@ cp "$u/usr/sbin/slate-gps" "$ov/usr/sbin/"
 cp "$u/etc/init.d/slate-gps" "$ov/etc/init.d/"
 cp "$u/etc/hotplug.d/tty/20-slate-gps" "$ov/etc/hotplug.d/tty/"
 chmod 755 "$ov/usr/sbin/slate-gps" "$ov/etc/init.d/slate-gps"
+# The DreamPi page's backend (the dreampi package itself comes built, above)
+cp "$u/usr/sbin/slate-dreampi" "$ov/usr/sbin/"
+cp "$u/usr/libexec/rpcd/luci.slate-dreampi" "$ov/usr/libexec/rpcd/"
+cp "$u/usr/share/rpcd/acl.d/luci-app-slate-dreampi.json" "$ov/usr/share/rpcd/acl.d/"
+chmod 755 "$ov/usr/sbin/slate-dreampi" "$ov/usr/libexec/rpcd/luci.slate-dreampi"
 cp "$here/feed/utils/slate-ui/files/slate-upload" "$ov/www/cgi-bin/slate-upload"
 chmod 755 "$ov/usr/sbin/slate-router" "$ov/usr/sbin/slate-capture" "$ov/usr/sbin/slate-handshake" \
 	"$ov/usr/sbin/slate-firmware" "$ov/usr/sbin/slate-recon" "$ov/usr/sbin/slate-survey" \

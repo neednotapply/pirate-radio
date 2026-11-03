@@ -1,0 +1,19 @@
+#!/bin/sh
+# DreamPi plug and play (/etc/hotplug.d/tty/30-dreampi): when a USB modem is
+# plugged in, start answering the Dreamcast; when a serial device goes away
+# (gone from sysfs by now, so maybe the modem), check again.
+
+case "$ACTION" in add | remove) ;; *) exit 0 ;; esac
+case "$DEVNAME" in ttyACM* | ttyUSB*) ;; *) exit 0 ;; esac
+
+INIT=${DREAMPI_INIT:-/etc/init.d/dreampi}
+"$INIT" enabled || exit 0
+
+if [ "$ACTION" = add ]; then
+	# shellcheck disable=SC1090
+	. "${DREAMPI_LIB:-/usr/share/dreampi/lib.sh}"
+	id=$(dreampi_usb_id "$DEVNAME") || exit 0
+	name=$(dreampi_modem_name "$id") || exit 0
+	logger -t dreampi "$DEVNAME: $name ($id) plugged in"
+fi
+exec "$INIT" reload

@@ -33,10 +33,11 @@ cat > .config <<-CONFIG
 	CONFIG_PACKAGE_soapy-remote-server=m
 	CONFIG_PACKAGE_slate-sdr=m
 	CONFIG_PACKAGE_slate-ui=m
+	CONFIG_PACKAGE_dreampi=m
 CONFIG
 quiet make defconfig
 
-for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote; do
+for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote dreampi; do
 	echo "-- $p"
 	make -j"$(nproc)" "package/$p/compile"
 done

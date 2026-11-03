@@ -76,6 +76,10 @@ define Package/slate-ui/install
 	$(INSTALL_BIN) ./root/usr/sbin/slate-handshake $(1)/usr/sbin/slate-handshake
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/luci.slate-handshake $(1)/usr/libexec/rpcd/luci.slate-handshake
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-slate-handshake.json $(1)/usr/share/rpcd/acl.d/luci-app-slate-handshake.json
+	# DreamPi page (the dreampi package does the work)
+	$(INSTALL_BIN) ./root/usr/sbin/slate-dreampi $(1)/usr/sbin/slate-dreampi
+	$(INSTALL_BIN) ./root/usr/libexec/rpcd/luci.slate-dreampi $(1)/usr/libexec/rpcd/luci.slate-dreampi
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/luci-app-slate-dreampi.json $(1)/usr/share/rpcd/acl.d/luci-app-slate-dreampi.json
 	# Firmware flasher
 	$(INSTALL_BIN) ./root/usr/sbin/slate-firmware $(1)/usr/sbin/slate-firmware
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/luci.slate-firmware $(1)/usr/libexec/rpcd/luci.slate-firmware

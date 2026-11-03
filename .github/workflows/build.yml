@@ -36,6 +36,10 @@ jobs:
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-firmware feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-firmware
           shellcheck -s sh -e SC1091,SC3043 feed/utils/slate-ui/files/slate-upload
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-gps feed/utils/slate-ui/root/etc/init.d/slate-gps feed/utils/slate-ui/root/etc/hotplug.d/tty/20-slate-gps
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-dreampi feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-dreampi
+          cd feed/net/dreampi/files
+          shellcheck -s sh -e SC1091,SC3043,SC2034,SC2154 call.sh dcnow.sh nat.sh lib.sh dreampi.init dreampi.hotplug dreampi.defaults
+          cd "$GITHUB_WORKSPACE"
           shellcheck -s sh build.sh build-full.sh scripts/*.sh tests/run.sh
           shellcheck -s sh -e SC3043,SC2016,SC2012,SC1091,SC2015 tests/rootfs-test.sh
 

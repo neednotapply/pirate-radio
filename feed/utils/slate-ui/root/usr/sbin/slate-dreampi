@@ -1,0 +1,118 @@
+#!/bin/sh
+# slate-dreampi: DreamPi (the dreampi package) for the Slate web UI: whether a
+# modem is plugged in, the call in progress, and the settings. Prints one JSON
+# object per subcommand (the reply the luci.slate-dreampi rpcd plugin
+# returns).
+#
+#   slate-dreampi status
+#   slate-dreampi set <enabled> <service> <dial_tone> <dcnow>   ("" = as is)
+#   slate-dreampi log
+
+. /usr/share/libubox/jshn.sh
+
+LIB=${SLATE_DREAMPI_LIB:-/usr/share/dreampi/lib.sh}
+RUN=${DREAMPI_RUN:-/var/run/dreampi}
+INIT=${DREAMPI_INIT:-/etc/init.d/dreampi}
+SYSFS=${SLATE_SYSFS:-/sys}
+
+opt() { uci -q get "dreampi.main.$1" || echo "$2"; }
+
+# state_var <name>: a value from the state file dreampi keeps while it runs
+state_var() { sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" "$RUN/state" 2> /dev/null; }
+
+cmd_status() {
+	local modems dev id name state link=0 rx=0 tx=0
+
+	json_init
+	if [ ! -r "$LIB" ]; then
+		json_add_boolean installed 0
+		json_dump
+		return
+	fi
+	# shellcheck disable=SC1090
+	. "$LIB"
+	json_add_boolean installed 1
+	json_add_boolean enabled "$(opt enabled 1)"
+	json_add_string service "$(opt service ppp)"
+	json_add_boolean dial_tone "$(opt dial_tone 1)"
+	json_add_boolean dcnow "$(opt dcnow 1)"
+	json_add_string local_ip "$(opt local_ip 192.168.169.1)"
+	json_add_string dreamcast_ip "$(opt dreamcast_ip 192.168.169.2)"
+
+	modems=$(dreampi_modems)
+	json_add_array modems
+	while read -r dev id name; do
+		[ -n "$dev" ] || continue
+		json_add_object ""
+		json_add_string device "$dev"
+		json_add_string id "$id"
+		json_add_string name "$name"
+		json_close_object
+	done <<-EOF
+		$modems
+	EOF
+	json_close_array
+
+	# dreampi's own state while it runs; otherwise why it isn't running
+	if [ -f "$RUN/state" ] && pidof dreampi > /dev/null; then
+		state=$(state_var state)
+		json_add_string call_service "$(state_var service)"
+		json_add_string number "$(state_var number)"
+		json_add_int since "$(state_var since)"
+	elif [ "$(opt enabled 1)" != 1 ]; then
+		state=off
+	elif [ -z "$modems" ]; then
+		state=no-modem
+	else
+		state=starting
+	fi
+	json_add_string state "${state:-starting}"
+
+	# The PPP link, while a PPP call is up
+	if [ -d "$SYSFS/class/net/dc0" ]; then
+		link=1
+		read -r rx < "$SYSFS/class/net/dc0/statistics/rx_bytes"
+		read -r tx < "$SYSFS/class/net/dc0/statistics/tx_bytes"
+	fi
+	json_add_boolean link "$link"
+	json_add_int rx_bytes "${rx:-0}"
+	json_add_int tx_bytes "${tx:-0}"
+	json_dump
+}
+
+cmd_set() {
+	local enabled="$1" service="$2" dial_tone="$3" dcnow="$4"
+
+	[ -r "$LIB" ] || { echo '{ "error": "DreamPi is not installed" }'; return; }
+	case "$enabled$dial_tone$dcnow" in *[!01]*) echo '{ "error": "bad setting" }'; return ;; esac
+	case "$service" in "" | ppp | dcnet) ;; *) echo '{ "error": "service is ppp or dcnet" }'; return ;; esac
+	[ -n "$enabled" ] && uci set "dreampi.main.enabled=$enabled"
+	[ -n "$service" ] && uci set "dreampi.main.service=$service"
+	[ -n "$dial_tone" ] && uci set "dreampi.main.dial_tone=$dial_tone"
+	[ -n "$dcnow" ] && uci set "dreampi.main.dcnow=$dcnow"
+	uci commit dreampi
+	"$INIT" reload > /dev/null 2>&1
+	cmd_status
+}
+
+cmd_log() {
+	json_init
+	json_add_array lines
+	logread 2> /dev/null | grep -E ' (dreampi|pppd|dcnet)(\[[0-9]+\])?: ' | tail -n 40 > /tmp/slate-dreampi.log
+	while IFS= read -r l; do
+		json_add_string "" "$l"
+	done < /tmp/slate-dreampi.log
+	rm -f /tmp/slate-dreampi.log
+	json_close_array
+	json_dump
+}
+
+case "$1" in
+status) cmd_status ;;
+set) shift; cmd_set "$@" ;;
+log) cmd_log ;;
+*)
+	echo "usage: slate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> | log" >&2
+	exit 1
+	;;
+esac

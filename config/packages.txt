@@ -41,6 +41,12 @@ kmod-usb-serial-cp210x
 kmod-usb-serial-ftdi
 kmod-usb-serial-ch341
 
+# DreamPi: a Dreamcast dials a USB voice modem plugged in here (the modems a
+# DreamPi uses) and gets online, through DreamPi's servers over PPP or through
+# DCNet. Idle until a modem is plugged in; the Slate UI's DreamPi tab. Pulls
+# ppp, which the image already has.
+dreampi
+
 # WireGuard, to tunnel back home over an untrusted uplink. The kernel module
 # must be built into the full image (its kernel is its own). Configure the
 # tunnel over SSH with uci/wg; the Slate UI has no WireGuard page yet.

@@ -691,6 +691,180 @@ check "status: a PortaPack in Mayhem mode is not a radio" sh -c '. /usr/share/sl
 rm -f "$T/gps.active"
 check "gps hotplug: nothing while slate-gps is stopped" [ -z "$(ghp ACTION=add DEVNAME=ttyACM0)" ]
 
+echo "# DreamPi (dreampi; tests/fakemodem plays the modem and the Dreamcast)"
+DP="$T/dp"
+mkdir -p "$DP/bin" "$DP/run"
+export DREAMPI_RUN="$DP/run" DP_CALLS="$DP/calls"
+# A Conexant USB modem (Dell NW147) on ttyACM1, a u-blox GPS on ttyACM2
+mkusb 1-4 0572 1340 "" "USB Modem"
+mkusb 1-5 1546 01a7 "" "u-blox 7 - GPS/GNSS Receiver"
+for p in 1-4:ttyACM1 1-5:ttyACM2; do
+	mkdir -p "$T/sys/bus/usb/devices/${p%:*}/${p%:*}:1.0" "$T/sys/class/tty/${p#*:}"
+	ln -s "$T/sys/bus/usb/devices/${p%:*}/${p%:*}:1.0" "$T/sys/class/tty/${p#*:}/device"
+done
+for m in nft pppd dcnet uclient-fetch init; do
+	cat > "$DP/bin/$m" <<-'EOF'
+		#!/bin/sh
+		# A mock: records how it was called (nft: its rules, from stdin)
+		m=${0##*/}
+		case "$m $1" in
+		"init enabled") exit 0 ;;
+		"nft -f") cat >> "$DP_CALLS.nft" ;;
+		esac
+		echo "$m $*" >> "$DP_CALLS"
+	EOF
+	chmod +x "$DP/bin/$m"
+done
+dpenv() { env PATH="$DP/bin:$PATH" DREAMPI_INIT="$DP/bin/init" "$@"; }
+DPMODEM="/dev/ttyACM1 0572:1340 Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)"
+check "dreampi: daemon and DCNet client run" sh -c 'dreampi -h 2>&1 | grep -q "usage: dreampi" && dcnet -x 2>&1 | grep -q Usage'
+check "dreampi: finds the modem, not the GPS or the PortaPack" [ "$(. /usr/share/dreampi/lib.sh; dreampi_modems)" = "$DPMODEM" ]
+uci add_list gpsd.core.devices=/dev/ttyACM1
+: > "$GD/dev/ttyACM1"
+check "gps pnp: a DreamPi modem is not a GPS" [ "$(gsync)" = stop ]
+rm -f "$GD/dev/ttyACM1"
+uci revert gpsd
+
+# DreamPi's NAT fixes; the list is someone else's, so lines that aren't
+# "<from> <to> [port [tcp|udp]]" never reach nft
+printf '%s\n' '# a comment' '172.17.18.2 146.185.135.179 9500' '172.16.0.21 146.185.135.179 9500 udp' \
+	'63.251.242.131 146.185.135.179' '1.2.3.4 5.6.7.8 80 tcp; flush ruleset' '1.2.3.4 5.6.7.8 80 icmp' \
+	'1.2.3.4 5.6.7.8 99999' '01.2.3.4 5.6.7.8 80' '1.2.3 5.6.7.8 80' '1.2.3.4 $(reboot) 80' > "$DP/run/dnat.txt"
+dpenv /usr/libexec/dreampi/nat apply
+check "nat: a TCP rule" has "$DP_CALLS.nft" 'iifname "dc0" ip daddr 172.17.18.2 tcp dport 9500 dnat to 146.185.135.179:9500$'
+check "nat: a UDP rule" has "$DP_CALLS.nft" 'iifname "dc0" ip daddr 172.16.0.21 udp dport 9500 dnat to 146.185.135.179:9500$'
+check "nat: an every-port rule" has "$DP_CALLS.nft" 'iifname "dc0" ip daddr 63.251.242.131 meta l4proto tcp dnat to 146.185.135.179$'
+check "nat: malformed lines skipped" [ "$(grep -c ' dnat to ' "$DP_CALLS.nft")" = 3 ]
+check "nat: TTL 64 and the PowerSmash SYN fix" sh -c "grep -q 'iifname \"dc0\" ip ttl set 64' '$DP_CALLS.nft' && grep -q 'tcp sport 3200-3205 add @syn_seen' '$DP_CALLS.nft'"
+rm -f "$DP/run/dnat.txt" "$DP_CALLS.nft"
+dpenv /usr/libexec/dreampi/nat apply
+check "nat: the shipped list when none was fetched" [ "$(grep -c ' dnat to ' "$DP_CALLS.nft")" = "$(grep -c '^[0-9]' /usr/share/dreampi/dnat.txt)" ]
+
+# The call script (pppd, the DCNet client and Dreamcast Now mocked)
+uci set dreampi.main.dcnow=0
+uci commit dreampi
+: > "$DP_CALLS"
+dpenv DREAMPI_TTY=/dev/ttyACM1 DREAMPI_BAUD=57600 /usr/libexec/dreampi/call ppp 5551234
+check "call: pppd as DreamPi runs it" has "$DP_CALLS" "^pppd /dev/ttyACM1 57600 192.168.169.1:192.168.169.2 nodetach auth ms-dns 192.168.169.1 ktune noccp noipv6 ifname dc0$"
+dpenv DREAMPI_TTY=/dev/ttyACM1 DREAMPI_BAUD=57600 /usr/libexec/dreampi/call dcnet 5551234
+check "call: DCNet on its first port" has "$DP_CALLS" "^dcnet -t /dev/ttyACM1 -b 57600 -p 7654$"
+dpenv DREAMPI_TTY=/dev/ttyACM1 DREAMPI_BAUD=57600 /usr/libexec/dreampi/call dcnet 005360010013
+check "call: DCNet's second-port numbers" has "$DP_CALLS" "^dcnet -t /dev/ttyACM1 -b 57600 -p 7656$"
+
+# Dreamcast Now: id = sha256 of the MAC address in capitals; the name last
+# looked up (appspot excluded), and a shared name only once per call
+mkdir -p "$T/sys/class/net/br-lan"
+echo 94:83:c4:90:c2:d4 > "$T/sys/class/net/br-lan/address"
+: > "$DP_CALLS"
+dpenv DREAMPI_DCNOW_INTERVAL=1 /usr/libexec/dreampi/dcnow &
+dcn=$!
+sleep 2
+q() { echo "Nov  2 16:39:24 dnsmasq[1]: query[A] $1 from 192.168.169.2" >> "$DP/run/dns.log"; }
+q master.quake3arena.com
+sleep 2
+q dcnow-2016.appspot.com
+sleep 2
+q gameloft.example.net
+sleep 3
+kill "$dcn"
+sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+check "dcnow: posts under the MAC's hash" has "$DP_CALLS" "https://dcnow-2016.appspot.com/api/update/$(sha 94:83:C4:90:C2:D4)/"
+check "dcnow: an empty update before any lookup" has "$DP_CALLS" "--post-data= "
+check "dcnow: the game server's hash" has "$DP_CALLS" "--post-data=dns_query=$(sha master.quake3arena.com) "
+check "dcnow: appspot lookups are not reported" sh -c "! grep -q '$(sha dcnow-2016.appspot.com)' '$DP_CALLS'"
+check "dcnow: a shared name once" [ "$(grep -c "$(sha gameloft.example.net)" "$DP_CALLS")" = 1 ]
+
+# The init script (procd calls stubbed)
+cat > "$DP/init-harness.sh" <<-'EOF'
+	. /lib/functions.sh
+	procd_open_instance() { printf 'instance %s:' "$1"; }
+	procd_set_param() { [ "$1" = command ] && shift && printf ' %s' "$*"; }
+	procd_append_param() { [ "$1" = command ] && shift && printf ' %s' "$*"; }
+	procd_close_instance() { echo; }
+	. /etc/init.d/dreampi
+	start_service
+	wait
+EOF
+: > /dev/ttyACM1
+dpinit() { dpenv DREAMPI_PAP_SECRETS="$DP/pap-secrets" sh "$DP/init-harness.sh" > "$DP/init.out" 2>&1; }
+dpinit
+dpinit
+check "init: the modem daemon on the modem" has "$DP/init.out" "^instance modem: /usr/sbin/dreampi -t /dev/ttyACM1 -b 57600 -s ppp -c /usr/libexec/dreampi/call -S $DP/run/state$"
+check "init: the Dreamcast's DNS server" has "$DP/init.out" "^instance dns: /usr/sbin/dnsmasq -k -C $DP/run/dnsmasq.conf$"
+check "init: DNS on the link, through DreamPi's servers" sh -c "grep -qx 'listen-address=192.168.169.1' '$DP/run/dnsmasq.conf' && grep -qx 'server=46.101.91.123' '$DP/run/dnsmasq.conf' && grep -qx 'server=209.50.50.129' '$DP/run/dnsmasq.conf'"
+check "init: PAP takes any login, added once" [ "$(grep -c '^\*[[:space:]]\*[[:space:]]""[[:space:]]\*$' "$DP/pap-secrets")" = 1 ]
+uci set dreampi.main.dial_tone=0
+uci set dreampi.main.service=dcnet
+uci commit dreampi
+dpinit
+check "init: service and dial tone settings" has "$DP/init.out" "^instance modem: .* -s dcnet .* -n$"
+uci set dreampi.main.enabled=0
+uci commit dreampi
+dpinit
+check "init: nothing runs when turned off" sh -c "! grep -q instance '$DP/init.out'"
+uci set dreampi.main.enabled=1
+uci set dreampi.main.dial_tone=1
+uci set dreampi.main.service=ppp
+uci commit dreampi
+rm -f /dev/ttyACM1
+dpinit
+check "init: nothing runs without the modem" sh -c "! grep -q instance '$DP/init.out'"
+
+# The hotplug hook: a modem plugged in, any serial device gone
+dphp() { : > "$DP_CALLS"; dpenv "$@" sh /etc/hotplug.d/tty/30-dreampi > /dev/null 2>&1; cat "$DP_CALLS"; }
+check "hotplug: a modem plugged in starts answering" [ "$(dphp ACTION=add DEVNAME=ttyACM1)" = "init reload" ]
+check "hotplug: a GPS plugged in is not a modem" [ -z "$(dphp ACTION=add DEVNAME=ttyACM2)" ]
+check "hotplug: a serial device removed: check again" [ "$(dphp ACTION=remove DEVNAME=ttyACM1)" = "init reload" ]
+check "hotplug: other devices ignored" [ -z "$(dphp ACTION=add DEVNAME=ttyS0)" ]
+
+# The UI backend
+RD=/usr/libexec/rpcd/luci.slate-dreampi
+check "ui: ACL is valid JSON" jsonfilter -i /usr/share/rpcd/acl.d/luci-app-slate-dreampi.json -e '@' -q
+check "ui: rpcd plugin offers status, log, set" sh -c '"'"$RD"'" list | jsonfilter -e "@.status" >/dev/null && "'"$RD"'" list | jsonfilter -e "@.log" >/dev/null && "'"$RD"'" list | jsonfilter -e "@.set.service" | grep -qx str'
+dpenv slate-dreampi status > "$DP/status.json"
+check "ui: status lists the modem" [ "$(jsonfilter -i "$DP/status.json" -e '@.modems[0].id') $(jsonfilter -i "$DP/status.json" -e '@.modems[0].device')" = "0572:1340 /dev/ttyACM1" ]
+check "ui: modem plugged in, daemon not running -> starting" [ "$(jsonfilter -i "$DP/status.json" -e '@.state')" = starting ]
+check "ui: set rejects an unknown service" sh -c 'slate-dreampi set "" bogus "" "" | jsonfilter -e "@.error" | grep -q "ppp or dcnet"'
+: > "$DP_CALLS"
+dpenv slate-dreampi set 0 dcnet "" 1 > "$DP/status.json"
+check "ui: set saves and reloads" sh -c "[ \"\$(uci get dreampi.main.service) \$(uci get dreampi.main.enabled)\" = 'dcnet 0' ] && grep -qx 'init reload' '$DP_CALLS'"
+check "ui: turned off -> off" [ "$(jsonfilter -i "$DP/status.json" -e '@.state')" = off ]
+uci set dreampi.main.enabled=1
+uci set dreampi.main.service=ppp
+uci commit dreampi
+check "ui: log is valid JSON" sh -c 'slate-dreampi log | jsonfilter -e "@.lines" >/dev/null'
+
+# The modem daemon against the fake modem: *69 then a number goes to DCNet,
+# a Netlink number is ignored, a plain number to PPP; each call ends with
+# "+++" and ATH0, and listening starts over
+cat > "$DP/call" <<-'EOF'
+	#!/bin/sh
+	echo "call $1 $2 $DREAMPI_TTY $DREAMPI_BAUD" >> "$DP_CALLS"
+	sleep 1
+EOF
+chmod +x "$DP/call"
+: > "$DP_CALLS"
+fakemodem -l "$DP/modem" -n "*69,5551234,0,5550000" -c 2 > "$DP/fakemodem.log" 2>&1 &
+fm=$!
+sleep 1
+dreampi -t "$DP/modem" -c "$DP/call" -S "$DP/run/state" -w 1 > "$DP/dreampi.log" 2>&1 &
+dpd=$!
+i=0
+while [ $i -lt 150 ] && [ "$(grep -c '^call' "$DP_CALLS")" -lt 2 ]; do sleep 1; i=$((i + 1)); done
+i=0
+while [ $i -lt 30 ] && ! grep -q "^state=listening" "$DP/run/state" 2>/dev/null; do sleep 1; i=$((i + 1)); done
+check "dreampi: voice mode as DreamPi sets it up" sh -c "grep -q '^cmd AT+FCLASS=8' '$DP/fakemodem.log' && grep -q '^cmd AT+VLS=1' '$DP/fakemodem.log' && grep -q '^cmd AT+VSM=1,8000' '$DP/fakemodem.log' && grep -q '^cmd AT+VTX' '$DP/fakemodem.log'"
+check "dreampi: a dial tone with no stray DLE" grep -qE '^tone [1-9][0-9]+ dle 0$' "$DP/fakemodem.log"
+check "dreampi: *69 then a number -> DCNet" has "$DP_CALLS" "^call dcnet 5551234 $DP/modem 57600$"
+check "dreampi: a Netlink number is ignored" has "$DP/dreampi.log" "heard 0: Netlink"
+check "dreampi: a plain number -> PPP" has "$DP_CALLS" "^call ppp 5550000 $DP/modem 57600$"
+check "dreampi: after a call, +++ and ATH0" sh -c "[ \"\$(grep -c '^escape' '$DP/fakemodem.log')\" = 2 ]"
+check "dreampi: listening again after the calls" grep -q "^state=listening" "$DP/run/state"
+kill "$dpd"
+wait "$dpd"
+check "dreampi: stopped cleanly, state file gone" [ ! -e "$DP/run/state" ]
+kill "$fm"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

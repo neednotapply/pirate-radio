@@ -1,0 +1,6 @@
+# USB voice modems dreampi answers with: <vid:pid> <name>. A * matches any
+# product. These are the modems DreamPi's guides list; any voice modem that
+# takes AT+FCLASS=8 and AT+VTX should do.
+0572:* Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)
+0803:3095 Zoom 3095
+0baf:0303 U.S. Robotics USR5637

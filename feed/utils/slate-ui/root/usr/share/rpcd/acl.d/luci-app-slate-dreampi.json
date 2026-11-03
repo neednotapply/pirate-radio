@@ -1,0 +1,15 @@
+{
+	"luci-app-slate-dreampi": {
+		"description": "Grant access to DreamPi: modem and call status, its log, and its settings",
+		"read": {
+			"ubus": {
+				"luci.slate-dreampi": [ "status", "log" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"luci.slate-dreampi": [ "set" ]
+			}
+		}
+	}
+}

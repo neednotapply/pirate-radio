@@ -1,0 +1,91 @@
+#!/bin/sh /etc/rc.common
+# DreamPi for the Slate: answers a Dreamcast's modem through a USB voice modem
+# while one is plugged in (the tty hotplug hook reloads this on every plug and
+# unplug). Runs the modem daemon (dreampi) and, for PPP calls, a DNS server
+# for the Dreamcast on the PPP link (dnsmasq, with DreamPi's DNS servers) and
+# DreamPi's packet fixes (/usr/libexec/dreampi/nat).
+
+START=95
+STOP=10
+USE_PROCD=1
+
+RUN=${DREAMPI_RUN:-/var/run/dreampi}
+
+# The PPP link's address on this router, for the Dreamcast's DNS server
+dns_conf() {
+	local local_ip="$1" s
+	{
+		echo "# Written by /etc/init.d/dreampi from /etc/config/dreampi"
+		echo "listen-address=$local_ip"
+		echo "bind-dynamic"
+		echo "port=53"
+		echo "no-resolv"
+		echo "no-hosts"
+		echo "domain-needed"
+		echo "bogus-priv"
+		echo "cache-size=500"
+		echo "pid-file="
+		echo "user=dnsmasq"
+		echo "group=dnsmasq"
+		# What the Dreamcast looks up, for Dreamcast Now
+		echo "log-queries"
+		echo "log-facility=$RUN/dns.log"
+		for s in $(uci -q get dreampi.main.dns); do
+			echo "server=$s"
+		done
+	} > "$RUN/dnsmasq.conf"
+}
+
+# pppd lets the Dreamcast in with any user name and password, as DreamPi does
+pap_secrets() {
+	local f="${DREAMPI_PAP_SECRETS:-/etc/ppp/pap-secrets}"
+	grep -q '^# dreampi' "$f" 2> /dev/null && return
+	printf '# dreampi: the Dreamcast logs in with any user name and password\n*\t*\t""\t*\n' >> "$f"
+	chmod 600 "$f"
+}
+
+start_service() {
+	local enabled device baud service dial_tone local_ip
+
+	. /usr/share/dreampi/lib.sh
+	mkdir -p "$RUN"
+	config_load dreampi
+	config_get_bool enabled main enabled 1
+	config_get device main device
+	config_get baud main baud 57600
+	config_get service main service ppp
+	config_get_bool dial_tone main dial_tone 1
+	config_get local_ip main local_ip 192.168.169.1
+
+	[ -n "$device" ] || device=$(dreampi_modems | head -n 1 | cut -d' ' -f1)
+	if [ "$enabled" != 1 ] || [ -z "$device" ] || [ ! -e "$device" ]; then
+		/usr/libexec/dreampi/nat clear
+		return 0
+	fi
+
+	pap_secrets
+	dns_conf "$local_ip"
+	/usr/libexec/dreampi/nat apply
+	/usr/libexec/dreampi/nat update &
+
+	procd_open_instance modem
+	procd_set_param command /usr/sbin/dreampi -t "$device" -b "$baud" -s "$service" \
+		-c /usr/libexec/dreampi/call -S "$RUN/state"
+	[ "$dial_tone" = 1 ] || procd_append_param command -n
+	procd_set_param respawn 3600 5 0
+	procd_set_param stderr 1
+	procd_close_instance
+
+	procd_open_instance dns
+	procd_set_param command /usr/sbin/dnsmasq -k -C "$RUN/dnsmasq.conf"
+	procd_set_param respawn
+	procd_close_instance
+}
+
+stop_service() {
+	/usr/libexec/dreampi/nat clear
+}
+
+service_triggers() {
+	procd_add_reload_trigger dreampi
+}
