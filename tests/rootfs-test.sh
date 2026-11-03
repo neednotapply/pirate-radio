@@ -756,7 +756,7 @@ check "call: DCNet's second-port numbers" has "$DP_CALLS" "^dcnet -t /dev/ttyACM
 mkdir -p "$T/sys/class/net/br-lan"
 echo 94:83:c4:90:c2:d4 > "$T/sys/class/net/br-lan/address"
 : > "$DP_CALLS"
-dpenv DREAMPI_DCNOW_INTERVAL=1 /usr/libexec/dreampi/dcnow &
+env PATH="$DP/bin:$PATH" DREAMPI_DCNOW_INTERVAL=1 /usr/libexec/dreampi/dcnow &
 dcn=$!
 sleep 2
 q() { echo "Nov  2 16:39:24 dnsmasq[1]: query[A] $1 from 192.168.169.2" >> "$DP/run/dns.log"; }
@@ -767,6 +767,7 @@ sleep 2
 q gameloft.example.net
 sleep 3
 kill "$dcn"
+wait "$dcn" 2> /dev/null
 sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 check "dcnow: posts under the MAC's hash" has "$DP_CALLS" "https://dcnow-2016.appspot.com/api/update/$(sha 94:83:C4:90:C2:D4)/"
 check "dcnow: an empty update before any lookup" has "$DP_CALLS" "--post-data= "
@@ -844,6 +845,7 @@ cat > "$DP/call" <<-'EOF'
 EOF
 chmod +x "$DP/call"
 : > "$DP_CALLS"
+failed_before=$FAIL
 fakemodem -l "$DP/modem" -n "*69,5551234,0,5550000" -c 2 > "$DP/fakemodem.log" 2>&1 &
 fm=$!
 sleep 1
@@ -864,6 +866,11 @@ kill "$dpd"
 wait "$dpd"
 check "dreampi: stopped cleanly, state file gone" [ ! -e "$DP/run/state" ]
 kill "$fm"
+# What the modem and the daemon said, when something above failed
+if [ "$FAIL" != "$failed_before" ]; then
+	sed 's/^/  dreampi: /' "$DP/dreampi.log"
+	tail -n 40 "$DP/fakemodem.log" | sed 's/^/  fakemodem: /'
+fi
 
 echo
 echo "$PASS passed, $FAIL failed"

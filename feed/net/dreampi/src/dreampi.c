@@ -135,8 +135,12 @@ static int modem_open(void)
 
 static void modem_close(void)
 {
-	if (fd >= 0)
+	if (fd >= 0) {
+		/* The exclusive flag can outlive the close (on a pty, say), and
+		   would keep the next open (pppd, ours) out without CAP_SYS_ADMIN */
+		ioctl(fd, TIOCNXCL);
 		close(fd);
+	}
 	fd = -1;
 }
 
