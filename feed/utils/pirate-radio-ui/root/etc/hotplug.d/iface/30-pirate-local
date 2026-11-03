@@ -9,7 +9,9 @@
 ip=$(uci -q get network.lan.ipaddr)
 ip=${ip%% *}
 ip=${ip%%/*}
-name=$(uci -q get system.@system[0].hostname | tr '[:upper:]' '[:lower:]')
+# (BusyBox's tr here has no [:upper:]; hostnames are ASCII)
+# shellcheck disable=SC2018,SC2019
+name=$(uci -q get system.@system[0].hostname | tr A-Z a-z)
 [ -n "$ip" ] && [ -n "$name" ] || exit 0
 name="$name.local"
 
