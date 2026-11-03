@@ -7,8 +7,10 @@
 #   slate-dreampi status
 #   slate-dreampi set <enabled> <service> <dial_tone> <dcnow> <dmz>   ("" = as is)
 #   slate-dreampi log
-#   slate-dreampi dcnow              the name Dreamcast Now lists this router under
+#   slate-dreampi dcnow              the id and name Dreamcast Now lists this router under
 #   slate-dreampi dcnow_name <name>  list it under <name>
+#   slate-dreampi dcnow_id <id>      report as a DreamPi: its MAC address or its
+#                                    id ("" = as this router)
 
 . /usr/share/libubox/jshn.sh
 
@@ -91,21 +93,43 @@ cmd_status() {
 	name=$(opt dcnow_name "")
 	[ -n "$name" ] || name="Unnamed_$(echo "$id" | cut -c1-6)"
 	json_add_string dcnow_name "$name"
+	json_add_string dcnow_id "$id"
+	json_add_boolean dcnow_as_dreampi "$([ -n "$(opt dcnow_id "")" ] && echo 1 || echo 0)"
 	json_dump
 }
 
 cmd_dcnow() {
 	local name
+	json_init
+	json_add_string id "$("$DCNOW" id 2> /dev/null)"
 	if name=$("$DCNOW" name 2> /tmp/slate-dreampi.err); then
-		json_init
 		json_add_string name "$name"
-		json_dump
 	else
-		json_init
 		json_add_string error "$(cat /tmp/slate-dreampi.err)"
-		json_dump
 	fi
 	rm -f /tmp/slate-dreampi.err
+	json_dump
+}
+
+cmd_dcnow_id() {
+	local v
+	v=$(echo "$1" | tr -d ' ' | tr A-F a-f)
+	if [ -z "$v" ]; then
+		uci -q delete dreampi.main.dcnow_id
+	elif echo "$v" | grep -qE '^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$'; then
+		uci set "dreampi.main.dcnow_id=$(echo "$v" | tr - : | tr a-f A-F)"
+	elif echo "$v" | grep -qE '^[0-9a-f]{64}$'; then
+		uci set "dreampi.main.dcnow_id=$v"
+	else
+		json_init
+		json_add_string error "enter a MAC address (B8:27:EB:12:34:56) or a 64-digit id, or nothing"
+		json_dump
+		return
+	fi
+	# The name set here was for the old id
+	uci -q delete dreampi.main.dcnow_name
+	uci commit dreampi
+	cmd_dcnow
 }
 
 cmd_dcnow_name() {
@@ -165,8 +189,9 @@ set) shift; cmd_set "$@" ;;
 log) cmd_log ;;
 dcnow) cmd_dcnow ;;
 dcnow_name) cmd_dcnow_name "$2" ;;
+dcnow_id) cmd_dcnow_id "$2" ;;
 *)
-	echo "usage: slate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> <dmz> | log | dcnow | dcnow_name <name>" >&2
+	echo "usage: slate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> <dmz> | log | dcnow | dcnow_name <name> | dcnow_id <id>" >&2
 	exit 1
 	;;
 esac

@@ -3,7 +3,9 @@
 # while one is plugged in (the tty hotplug hook reloads this on every plug and
 # unplug). Runs the modem daemon (dreampi) and, for PPP calls, a DNS server
 # for the Dreamcast on the PPP link (dnsmasq, with DreamPi's DNS servers) and
-# DreamPi's packet fixes (/usr/libexec/dreampi/nat).
+# DreamPi's packet fixes (/usr/libexec/dreampi/nat). While on, modem or not,
+# DreamPi's Dreamcast Now helper (dcnow-config) answers
+# dreamcast.online/now/configure/ at dreampi.local:1998.
 
 START=95
 STOP=10
@@ -11,6 +13,29 @@ USE_PROCD=1
 
 RUN=${DREAMPI_RUN:-/var/run/dreampi}
 FIREWALL=${DREAMPI_FIREWALL:-/etc/init.d/firewall}
+DNSMASQ=${DREAMPI_DNSMASQ_INIT:-/etc/init.d/dnsmasq}
+
+# dreampi.local, where the configure page looks first, is this router on its
+# own network; dnsmasq reloads only when that changes
+local_name_sync() {
+	local want="$1" ip
+	ip=$(uci -q get network.lan.ipaddr)
+	ip=${ip%% *}
+	ip=${ip%%/*}
+	if [ "$want" = 1 ] && [ -n "$ip" ]; then
+		[ "$(uci -q get dhcp.dreampi_local.ip)" = "$ip" ] && return
+		uci -q batch <<-EOF
+			set dhcp.dreampi_local=domain
+			set dhcp.dreampi_local.name='dreampi.local'
+			set dhcp.dreampi_local.ip='$ip'
+		EOF
+	else
+		uci -q get dhcp.dreampi_local > /dev/null || return
+		uci -q delete dhcp.dreampi_local
+	fi
+	uci -q commit dhcp
+	"$DNSMASQ" reload > /dev/null 2>&1
+}
 
 # DMZ: a firewall redirect of everything that comes in from the internet
 # unasked to the Dreamcast; the firewall reloads only when it changes
@@ -87,9 +112,19 @@ start_service() {
 
 	[ "$enabled" = 1 ] || dmz=0
 	dmz_sync "$dmz" "$dc_ip"
+	local_name_sync "$enabled"
+	if [ "$enabled" != 1 ]; then
+		/usr/libexec/dreampi/nat clear
+		return 0
+	fi
+
+	procd_open_instance config
+	procd_set_param command /usr/sbin/dcnow-config
+	procd_set_param respawn
+	procd_close_instance
 
 	[ -n "$device" ] || device=$(dreampi_modems | head -n 1 | cut -d' ' -f1)
-	if [ "$enabled" != 1 ] || [ -z "$device" ] || [ ! -e "$device" ]; then
+	if [ -z "$device" ] || [ ! -e "$device" ]; then
 		/usr/libexec/dreampi/nat clear
 		return 0
 	fi

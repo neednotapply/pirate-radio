@@ -4,7 +4,8 @@
 # Pi: through DreamPi's servers over a PPP link here, or through Flycast's
 # DCNet.
 #
-# src/dreampi.c is MIT (a port of DreamPi's modem code, MIT); src/dcnet.c is
+# src/dreampi.c (a port of DreamPi's modem code) and src/dcnow-config.c (of
+# its Dreamcast Now config server) are MIT, as DreamPi is; src/dcnet.c is
 # GPL-2.0-or-later (from Flycast).
 #
 
@@ -53,12 +54,15 @@ define Build/Compile
 		-o $(PKG_BUILD_DIR)/dreampi $(PKG_BUILD_DIR)/dreampi.c -lm
 	$(TARGET_CC) $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -Wall $(TARGET_LDFLAGS) \
 		-o $(PKG_BUILD_DIR)/dcnet $(PKG_BUILD_DIR)/dcnet.c
+	$(TARGET_CC) $(TARGET_CPPFLAGS) $(TARGET_CFLAGS) -Wall $(TARGET_LDFLAGS) \
+		-o $(PKG_BUILD_DIR)/dcnow-config $(PKG_BUILD_DIR)/dcnow-config.c
 endef
 
 define Package/dreampi/install
 	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/libexec/dreampi $(1)/usr/share/dreampi
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dreampi $(1)/usr/sbin/dreampi
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dcnet $(1)/usr/sbin/dcnet
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/dcnow-config $(1)/usr/sbin/dcnow-config
 	$(INSTALL_BIN) ./files/call.sh $(1)/usr/libexec/dreampi/call
 	$(INSTALL_BIN) ./files/dcnow.sh $(1)/usr/libexec/dreampi/dcnow
 	$(INSTALL_BIN) ./files/nat.sh $(1)/usr/libexec/dreampi/nat

@@ -703,7 +703,7 @@ for p in 1-4:ttyACM1 1-5:ttyACM2; do
 	mkdir -p "$T/sys/bus/usb/devices/${p%:*}/${p%:*}:1.0" "$T/sys/class/tty/${p#*:}"
 	ln -s "$T/sys/bus/usb/devices/${p%:*}/${p%:*}:1.0" "$T/sys/class/tty/${p#*:}/device"
 done
-for m in nft pppd dcnet uclient-fetch init firewall; do
+for m in nft pppd dcnet uclient-fetch init firewall dnsmasq-init; do
 	cat > "$DP/bin/$m" <<-'EOF'
 		#!/bin/sh
 		# A mock: records how it was called (nft: its rules, from stdin)
@@ -716,7 +716,7 @@ for m in nft pppd dcnet uclient-fetch init firewall; do
 	EOF
 	chmod +x "$DP/bin/$m"
 done
-dpenv() { env PATH="$DP/bin:$PATH" DREAMPI_INIT="$DP/bin/init" DREAMPI_FIREWALL="$DP/bin/firewall" "$@"; }
+dpenv() { env PATH="$DP/bin:$PATH" DREAMPI_INIT="$DP/bin/init" DREAMPI_FIREWALL="$DP/bin/firewall" DREAMPI_DNSMASQ_INIT="$DP/bin/dnsmasq-init" "$@"; }
 DPMODEM="/dev/ttyACM1 0572:1340 Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)"
 check "dreampi: daemon and DCNet client run" sh -c 'dreampi -h 2>&1 | grep -q "usage: dreampi" && dcnet -x 2>&1 | grep -q Usage'
 check "dreampi: finds the modem, not the GPS or the PortaPack" [ "$(. /usr/share/dreampi/lib.sh; dreampi_modems)" = "$DPMODEM" ]
@@ -777,8 +777,9 @@ check "dcnow: appspot lookups are not reported" sh -c "! grep -q '$(sha dcnow-20
 check "dcnow: a shared name once" [ "$(grep -c "$(sha gameloft.example.net)" "$DP_CALLS")" = 1 ]
 
 # The name on the list: the site's configure form, over plain HTTP (nc
-# mocked as dreamcast.online: the form for a GET, the form as saved for a
-# POST, a 403 when told to refuse)
+# mocked as dreamcast.online: the form for a GET; for a POST, the form with
+# the name sent, kept unless site-ignore says not (the real site's answer for
+# a name another Dreamcast has), or a 403 when told to refuse)
 cat > "$DP/bin/nc" <<-'EOF'
 	#!/bin/sh
 	req=$(cat)
@@ -788,6 +789,7 @@ cat > "$DP/bin/nc" <<-'EOF'
 	POST*)
 		[ -e "$DP/site-refuse" ] && { printf 'HTTP/1.0 403 Forbidden\r\n\r\n'; exit 0; }
 		name=$(cat "$DP/site-name-next")
+		[ -e "$DP/site-ignore" ] || echo "$name" > "$DP/site-name"
 		;;
 	esac
 	printf 'HTTP/1.0 200 OK\r\nContent-Type: text/html\r\nset-cookie: csrftoken=COOKIE123; expires=x; Path=/\r\n\r\n'
@@ -803,11 +805,41 @@ check "dcnow: reads the name it's listed under" [ "$(dpenv /usr/libexec/dreampi/
 : > "$DP_CALLS.nc"
 check "dcnow: sets a new name" [ "$(dpenv /usr/libexec/dreampi/dcnow name 'Pirate Radio & Co')" = "Pirate Radio & Co" ]
 check "dcnow: with the form's cookie and token, the name encoded" sh -c "grep -q '^Cookie: csrftoken=COOKIE123' '$DP_CALLS.nc' && grep -q '^csrfmiddlewaretoken=TOKEN456&username=%50%69%72%61%74%65%20%52%61%64%69%6F%20%26%20%43%6F&email_hash=$' '$DP_CALLS.nc'"
-echo "Someone Else" > "$DP/site-name-next"
-check "dcnow: a name the site didn't keep is an error" dcn_fails "Pirate Radio & Co"
+echo "Taken Name" > "$DP/site-name-next"
+: > "$DP/site-ignore"
+check "dcnow: a name the site shows back but doesn't keep is an error" dcn_fails "Taken Name"
+rm -f "$DP/site-ignore"
 : > "$DP/site-refuse"
 check "dcnow: a refused name is an error" dcn_fails "Pirate Radio"
 rm -f "$DP/site-refuse"
+echo Unnamed_2bec1b > "$DP/site-name"
+
+# Reporting as a DreamPi: its MAC address, hashed as DreamPi does, or its id
+uci set dreampi.main.dcnow_id=B8:27:EB:12:34:56
+check "dcnow: as a DreamPi, by its MAC address" [ "$(dpenv /usr/libexec/dreampi/dcnow id)" = "$(sha B8:27:EB:12:34:56)" ]
+uci set dreampi.main.dcnow_id="$(sha x)"
+check "dcnow: as a DreamPi, by its id" [ "$(dpenv /usr/libexec/dreampi/dcnow id)" = "$(sha x)" ]
+uci delete dreampi.main.dcnow_id
+
+# DreamPi's configuration helper on port 1998, for the site's configure page
+uci set dreampi.main.dcnow=1
+uci commit dreampi
+check "dcnow: config reports the id and the setting" [ "$(dpenv /usr/libexec/dreampi/dcnow config)" = "{\"mac_address\": \"$(sha 94:83:C4:90:C2:D4)\", \"is_enabled\": true}" ]
+dcnow-config -p 18998 > "$DP/helper.log" 2>&1 &
+dch=$!
+sleep 1
+hreq() { printf '%s' "$1" | /bin/busybox nc 127.0.0.1 18998 | tr -d '\r'; }
+hreq "$(printf 'GET / HTTP/1.0\r\nHost: dreampi.local:1998\r\nOrigin: http://dreamcast.online\r\n\r\n')" > "$DP/helper.out"
+check "helper: a GET gets the id, open to the site" sh -c "grep -qx 'Access-Control-Allow-Origin: \\*' '$DP/helper.out' && grep -q '\"mac_address\": \"$(sha 94:83:C4:90:C2:D4)\"' '$DP/helper.out'"
+hreq "$(printf 'OPTIONS / HTTP/1.0\r\nOrigin: http://dreamcast.online\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Private-Network: true\r\n\r\n')" > "$DP/helper.out"
+check "helper: the private-network preflight is allowed" sh -c "head -n 1 '$DP/helper.out' | grep -q ' 204 ' && grep -qx 'Access-Control-Allow-Private-Network: true' '$DP/helper.out'"
+hreq "$(printf 'POST /toggle/ HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 32\r\n\r\ndisable=Disable+Dreamcast+Now%%21')" > "$DP/helper.out"
+check "helper: the site's Disable button turns reporting off" sh -c "grep -q '\"is_enabled\": false' '$DP/helper.out' && [ \"\$(uci get dreampi.main.dcnow)\" = 0 ]"
+hreq "$(printf 'POST /toggle/ HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 30\r\n\r\nenable=Enable+Dreamcast+Now%%21')" > "$DP/helper.out"
+check "helper: and Enable on" sh -c "grep -q '\"is_enabled\": true' '$DP/helper.out' && [ \"\$(uci get dreampi.main.dcnow)\" = 1 ]"
+kill "$dch"
+uci set dreampi.main.dcnow=0
+uci commit dreampi
 
 # The init script (procd calls stubbed)
 cat > "$DP/init-harness.sh" <<-'EOF'
@@ -843,7 +875,21 @@ uci set dreampi.main.service=ppp
 uci commit dreampi
 rm -f /dev/ttyACM1
 dpinit
-check "init: nothing runs without the modem" sh -c "! grep -q instance '$DP/init.out'"
+check "init: without the modem, only the Dreamcast Now helper" sh -c "[ \"\$(grep '^instance' '$DP/init.out')\" = 'instance config: /usr/sbin/dcnow-config' ]"
+
+# dreampi.local, where the site's configure page looks, is this router
+[ -f /etc/config/network ] || : > /etc/config/network
+uci set network.lan=interface
+uci set network.lan.ipaddr=10.69.4.20/24
+uci commit network
+uci -q delete dhcp.dreampi_local
+uci commit dhcp
+: > "$DP_CALLS"
+dpinit
+check "init: dreampi.local is this router" sh -c "[ \"\$(uci get dhcp.dreampi_local.name) \$(uci get dhcp.dreampi_local.ip)\" = 'dreampi.local 10.69.4.20' ] && grep -qx 'dnsmasq-init reload' '$DP_CALLS'"
+: > "$DP_CALLS"
+dpinit
+check "init: dnsmasq left alone when that's unchanged" sh -c "! grep -q dnsmasq-init '$DP_CALLS'"
 
 # DMZ: a firewall redirect of everything from the internet to the Dreamcast,
 # the firewall reloaded only when that changes
@@ -899,8 +945,14 @@ check "ui: a name over 40 characters is refused" sh -c 'slate-dreampi dcnow_name
 echo "Pirate Radio" > "$DP/site-name-next"
 check "ui: sets the name on the site, and keeps it" sh -c "[ \"\$(env PATH='$DP/bin:$PATH' slate-dreampi dcnow_name 'Pirate Radio' | jsonfilter -e '@.name')\" = 'Pirate Radio' ] && [ \"\$(uci get dreampi.main.dcnow_name)\" = 'Pirate Radio' ]"
 check "ui: status shows the name set" [ "$(dpenv slate-dreampi status | jsonfilter -e '@.dcnow_name')" = "Pirate Radio" ]
-check "ui: the site's own name for this router" [ "$(dpenv slate-dreampi dcnow | jsonfilter -e '@.name')" = Unnamed_2bec1b ]
-uci delete dreampi.main.dcnow_name
+echo Someone > "$DP/site-name"
+check "ui: the site's own name for this router" [ "$(dpenv slate-dreampi dcnow | jsonfilter -e '@.name')" = Someone ]
+check "ui: a DreamPi identity that isn't a MAC address or id is refused" sh -c 'slate-dreampi dcnow_id nonsense | jsonfilter -e "@.error" | grep -q "MAC address"'
+dpenv slate-dreampi dcnow_id b8-27-eb-12-34-56 > "$DP/dcnow.json"
+check "ui: report as a DreamPi, by its MAC address" sh -c "[ \"\$(uci get dreampi.main.dcnow_id)\" = B8:27:EB:12:34:56 ] && [ \"\$(jsonfilter -i '$DP/dcnow.json' -e '@.id')\" = '$(sha B8:27:EB:12:34:56)' ] && ! uci -q get dreampi.main.dcnow_name"
+dpenv slate-dreampi dcnow_id "" > /dev/null
+check "ui: and back to this router's own id" sh -c "! uci -q get dreampi.main.dcnow_id && [ \"\$(env PATH='$DP/bin:$PATH' slate-dreampi status | jsonfilter -e '@.dcnow_id')\" = '$(sha 94:83:C4:90:C2:D4)' ]"
+uci -q delete dreampi.main.dcnow_name
 uci commit dreampi
 
 # The modem daemon against the fake modem: *69 then a number goes to DCNet,

@@ -7,6 +7,7 @@
 #   ubus call luci.slate-dreampi set '{"enabled":true,"service":"ppp","dial_tone":true,"dcnow":true,"dmz":false}'
 #   ubus call luci.slate-dreampi dcnow
 #   ubus call luci.slate-dreampi dcnow_name '{"name":"Pirate Radio"}'
+#   ubus call luci.slate-dreampi dcnow_id '{"id":"B8:27:EB:12:34:56"}'
 
 . /usr/share/libubox/jshn.sh
 
@@ -18,6 +19,14 @@ run_dcnow_name() {
 	json_load "$input"
 	json_get_var name name
 	"$TOOL" dcnow_name "$name"
+}
+
+run_dcnow_id() {
+	local input id
+	read -r input
+	json_load "$input"
+	json_get_var id id
+	"$TOOL" dcnow_id "$id"
 }
 
 run_set() {
@@ -34,7 +43,7 @@ run_set() {
 
 case "$1" in
 list)
-	echo '{ "status": {}, "log": {}, "set": { "enabled": true, "service": "str", "dial_tone": true, "dcnow": true, "dmz": true }, "dcnow": {}, "dcnow_name": { "name": "str" } }'
+	echo '{ "status": {}, "log": {}, "set": { "enabled": true, "service": "str", "dial_tone": true, "dcnow": true, "dmz": true }, "dcnow": {}, "dcnow_name": { "name": "str" }, "dcnow_id": { "id": "str" } }'
 	;;
 call)
 	case "$2" in
@@ -43,6 +52,7 @@ call)
 	set)        run_set ;;
 	dcnow)      "$TOOL" dcnow ;;
 	dcnow_name) run_dcnow_name ;;
+	dcnow_id)   run_dcnow_id ;;
 	esac
 	;;
 esac

@@ -228,11 +228,13 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
   - **Dreamcast Now** (on by default, as on a DreamPi): during PPP calls,
     [dreamcast.online/now](https://dreamcast.online/now) is told what is being
     played: a hash of the router's MAC address and of the game server names
-    looked up, from which the site works out the game. The tab sets the name
-    you are listed under (the site shows `Unnamed_` and an id until then),
-    through the site's own configure form; DreamPi's port-1998 helper for
-    that form is not ported, so the site's configure page won't find the
-    Slate.
+    looked up, from which the site works out the game. Name the listing on
+    the tab, or on [the site's configure page](http://dreamcast.online/now/configure/)
+    as with a DreamPi: the Slate runs DreamPi's helper for it on port 1998
+    and answers to `dreampi.local` on its network (browsers may ask before
+    letting the page reach it). The site shows `Unnamed_` and an id until a
+    name is set, and a name belongs to one Dreamcast: to carry on as the
+    DreamPi you had, under its name, give the tab its MAC address or id.
 
   - **DMZ** (off by default; a tick on the tab): everything that comes in
     from the internet unasked goes to the Dreamcast, as DreamPi's guides
@@ -292,9 +294,9 @@ Tested in this repository's tests and builds:
   hooks, gpsd started and stopped with the GPS, the map server living and
   dying with the ADS-B job), and DreamPi (the modem daemon against
   `tests/fakemodem`, a modem with a Dreamcast dialling on a pseudo-terminal;
-  the call script, NAT rules, Dreamcast Now and its name form, init script,
-  hotplug hook, DMZ and the UI's backend), against mock radios and tools on
-  that same userland: 285 checks.
+  the call script, NAT rules, Dreamcast Now with its name form and the
+  port-1998 configure helper, init script, hotplug hook, DMZ and the UI's
+  backend), against mock radios and tools on that same userland: 297 checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -318,9 +320,12 @@ Not yet run:
 - DreamPi has had one real call: a Dreamcast through a Conexant RD02-D400
   (`0572:1324`) on the device, answered at 33600 bps, online over PPP for 18
   minutes (browsing, DNS through DreamPi's servers, listed on Dreamcast Now as
-  playing the web browser), then hung up and back to listening. Not yet run
-  with real hardware: DCNet, online games, and naming on Dreamcast Now
-  (only a rename to the current name has been tried on the site). Against
+  playing the web browser, later Quake III Arena), then hung up and back to
+  listening. Not yet run with real hardware: DCNet, and naming on Dreamcast
+  Now (the site refused a name another Dreamcast had, and the Slate reports
+  that; a DreamPi identity hasn't been used yet). The port-1998 helper
+  answered from a computer on the network; the site's configure page itself
+  hasn't been tried in a browser that lets it reach the Slate. Against
   `tests/fakemodem` on the device: `*69` to DCNet (with a stand-in DCNet
   client) and the service stopped mid-call.
 - The web UI's first-run screen on a freshly flashed device (settings not
@@ -351,6 +356,7 @@ feed.
 The scripts in `feed/utils/slate-sdr/files/` and `tests/`, and the build
 scripts, are MIT. The OpenWrt package Makefiles follow OpenWrt's
 GPL-2.0. Each packaged program keeps its own licence (in its Makefile's
-`PKG_LICENSE`). In `feed/net/dreampi/`, `src/dreampi.c` and the scripts are
-MIT (`dreampi.c` is a port of DreamPi's modem code, MIT, © Luke Benstead);
-`src/dcnet.c` is Flycast's DCNet client, GPL-2.0-or-later.
+`PKG_LICENSE`). In `feed/net/dreampi/`, `src/dreampi.c`, `src/dcnow-config.c`
+and the scripts are MIT (ports of DreamPi's modem code and Dreamcast Now
+config server, MIT, © Luke Benstead); `src/dcnet.c` is Flycast's DCNet
+client, GPL-2.0-or-later.

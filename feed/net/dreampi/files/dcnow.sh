@@ -2,6 +2,8 @@
 # Dreamcast Now (dreamcast.online/now), as DreamPi does it. This router is
 # listed there under an id, a hash of its MAC address, and a name set on the
 # site's configure form (until then "Unnamed_" and the id's first 6 digits).
+# With dcnow_id set (a DreamPi's MAC address, or its id), it reports as that
+# DreamPi instead, under the DreamPi's name.
 #
 #   dcnow report      during a PPP call, every 15 s: a POST with a hash of the
 #                     game server name the Dreamcast last looked up, which the
@@ -11,6 +13,9 @@
 #   dcnow id          the id
 #   dcnow name        the name this router is listed under
 #   dcnow name <new>  list it under <new> instead
+#   dcnow config [on|off]  for dcnow-config, DreamPi's configuration helper:
+#                     {"mac_address": <id>, "is_enabled": ...}, after turning
+#                     reporting on or off
 
 API=${DREAMPI_DCNOW_API:-https://dcnow-2016.appspot.com/api/update}
 SITE=${DREAMPI_DCNOW_SITE:-dreamcast.online}
@@ -23,10 +28,28 @@ sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 
 id() {
 	local mac
-	mac=$(cat "$SYSFS/class/net/br-lan/address" 2> /dev/null ||
-		cat "$SYSFS/class/net/eth0/address" 2> /dev/null)
+	mac=$(uci -q get dreampi.main.dcnow_id)
+	case "$mac" in
+	*:*) ;;
+	?*) echo "$mac"; return ;;
+	*)
+		mac=$(cat "$SYSFS/class/net/br-lan/address" 2> /dev/null ||
+			cat "$SYSFS/class/net/eth0/address" 2> /dev/null)
+		;;
+	esac
 	[ -n "$mac" ] || return 1
 	sha "$(echo "$mac" | tr a-f A-F)"
+}
+
+config() {
+	case "$1" in
+	on | off)
+		uci set "dreampi.main.dcnow=$([ "$1" = on ] && echo 1 || echo 0)"
+		uci commit dreampi
+		;;
+	esac
+	printf '{"mac_address": "%s", "is_enabled": %s}\n' "$(id)" \
+		"$([ "$(uci -q get dreampi.main.dcnow)" = 0 ] && echo false || echo true)"
 }
 
 report() {
@@ -92,10 +115,13 @@ name() {
 	body="csrfmiddlewaretoken=$token&username=$(urlenc "$new")&email_hash="
 	printf 'POST /now/configure/%s/ HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\nCookie: csrftoken=%s\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
 		"$id" "$SITE" "$UA" "$cookie" "${#body}" "$body" | http "$tmp" || { rm -f "$tmp"; echo "$SITE refused the name" >&2; return 1; }
-	# The reply is the form again, with the name as saved
+	# The reply shows the name sent even when the site doesn't keep it (a name
+	# another Dreamcast has): ask again
+	printf 'GET /now/configure/%s/ HTTP/1.0\r\nHost: %s\r\nUser-Agent: %s\r\nConnection: close\r\n\r\n' \
+		"$id" "$SITE" "$UA" | http "$tmp" || { rm -f "$tmp"; echo "$err" >&2; return 1; }
 	if [ "$(form_name "$tmp")" != "$new" ]; then
 		rm -f "$tmp"
-		echo "$SITE didn't take the name" >&2
+		echo "$SITE didn't keep the name: another Dreamcast (a DreamPi of yours?) is listed under it" >&2
 		return 1
 	fi
 	rm -f "$tmp"
@@ -106,8 +132,9 @@ case "$1" in
 report) report ;;
 id) id ;;
 name) name "$2" ;;
+config) config "$2" ;;
 *)
-	echo "usage: dcnow report | id | name [new name]" >&2
+	echo "usage: dcnow report | id | name [new name] | config [on|off]" >&2
 	exit 1
 	;;
 esac

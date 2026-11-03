@@ -8,7 +8,7 @@
 		},
 		"write": {
 			"ubus": {
-				"luci.slate-dreampi": [ "set", "dcnow_name" ]
+				"luci.slate-dreampi": [ "set", "dcnow_name", "dcnow_id" ]
 			}
 		}
 	}

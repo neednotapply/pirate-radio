@@ -114,13 +114,13 @@
 	};
 	var DEMO_FW = { staged: false, size: 0, verified: false };
 	var DEMO_DP = { enabled: true, service: "ppp", dial_tone: true, dcnow: true, dmz: false };
-	var DEMO_DCNOW = { name: "Unnamed_2bec1b" };
+	var DEMO_DCNOW = { name: "Unnamed_2bec1b", id: "2bec1b43c9a2c523e3bcbeac146109088a0643419e1b39837057632447d93082", as_pi: false };
 	function demoDreampi() {
 		var s = { installed: true, local_ip: "192.168.169.1", dreamcast_ip: "192.168.169.2", wan_ip: "192.168.1.185",
 			modems: [{ device: "/dev/ttyACM0", id: "0572:1340", name: "Conexant USB modem (Dell NW147, Lenovo RD02-D400, TRENDnet TFM-561U)" }],
 			state: DEMO_DP.enabled ? "connected" : "off", call_service: "ppp", number: "5551234",
 			since: Math.round(Date.now() / 1000) - 754, link: DEMO_DP.enabled, rx_bytes: 482113, tx_bytes: 2310442,
-			lookup: "dc.dreamcastlive.net", dcnow_name: DEMO_DCNOW.name };
+			lookup: "dc.dreamcastlive.net", dcnow_name: DEMO_DCNOW.name, dcnow_id: DEMO_DCNOW.id, dcnow_as_dreampi: DEMO_DCNOW.as_pi };
 		for (var k in DEMO_DP) s[k] = DEMO_DP[k];
 		return s;
 	}
@@ -343,7 +343,15 @@
 			["enabled", "service", "dial_tone", "dcnow", "dmz"].forEach(function (k) { if (p[k] != null) DEMO_DP[k] = p[k]; });
 			return demoDreampi();
 		},
-		"luci.slate-dreampi:dcnow": function () { return { name: DEMO_DCNOW.name }; },
+		"luci.slate-dreampi:dcnow": function () { return { id: DEMO_DCNOW.id, name: DEMO_DCNOW.name }; },
+		"luci.slate-dreampi:dcnow_id": function (p) {
+			if (p.id && !/^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$|^[0-9a-f]{64}$/i.test(p.id))
+				return { error: "enter a MAC address (B8:27:EB:12:34:56) or a 64-digit id, or nothing" };
+			DEMO_DCNOW.as_pi = !!p.id;
+			DEMO_DCNOW.id = p.id ? "45759ed22bbc324f6af24e849c045704a1b2c3d4e5f60718293a4b5c6d7e8f90" : "2bec1b43c9a2c523e3bcbeac146109088a0643419e1b39837057632447d93082";
+			DEMO_DCNOW.name = p.id ? "NeedNotApply" : "Unnamed_2bec1b";
+			return { id: DEMO_DCNOW.id, name: DEMO_DCNOW.name };
+		},
 		"luci.slate-dreampi:dcnow_name": function (p) {
 			if (!p.name || /^\s|\s$/.test(p.name)) return { error: "enter a name without leading or trailing spaces" };
 			DEMO_DCNOW.name = p.name;
@@ -1568,13 +1576,29 @@
 		var nowLine = el("div", { class: "status", text: "Loading…" });
 		var nameIn = el("input", { class: "inp", type: "text", maxlength: "40", placeholder: "your name on the list" });
 		var nameStatus = el("span", { class: "status" });
+		var asIn = el("input", { class: "inp", type: "text", placeholder: "B8:27:EB:12:34:56, or the 64-digit id" });
+		var asStatus = el("span", { class: "status" });
+		var host = location.hostname || "the Slate";
 		nowPanel.appendChild(nowLine);
 		nowPanel.appendChild(el("div", { class: "form" },
 			el("label", {}, el("span", { class: "lbl", text: "Name" }), nameIn)));
 		nowPanel.appendChild(el("div", { class: "toolbar" }, btn("Set name", { primary: true, onclick: setName }), nameStatus));
 		nowPanel.appendChild(el("p", { class: "descr", text:
 			"During PPP calls the Slate reports to Dreamcast Now as a DreamPi does, and the site works out the game from the " +
-			"servers the Dreamcast looks up. The name is public there; until one is set, the site shows \"Unnamed_\" and an id." }));
+			"servers the Dreamcast looks up. The name is public there, and one name belongs to one Dreamcast; until one is set, " +
+			"the site shows \"Unnamed_\" and an id." }));
+		nowPanel.appendChild(el("h4", { class: "sub-h2", text: "Report as your DreamPi" }));
+		nowPanel.appendChild(el("div", { class: "form" },
+			el("label", {}, el("span", { class: "lbl", text: "DreamPi's MAC address or id" }), asIn)));
+		nowPanel.appendChild(el("div", { class: "toolbar" }, btn("Use", { onclick: setAs }),
+			btn("Back to this router's own", { cls: "reset", onclick: function () { asIn.value = ""; setAs(); } }), asStatus));
+		nowPanel.appendChild(el("p", { class: "descr", text:
+			"To carry on as the DreamPi you had (its name, picture and history), give its MAC address, or the id " +
+			"dreamcast.online/now/configure/ shows for it while it's on your network." }));
+		nowPanel.appendChild(el("p", { class: "descr", text:
+			"The site's own configure page works with the Slate too, as with a DreamPi: open " +
+			"dreamcast.online/now/configure/ on a computer on the Slate's network. It looks for dreampi.local; if your browser " +
+			"doesn't find it, enter " + host + ". Browsers may ask before letting a website reach a device on your network." }));
 
 		var howPanel = panel("Connecting the Dreamcast");
 		howPanel.style.marginTop = "14px";
@@ -1620,7 +1644,7 @@
 				["Last lookup", s.link ? s.lookup : null],
 				["Calls go to", DP_SERVICES[s.service] || s.service]
 			]));
-			showListing(s.dcnow_name, s.dcnow);
+			showListing(s.dcnow_name, s.dcnow, s.dcnow_id, s.dcnow_as_dreampi);
 			// The form follows the saved settings until it is shown
 			if (setWrap.hidden) {
 				svcSel.value = s.service;
@@ -1638,15 +1662,32 @@
 		}
 		// The name as the site has it, once fetched; until then the last one set here
 		var siteName = null;
-		function showListing(name, on) {
+		var listedId = "";
+		function showListing(name, on, id, asPi) {
 			if (siteName) name = siteName;
+			if (id) listedId = id;
 			clear(nowLine);
 			if (!name) { nowLine.textContent = "Loading…"; return; }
 			nowLine.appendChild(document.createTextNode((on === false ? "Reporting is off. " : "") + "Listed as "));
 			nowLine.appendChild(el("strong", { text: name }));
 			nowLine.appendChild(document.createTextNode(" on "));
 			nowLine.appendChild(el("a", { href: "https://dreamcast.online/now/", target: "_blank", rel: "noopener", text: "dreamcast.online/now" }));
+			if (listedId) nowLine.appendChild(document.createTextNode(" (id " + listedId.slice(0, 6) + "…" +
+				(asPi ? ", as your DreamPi" : "") + ")"));
 			if (!nameIn.value) nameIn.value = /^Unnamed_/.test(name) ? "" : name;
+		}
+		function setAs() {
+			asStatus.className = "status"; asStatus.textContent = "switching…";
+			call("luci.slate-dreampi", "dcnow_id", { id: asIn.value.trim() }).then(function (r) {
+				if (r.error && !r.id) { asStatus.className = "status err"; asStatus.textContent = r.error; return; }
+				siteName = r.name || null; listedId = r.id || ""; nameIn.value = "";
+				asStatus.className = "status ok-text";
+				asStatus.textContent = r.name ? "now listed as " + r.name : "switched; " + (r.error || "");
+				status();
+			}).catch(function (e) {
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				asStatus.className = "status err"; asStatus.textContent = String(e.message || e);
+			});
 		}
 		function setName() {
 			nameStatus.className = "status"; nameStatus.textContent = "setting…";
@@ -1693,7 +1734,7 @@
 		refresh();
 		// The site's current name, which may have been set elsewhere
 		call("luci.slate-dreampi", "dcnow").then(function (r) {
-			if (r.name) { siteName = r.name; nameIn.value = ""; showListing(r.name); }
+			if (r.name) { siteName = r.name; nameIn.value = ""; showListing(r.name, null, r.id); }
 		}).catch(function () {});
 	}
 
