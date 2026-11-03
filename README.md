@@ -323,7 +323,8 @@ Not yet run:
   playing the web browser, later Quake III Arena), then hung up and back to
   listening. Not yet run with real hardware: DCNet, and naming on Dreamcast
   Now (the site refused a name another Dreamcast had, and the Slate reports
-  that; a DreamPi identity hasn't been used yet). The port-1998 helper
+  that; the device now reports as a real DreamPi, under its name, but no
+  call has been made that way yet). The port-1998 helper
   answered from a computer on the network; the site's configure page itself
   hasn't been tried in a browser that lets it reach the Slate. Against
   `tests/fakemodem` on the device: `*69` to DCNet (with a stand-in DCNet

@@ -949,7 +949,7 @@ echo Someone > "$DP/site-name"
 check "ui: the site's own name for this router" [ "$(dpenv slate-dreampi dcnow | jsonfilter -e '@.name')" = Someone ]
 check "ui: a DreamPi identity that isn't a MAC address or id is refused" sh -c 'slate-dreampi dcnow_id nonsense | jsonfilter -e "@.error" | grep -q "MAC address"'
 dpenv slate-dreampi dcnow_id b8-27-eb-12-34-56 > "$DP/dcnow.json"
-check "ui: report as a DreamPi, by its MAC address" sh -c "[ \"\$(uci get dreampi.main.dcnow_id)\" = B8:27:EB:12:34:56 ] && [ \"\$(jsonfilter -i '$DP/dcnow.json' -e '@.id')\" = '$(sha B8:27:EB:12:34:56)' ] && ! uci -q get dreampi.main.dcnow_name"
+check "ui: report as a DreamPi, by its MAC address, under its name" sh -c "[ \"\$(uci get dreampi.main.dcnow_id)\" = B8:27:EB:12:34:56 ] && [ \"\$(jsonfilter -i '$DP/dcnow.json' -e '@.id')\" = '$(sha B8:27:EB:12:34:56)' ] && [ \"\$(env PATH='$DP/bin:$PATH' slate-dreampi status | jsonfilter -e '@.dcnow_name')\" = Someone ]"
 dpenv slate-dreampi dcnow_id "" > /dev/null
 check "ui: and back to this router's own id" sh -c "! uci -q get dreampi.main.dcnow_id && [ \"\$(env PATH='$DP/bin:$PATH' slate-dreampi status | jsonfilter -e '@.dcnow_id')\" = '$(sha 94:83:C4:90:C2:D4)' ]"
 uci -q delete dreampi.main.dcnow_name

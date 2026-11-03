@@ -104,6 +104,11 @@ cmd_dcnow() {
 	json_add_string id "$("$DCNOW" id 2> /dev/null)"
 	if name=$("$DCNOW" name 2> /tmp/slate-dreampi.err); then
 		json_add_string name "$name"
+		# What the status shows; saved only when it changed
+		if [ -n "$name" ] && [ "$name" != "$(opt dcnow_name "")" ]; then
+			uci set "dreampi.main.dcnow_name=$name"
+			uci commit dreampi
+		fi
 	else
 		json_add_string error "$(cat /tmp/slate-dreampi.err)"
 	fi
