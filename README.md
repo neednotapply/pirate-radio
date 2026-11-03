@@ -324,6 +324,10 @@ Not yet run:
   started); a PortaPack in Mayhem mode was rightly taken for neither a radio
   nor a GPS. The GPS hook was driven only with a stand-in `/dev/ttyACM0`:
   gpsd started and stopped through procd as expected.
+- The rename: a device on slate-sdr was flashed with the pirate-radio full
+  build, settings kept. Its settings, its SLATESDR card (mount and folder),
+  DreamPi and the UI's backends came back under the new names, and
+  `pirateradio.local` answered over both mDNS and the router's DNS.
 - DreamPi has had one real call: a Dreamcast through a Conexant RD02-D400
   (`0572:1324`) on the device, answered at 33600 bps, online over PPP for 18
   minutes (browsing, DNS through DreamPi's servers, listed on Dreamcast Now as
