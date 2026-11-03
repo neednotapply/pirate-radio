@@ -1,9 +1,9 @@
-# Shared by the dreampi init script, its hotplug hook and the Slate UI (and
-# slate-gps, which leaves modems alone): which plugged-in serial devices are
+# Shared by the dreampi init script, its hotplug hook and the Pirate Radio UI (and
+# pirate-gps, which leaves modems alone): which plugged-in serial devices are
 # USB modems dreampi can answer with.
 
 # Overridable for tests.
-DREAMPI_SYSFS=${SLATE_SYSFS:-/sys}
+DREAMPI_SYSFS=${PIRATE_SYSFS:-/sys}
 DREAMPI_MODEMS=${DREAMPI_MODEMS:-/usr/share/dreampi/modems}
 
 # dreampi_usb_id <tty>: the vid:pid of the USB device a tty (ttyACM0) is on

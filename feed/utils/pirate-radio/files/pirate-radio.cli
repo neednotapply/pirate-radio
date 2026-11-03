@@ -1,0 +1,165 @@
+#!/bin/sh
+# pirate-radio: status and one-off actions for the receivers on this router.
+
+. /lib/functions.sh
+. /usr/share/pirate-radio/lib.sh
+
+usage() {
+	cat <<-EOF
+	Usage: pirate-radio <command>
+
+	  status                    radios, microSD card and jobs
+	  radios                    SDRs on the USB bus
+	  enable <job>              enable a job and restart the service
+	  disable <job>             disable a job and restart the service
+	  record <rtlsdr|hackrf> <freq> <rate> <seconds> [options]
+	                            record raw IQ to the card as SigMF, e.g.
+	                              pirate-radio record hackrf 433.92M 2M 30
+	                            options: --gain dB (rtlsdr), --lna dB --vga dB
+	                            --amp (hackrf); the radio must not be in use
+	  spectral [2g|5g]          one Wi-Fi spectral scan to the card (full build)
+	  log                       recent log lines
+	EOF
+}
+
+die() {
+	echo "pirate-radio: $*" >&2
+	exit 1
+}
+
+job_state() {
+	local running
+	running=$(ubus call service list '{"name":"pirate-radio"}' 2>/dev/null |
+		jsonfilter -e "@['pirate-radio'].instances['$1'].running" 2>/dev/null)
+	case "$running" in
+	true) echo running ;;
+	*) echo stopped ;;
+	esac
+}
+
+show_job() {
+	local cfg="$1" type enabled radio state
+	config_get type "$cfg" type
+	config_get_bool enabled "$cfg" enabled 0
+	radio=$(pirate_job_radio "$cfg" "$type")
+	if [ "$enabled" = 1 ]; then
+		state=$(job_state "$cfg")
+		# Enabled, but its radio is not plugged in: it starts when one is.
+		[ "$state" = stopped ] && ! pirate_need_met "$(pirate_job_needs "$cfg" "$type")" &&
+			state=waiting
+	else
+		state=off
+	fi
+	printf '  %-10s %-14s %-8s %s\n' "$cfg" "$type" "${radio:--}" "$state"
+}
+
+cmd_radios() {
+	local found
+	found=$(pirate_usb_radios)
+	if [ -z "$found" ]; then
+		echo "  (no RTL-SDR or HackRF on USB)"
+	else
+		echo "$found" | while read -r kind id serial product; do
+			printf '  %-7s %s  serial %s  %s\n' "$kind" "$id" "$serial" "$product"
+		done
+	fi
+	pirate_usb_notes | sed 's/^/  note: /'
+}
+
+cmd_status() {
+	local free
+	echo "Radios:"
+	cmd_radios
+	echo
+	echo "microSD card ($STORE_MOUNT):"
+	case "$(pirate_storage_state)" in
+	nocard) echo "  not mounted: insert an exFAT card labelled PIRATERADIO" ;;
+	full) echo "  mounted, below $STORE_MIN_FREE_MB MiB free: jobs are not writing" ;;
+	ok)
+		free=$(pirate_free_mb "$STORE_MOUNT")
+		echo "  mounted, $free MiB free, data in $STORE_ROOT"
+		;;
+	esac
+	echo
+	echo "Jobs:"
+	printf '  %-10s %-14s %-8s %s\n' JOB TYPE RADIO STATE
+	config_foreach show_job job
+	echo
+	echo "Wi-Fi spectral scan: $([ -n "$(pirate_spectral_dirs)" ] && echo available || echo "not in this build")"
+}
+
+set_enabled() {
+	[ -n "$1" ] || die "which job? (see: pirate-radio status)"
+	[ "$(uci -q get "pirate-radio.$1")" = job ] || die "no job '$1'"
+	uci set "pirate-radio.$1.enabled=$2"
+	uci commit pirate-radio
+	/etc/init.d/pirate-radio restart
+}
+
+cmd_record() {
+	local radio="$1" hz sps secs gain lna=16 vga=20 amp=0 base dir
+	[ $# -ge 4 ] || die "usage: pirate-radio record <rtlsdr|hackrf> <freq> <rate> <seconds> [options]"
+	case "$radio" in rtlsdr|hackrf) ;; *) die "radio must be rtlsdr or hackrf" ;; esac
+	hz=$(pirate_to_hz "$2") || die "bad frequency '$2' (e.g. 433.92M)"
+	sps=$(pirate_to_hz "$3") || die "bad sample rate '$3' (e.g. 2M)"
+	secs=$4
+	case "$secs" in ''|*[!0-9]*) die "seconds must be a whole number" ;; esac
+	shift 4
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--gain) gain=$2; shift ;;
+		--lna) lna=$2; shift ;;
+		--vga) vga=$2; shift ;;
+		--amp) amp=1 ;;
+		*) die "unknown option '$1'" ;;
+		esac
+		shift
+	done
+	pirate_radio_present "$radio" || die "no $radio on USB"
+	[ "$(pirate_storage_state)" = ok ] || die "the microSD card is missing or full"
+
+	dir="$STORE_ROOT/recordings/$(date +%Y-%m-%d)"
+	mkdir -p "$dir" || die "cannot create $dir"
+	base="$dir/iq-$radio-${hz}Hz-${sps}sps-$(date +%Y%m%dT%H%M%S)"
+	pirate_sigmf_meta "$base.sigmf-meta" "$radio" "$sps" "$hz" "pirate-radio record"
+	echo "Recording $secs s at $hz Hz, $sps samples/s to $base.sigmf-data"
+	if [ "$radio" = hackrf ]; then
+		hackrf_transfer -r "$base.sigmf-data" -f "$hz" -s "$sps" -l "$lna" -g "$vga" -a "$amp" \
+			-n $((sps * secs))
+	else
+		set -- -f "$hz" -s "$sps" -n $((sps * secs))
+		[ -n "$gain" ] && set -- "$@" -g "$gain"
+		rtl_sdr "$@" "$base.sigmf-data"
+	fi || {
+		rm -f "$base.sigmf-data" "$base.sigmf-meta"
+		die "recording failed (is a job using the $radio? see: pirate-radio status)"
+	}
+	echo "Done: $(du -h "$base.sigmf-data" | cut -f1)"
+}
+
+cmd_spectral() {
+	local dir
+	[ -n "$(pirate_spectral_dirs)" ] || die "this firmware has no Wi-Fi spectral scan (use the full build)"
+	[ "$(pirate_storage_state)" = ok ] || die "the microSD card is missing or full"
+	dir="$STORE_ROOT/wifi-spectral/$(date +%Y-%m-%d)"
+	mkdir -p "$dir" || die "cannot create $dir"
+	pirate_spectral_sweep "$dir" "${1:-2g 5g}"
+	echo "Spectral samples in $dir:"
+	# shellcheck disable=SC2012
+	ls -lt "$dir" | head -n 5
+}
+
+config_load pirate-radio
+pirate_storage_load
+
+case "$1" in
+status|'') cmd_status ;;
+radios) cmd_radios ;;
+enable) set_enabled "$2" 1 ;;
+disable) set_enabled "$2" 0 ;;
+record) shift; cmd_record "$@" ;;
+spectral) shift; cmd_spectral "$@" ;;
+log) logread -e pirate-radio | tail -n 50 ;;
+-h|--help|help) usage ;;
+*) usage; exit 1 ;;
+esac

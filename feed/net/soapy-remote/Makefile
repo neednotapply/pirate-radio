@@ -42,7 +42,7 @@ endef
 
 # No Avahi (clients connect by address), and the router's init system is
 # procd, not systemd. The upstream sysctl raises socket buffers to 100 MB,
-# too much for a 128 MB router; slate-sdr sets its own limits.
+# too much for a 128 MB router; pirate-radio sets its own limits.
 CMAKE_OPTIONS += \
 	-DENABLE_AVAHI=OFF \
 	-DENABLE_SYSTEMD=OFF \

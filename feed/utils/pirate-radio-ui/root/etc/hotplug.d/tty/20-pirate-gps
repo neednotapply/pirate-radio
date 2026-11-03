@@ -1,0 +1,16 @@
+#!/bin/sh
+# Plug and play for a USB GPS (/etc/hotplug.d/tty/20-pirate-gps): when a serial
+# device a GPS shows up as is plugged in or removed, start or stop gpsd to
+# match (pirate-gps; the GPS devices are gpsd's configured ones).
+
+case "$ACTION" in add|remove) ;; *) exit 0 ;; esac
+case "$DEVNAME" in ttyACM*|ttyUSB*) ;; *) exit 0 ;; esac
+
+# Only once pirate-gps has started since boot, and not been stopped since.
+[ -e "${PIRATE_GPS_ACTIVE:-/var/run/pirate-gps.active}" ] || exit 0
+
+gone=
+[ "$ACTION" = remove ] && gone="/dev/$DEVNAME"
+logger -t pirate-gps "$DEVNAME $ACTION: matching gpsd to the GPS devices"
+# PIRATE_GPS: another pirate-gps to run (tests)
+exec "${PIRATE_GPS:-/usr/sbin/pirate-gps}" sync "$gone"

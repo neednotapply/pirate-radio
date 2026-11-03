@@ -1,0 +1,45 @@
+#!/bin/sh
+# rpcd plugin for the Pirate Radio web UI's firmware methods. A thin wrapper over the
+# pirate-firmware tool.
+#
+#   ubus call pirate.firmware status
+#   ubus call pirate.firmware verify
+#   ubus call pirate.firmware fetch '{"url":"https://…","sha256":"…"}'
+#   ubus call pirate.firmware apply '{"mode":"keep"}'   (or "reset")
+
+. /usr/share/libubox/jshn.sh
+
+FW=${PIRATE_FIRMWARE:-/usr/sbin/pirate-firmware}
+
+run_fetch() {
+	local input url sha256
+	read -r input
+	json_load "$input"
+	json_get_var url url
+	json_get_var sha256 sha256
+	"$FW" fetch "$url" "$sha256"
+}
+
+run_apply() {
+	local input mode
+	read -r input
+	json_load "$input"
+	json_get_var mode mode
+	"$FW" apply "$mode"
+}
+
+case "$1" in
+list)
+	echo '{ "status": {}, "verify": {}, "backup": {}, "clear": {}, "fetch": { "url": "str", "sha256": "str" }, "apply": { "mode": "str" } }'
+	;;
+call)
+	case "$2" in
+	status) "$FW" status ;;
+	verify) "$FW" verify ;;
+	backup) "$FW" backup ;;
+	clear)  "$FW" clear ;;
+	fetch)  run_fetch ;;
+	apply)  run_apply ;;
+	esac
+	;;
+esac

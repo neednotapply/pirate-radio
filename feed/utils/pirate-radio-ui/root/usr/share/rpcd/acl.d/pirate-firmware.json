@@ -1,0 +1,15 @@
+{
+	"pirate-firmware": {
+		"description": "Grant access to firmware flashing: verify, back up and apply a sysupgrade image",
+		"read": {
+			"ubus": {
+				"pirate.firmware": [ "status" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.firmware": [ "verify", "backup", "clear", "fetch", "apply" ]
+			}
+		}
+	}
+}

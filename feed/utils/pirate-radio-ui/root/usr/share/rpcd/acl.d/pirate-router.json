@@ -1,0 +1,15 @@
+{
+	"pirate-router": {
+		"description": "Grant access to router basics: system status, clients, adblock toggle",
+		"read": {
+			"ubus": {
+				"pirate.router": [ "status", "clients", "wifi_status", "wifi_scan" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.router": [ "adblock", "set_password", "wifi_join" ]
+			}
+		}
+	}
+}

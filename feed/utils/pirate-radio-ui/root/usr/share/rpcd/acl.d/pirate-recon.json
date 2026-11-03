@@ -1,0 +1,15 @@
+{
+	"pirate-recon": {
+		"description": "Grant access to network recon: the joined network and a host scan",
+		"read": {
+			"ubus": {
+				"pirate.recon": [ "dashboard", "uplink", "hosts", "survey_networks", "survey_gps", "threats_rogue" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.recon": [ "discover", "ports", "scan", "survey_scan", "survey_clear", "threats_deauth" ]
+			}
+		}
+	}
+}

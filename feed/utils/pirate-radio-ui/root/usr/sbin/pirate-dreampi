@@ -1,0 +1,202 @@
+#!/bin/sh
+# pirate-dreampi: DreamPi (the dreampi package) for the Pirate Radio web UI: whether a
+# modem is plugged in, the call in progress, and the settings. Prints one JSON
+# object per subcommand (the reply the pirate.dreampi rpcd plugin
+# returns).
+#
+#   pirate-dreampi status
+#   pirate-dreampi set <enabled> <service> <dial_tone> <dcnow> <dmz>   ("" = as is)
+#   pirate-dreampi log
+#   pirate-dreampi dcnow              the id and name Dreamcast Now lists this router under
+#   pirate-dreampi dcnow_name <name>  list it under <name>
+#   pirate-dreampi dcnow_id <id>      report as a DreamPi: its MAC address or its
+#                                    id ("" = as this router)
+
+. /usr/share/libubox/jshn.sh
+
+LIB=${PIRATE_DREAMPI_LIB:-/usr/share/dreampi/lib.sh}
+RUN=${DREAMPI_RUN:-/var/run/dreampi}
+INIT=${DREAMPI_INIT:-/etc/init.d/dreampi}
+DCNOW=${DREAMPI_LIBEXEC:-/usr/libexec/dreampi}/dcnow
+SYSFS=${PIRATE_SYSFS:-/sys}
+
+opt() { uci -q get "dreampi.main.$1" || echo "$2"; }
+
+# state_var <name>: a value from the state file dreampi keeps while it runs
+state_var() { sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" "$RUN/state" 2> /dev/null; }
+
+cmd_status() {
+	local modems dev id name state link=0 rx=0 tx=0
+
+	json_init
+	if [ ! -r "$LIB" ]; then
+		json_add_boolean installed 0
+		json_dump
+		return
+	fi
+	# shellcheck disable=SC1090
+	. "$LIB"
+	json_add_boolean installed 1
+	json_add_boolean enabled "$(opt enabled 1)"
+	json_add_string service "$(opt service ppp)"
+	json_add_boolean dial_tone "$(opt dial_tone 1)"
+	json_add_boolean dcnow "$(opt dcnow 1)"
+	json_add_boolean dmz "$(opt dmz 0)"
+	json_add_string local_ip "$(opt local_ip 192.168.169.1)"
+	json_add_string dreamcast_ip "$(opt dreamcast_ip 192.168.169.2)"
+	# This router's address upstream: the DMZ host for a router in front of it
+	json_add_string wan_ip "$(ip -4 route get 1.1.1.1 2> /dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+
+	modems=$(dreampi_modems)
+	json_add_array modems
+	while read -r dev id name; do
+		[ -n "$dev" ] || continue
+		json_add_object ""
+		json_add_string device "$dev"
+		json_add_string id "$id"
+		json_add_string name "$name"
+		json_close_object
+	done <<-EOF
+		$modems
+	EOF
+	json_close_array
+
+	# dreampi's own state while it runs; otherwise why it isn't running
+	if [ -f "$RUN/state" ] && pidof dreampi > /dev/null; then
+		state=$(state_var state)
+		json_add_string call_service "$(state_var service)"
+		json_add_string number "$(state_var number)"
+		json_add_int since "$(state_var since)"
+	elif [ "$(opt enabled 1)" != 1 ]; then
+		state=off
+	elif [ -z "$modems" ]; then
+		state=no-modem
+	else
+		state=starting
+	fi
+	json_add_string state "${state:-starting}"
+
+	# The PPP link, while a PPP call is up, and the name the Dreamcast last
+	# looked up (Dreamcast Now tells the game from it)
+	if [ -d "$SYSFS/class/net/dc0" ]; then
+		link=1
+		read -r rx < "$SYSFS/class/net/dc0/statistics/rx_bytes"
+		read -r tx < "$SYSFS/class/net/dc0/statistics/tx_bytes"
+		json_add_string lookup "$(sed -n 's/.*query\[A\] \([^ ]*\) from .*/\1/p' "$RUN/dns.log" 2> /dev/null | tail -n 1)"
+	fi
+	json_add_boolean link "$link"
+	json_add_int rx_bytes "${rx:-0}"
+	json_add_int tx_bytes "${tx:-0}"
+
+	# Dreamcast Now's listing: the name set from here, else the site's default
+	id=$("$DCNOW" id 2> /dev/null)
+	name=$(opt dcnow_name "")
+	[ -n "$name" ] || name="Unnamed_$(echo "$id" | cut -c1-6)"
+	json_add_string dcnow_name "$name"
+	json_add_string dcnow_id "$id"
+	json_add_boolean dcnow_as_dreampi "$([ -n "$(opt dcnow_id "")" ] && echo 1 || echo 0)"
+	json_dump
+}
+
+cmd_dcnow() {
+	local name
+	json_init
+	json_add_string id "$("$DCNOW" id 2> /dev/null)"
+	if name=$("$DCNOW" name 2> /tmp/pirate-dreampi.err); then
+		json_add_string name "$name"
+		# What the status shows; saved only when it changed
+		if [ -n "$name" ] && [ "$name" != "$(opt dcnow_name "")" ]; then
+			uci set "dreampi.main.dcnow_name=$name"
+			uci commit dreampi
+		fi
+	else
+		json_add_string error "$(cat /tmp/pirate-dreampi.err)"
+	fi
+	rm -f /tmp/pirate-dreampi.err
+	json_dump
+}
+
+cmd_dcnow_id() {
+	local v
+	v=$(echo "$1" | tr -d ' ' | tr A-F a-f)
+	if [ -z "$v" ]; then
+		uci -q delete dreampi.main.dcnow_id
+	elif echo "$v" | grep -qE '^[0-9a-f]{2}([:-][0-9a-f]{2}){5}$'; then
+		uci set "dreampi.main.dcnow_id=$(echo "$v" | tr - : | tr a-f A-F)"
+	elif echo "$v" | grep -qE '^[0-9a-f]{64}$'; then
+		uci set "dreampi.main.dcnow_id=$v"
+	else
+		json_init
+		json_add_string error "enter a MAC address (B8:27:EB:12:34:56) or a 64-digit id, or nothing"
+		json_dump
+		return
+	fi
+	# The name set here was for the old id
+	uci -q delete dreampi.main.dcnow_name
+	uci commit dreampi
+	cmd_dcnow
+}
+
+cmd_dcnow_name() {
+	local name="$1" saved
+
+	json_init
+	case "$name" in
+	"" | " "* | *" ") json_add_string error "enter a name without leading or trailing spaces" ;;
+	*[[:cntrl:]]*) json_add_string error "the name has control characters" ;;
+	*)
+		if [ "${#name}" -gt 40 ]; then
+			json_add_string error "use 40 characters at most"
+		elif saved=$("$DCNOW" name "$name" 2> /tmp/pirate-dreampi.err); then
+			uci set "dreampi.main.dcnow_name=$saved"
+			uci commit dreampi
+			json_add_string name "$saved"
+		else
+			json_add_string error "$(cat /tmp/pirate-dreampi.err)"
+		fi
+		rm -f /tmp/pirate-dreampi.err
+		;;
+	esac
+	json_dump
+}
+
+cmd_set() {
+	local enabled="$1" service="$2" dial_tone="$3" dcnow="$4" dmz="$5"
+
+	[ -r "$LIB" ] || { echo '{ "error": "DreamPi is not installed" }'; return; }
+	case "$enabled$dial_tone$dcnow$dmz" in *[!01]*) echo '{ "error": "bad setting" }'; return ;; esac
+	case "$service" in "" | ppp | dcnet) ;; *) echo '{ "error": "service is ppp or dcnet" }'; return ;; esac
+	[ -n "$enabled" ] && uci set "dreampi.main.enabled=$enabled"
+	[ -n "$service" ] && uci set "dreampi.main.service=$service"
+	[ -n "$dial_tone" ] && uci set "dreampi.main.dial_tone=$dial_tone"
+	[ -n "$dcnow" ] && uci set "dreampi.main.dcnow=$dcnow"
+	[ -n "$dmz" ] && uci set "dreampi.main.dmz=$dmz"
+	uci commit dreampi
+	"$INIT" reload > /dev/null 2>&1
+	cmd_status
+}
+
+cmd_log() {
+	json_init
+	json_add_array lines
+	logread 2> /dev/null | grep -E ' (dreampi|pppd|dcnet)(\[[0-9]+\])?: ' | tail -n 40 > /tmp/pirate-dreampi.log
+	while IFS= read -r l; do
+		json_add_string "" "$l"
+	done < /tmp/pirate-dreampi.log
+	rm -f /tmp/pirate-dreampi.log
+	json_close_array
+	json_dump
+}
+
+case "$1" in
+status) cmd_status ;;
+set) shift; cmd_set "$@" ;;
+log) cmd_log ;;
+dcnow) cmd_dcnow ;;
+dcnow_name) cmd_dcnow_name "$2" ;;
+dcnow_id) cmd_dcnow_id "$2" ;;
+*)
+	echo "usage: pirate-dreampi status | set <enabled> <service> <dial_tone> <dcnow> <dmz> | log | dcnow | dcnow_name <name> | dcnow_id <id>" >&2
+	exit 1
+	;;
+esac

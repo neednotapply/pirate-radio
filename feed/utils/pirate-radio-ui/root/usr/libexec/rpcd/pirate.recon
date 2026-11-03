@@ -1,0 +1,74 @@
+#!/bin/sh
+# rpcd plugin for pirate-recon: the network recon tab talks to the
+# pirate-recon tool through here.
+#
+#   ubus call pirate.recon uplink                     the joined network
+#   ubus call pirate.recon discover                   hosts on it (arp-scan)
+#   ubus call pirate.recon hosts                      the last discover
+#   ubus call pirate.recon ports '{"target":"1.2.3.4"}'  one host (nmap -F)
+#   ubus call pirate.recon survey_scan                   one Wi-Fi scan
+#   ubus call pirate.recon survey_networks               access points seen
+#   ubus call pirate.recon survey_clear                  forget them
+#   ubus call pirate.recon survey_gps                    GPS status
+#   ubus call pirate.recon threats_rogue                 evil-twin check
+#   ubus call pirate.recon threats_deauth '{"secs":15}'  deauth watch
+#
+# pirate-recon / pirate-survey / pirate-threats print a JSON object each, the
+# ubus reply.
+
+. /usr/share/libubox/jshn.sh
+
+RECON=${PIRATE_RECON:-/usr/sbin/pirate-recon}
+SURVEY=${PIRATE_SURVEY:-/usr/sbin/pirate-survey}
+THREATS=${PIRATE_THREATS:-/usr/sbin/pirate-threats}
+DASH=${PIRATE_DASHBOARD:-/usr/sbin/pirate-dashboard}
+
+run_ports() {
+	local input target
+	read -r input
+	json_load "$input"
+	json_get_var target target
+	# pirate-recon validates the target; a bad one gets a JSON error back.
+	"$RECON" ports "$target"
+}
+
+run_scan() {
+	local input profile target
+	read -r input
+	json_load "$input"
+	json_get_var profile profile
+	json_get_var target target
+	# pirate-recon validates the profile and target.
+	"$RECON" scan "$profile" "$target"
+}
+
+run_deauth() {
+	local input secs
+	read -r input
+	json_load "$input"
+	json_get_var secs secs
+	# empty -> pirate-threats' default window; pirate-threats validates it.
+	"$THREATS" deauth ${secs:+"$secs"}
+}
+
+case "$1" in
+list)
+	echo '{ "dashboard": {}, "uplink": {}, "discover": {}, "hosts": {}, "ports": { "target": "str" }, "scan": { "profile": "str", "target": "str" }, "survey_scan": {}, "survey_networks": {}, "survey_clear": {}, "survey_gps": {}, "threats_rogue": {}, "threats_deauth": { "secs": 0 } }'
+	;;
+call)
+	case "$2" in
+	dashboard)       "$DASH" ;;
+	uplink)          "$RECON" uplink ;;
+	discover)        "$RECON" discover ;;
+	hosts)           "$RECON" hosts ;;
+	ports)           run_ports ;;
+	scan)            run_scan ;;
+	survey_scan)     "$SURVEY" scan ;;
+	survey_networks) "$SURVEY" networks ;;
+	survey_clear)    "$SURVEY" clear ;;
+	survey_gps)      "$SURVEY" gps ;;
+	threats_rogue)   "$THREATS" rogue ;;
+	threats_deauth)  run_deauth ;;
+	esac
+	;;
+esac

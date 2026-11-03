@@ -22,21 +22,21 @@ jobs:
       - name: Lint shell scripts
         run: |
           pip install --quiet shellcheck-py
-          cd feed/utils/slate-sdr/files
-          shellcheck -s sh -e SC1091,SC3043 -x job.sh slate-sdr.cli status.cgi slate-sdr.defaults slate-sdr.hotplug
+          cd feed/utils/pirate-radio/files
+          shellcheck -s sh -e SC1091,SC3043 -x job.sh pirate-radio.cli status.cgi pirate-radio.defaults pirate-radio.hotplug pirate-radio.migrate
           shellcheck -s sh -e SC3043,SC2034 lib.sh
-          shellcheck -s sh -e SC1091,SC2034,SC3043,SC2154 slate-sdr.init
+          shellcheck -s sh -e SC1091,SC2034,SC3043,SC2154 pirate-radio.init
           cd "$GITHUB_WORKSPACE"
-          shellcheck -s sh -e SC1091,SC3043 feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-sdr
-          shellcheck -s sh -e SC1091,SC3043 feed/utils/slate-ui/root/usr/sbin/slate-recon feed/utils/slate-ui/root/usr/sbin/slate-survey feed/utils/slate-ui/root/usr/sbin/slate-threats feed/utils/slate-ui/root/usr/sbin/slate-dashboard feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-recon feed/utils/slate-ui/root/etc/uci-defaults/95-slate-recon-gpsd
-          shellcheck -s sh feed/utils/slate-ui/files/95-slate-ui
-          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-router feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-router
-          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-capture feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-capture
-          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-handshake feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-handshake
-          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-firmware feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-firmware
-          shellcheck -s sh -e SC1091,SC3043 feed/utils/slate-ui/files/slate-upload
-          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-gps feed/utils/slate-ui/root/etc/init.d/slate-gps feed/utils/slate-ui/root/etc/hotplug.d/tty/20-slate-gps
-          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/slate-ui/root/usr/sbin/slate-dreampi feed/utils/slate-ui/root/usr/libexec/rpcd/luci.slate-dreampi
+          shellcheck -s sh -e SC1091,SC3043 feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.sdr
+          shellcheck -s sh -e SC1091,SC3043 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-recon feed/utils/pirate-radio-ui/root/usr/sbin/pirate-survey feed/utils/pirate-radio-ui/root/usr/sbin/pirate-threats feed/utils/pirate-radio-ui/root/usr/sbin/pirate-dashboard feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.recon feed/utils/pirate-radio-ui/root/etc/uci-defaults/95-pirate-recon-gpsd
+          shellcheck -s sh feed/utils/pirate-radio-ui/files/95-pirate-radio-ui feed/utils/pirate-radio-ui/root/etc/hotplug.d/iface/30-pirate-local
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-router feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.router
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-capture feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.capture
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-handshake feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.handshake
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-firmware feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.firmware
+          shellcheck -s sh -e SC1091,SC3043 feed/utils/pirate-radio-ui/files/pirate-upload
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-gps feed/utils/pirate-radio-ui/root/etc/init.d/pirate-gps feed/utils/pirate-radio-ui/root/etc/hotplug.d/tty/20-pirate-gps
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-dreampi feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.dreampi
           cd feed/net/dreampi/files
           shellcheck -s sh -e SC1091,SC3043,SC2034,SC2154 call.sh dcnow.sh nat.sh lib.sh dreampi.init dreampi.hotplug dreampi.defaults
           cd "$GITHUB_WORKSPACE"
@@ -52,7 +52,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: slate-sdr-firmware
+          name: pirate-radio-firmware
           path: |
             out/firmware/*sysupgrade.bin
             out/firmware/*.manifest
@@ -112,7 +112,7 @@ jobs:
 
       - uses: actions/upload-artifact@v6
         with:
-          name: slate-sdr-firmware-full
+          name: pirate-radio-firmware-full
           path: out/firmware-full/
 
       # Job logs are not always at hand: the failed steps and the end of

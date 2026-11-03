@@ -1,0 +1,15 @@
+{
+	"pirate-handshake": {
+		"description": "Grant access to passive handshake capture: list radios and captures, start/stop a monitor-mode capture",
+		"read": {
+			"ubus": {
+				"pirate.handshake": [ "radios", "status", "list" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.handshake": [ "start", "stop" ]
+			}
+		}
+	}
+}

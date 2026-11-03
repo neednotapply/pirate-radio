@@ -1,0 +1,15 @@
+{
+	"pirate-dreampi": {
+		"description": "Grant access to DreamPi: modem and call status, its log, its settings and the Dreamcast Now name",
+		"read": {
+			"ubus": {
+				"pirate.dreampi": [ "status", "log", "dcnow" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.dreampi": [ "set", "dcnow_name", "dcnow_id" ]
+			}
+		}
+	}
+}

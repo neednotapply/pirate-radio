@@ -1,0 +1,60 @@
+#!/bin/sh
+# rpcd plugin for the Pirate Radio web UI's router-basics methods. A thin wrapper over
+# the pirate-router tool.
+#
+#   ubus call pirate.router status
+#   ubus call pirate.router clients
+#   ubus call pirate.router adblock '{"enabled":true}'   (omit to just read)
+
+. /usr/share/libubox/jshn.sh
+
+ROUTER=${PIRATE_ROUTER:-/usr/sbin/pirate-router}
+
+run_adblock() {
+	local input enabled
+	read -r input
+	json_load "$input"
+	json_get_var enabled enabled
+	case "$enabled" in
+	1|true)  "$ROUTER" adblock on ;;
+	0|false) "$ROUTER" adblock off ;;
+	*)       "$ROUTER" adblock ;;
+	esac
+}
+
+run_set_password() {
+	local input pw
+	read -r input
+	json_load "$input"
+	json_get_var pw password
+	# The password goes to the tool on stdin, never on its command line.
+	printf '%s' "$pw" | "$ROUTER" set_password
+}
+
+run_wifi_join() {
+	local input ssid enc key
+	read -r input
+	json_load "$input"
+	json_get_var ssid ssid
+	json_get_var enc enc
+	json_get_var key key
+	# The key goes on stdin; the SSID and encryption are plain arguments.
+	printf '%s' "$key" | "$ROUTER" wifi_join "$ssid" "$enc"
+}
+
+case "$1" in
+list)
+	echo '{ "status": {}, "clients": {}, "adblock": { "enabled": false }, "set_password": { "password": "str" }, "wifi_status": {}, "wifi_scan": {}, "wifi_join": { "ssid": "str", "enc": "str", "key": "str" } }'
+	;;
+call)
+	case "$2" in
+	status)       "$ROUTER" status ;;
+	clients)      "$ROUTER" clients ;;
+	adblock)      run_adblock ;;
+	set_password) run_set_password ;;
+	wifi_status)  "$ROUTER" wifi_status ;;
+	wifi_scan)    "$ROUTER" wifi_scan ;;
+	wifi_join)    run_wifi_join ;;
+	esac
+	;;
+esac

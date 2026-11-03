@@ -1,0 +1,15 @@
+{
+	"pirate-sdr": {
+		"description": "Grant access to Pirate Radio: hand the radios to a job, list ISM devices heard",
+		"read": {
+			"ubus": {
+				"pirate.sdr": [ "devices" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.sdr": [ "use" ]
+			}
+		}
+	}
+}

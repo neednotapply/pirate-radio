@@ -1,5 +1,0 @@
-No microSD card is mounted.
-
-slate-sdr writes its data to a microSD card formatted exFAT (or FAT32/ext4)
-with the volume name (label) SLATESDR. Insert one; it is mounted at
-/mnt/sdcard and its files appear here.

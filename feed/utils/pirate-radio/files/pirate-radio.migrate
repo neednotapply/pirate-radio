@@ -1,0 +1,28 @@
+#!/bin/sh
+# First boot after an upgrade from slate-sdr, as this project was called
+# before (settings kept): its settings become pirate-radio's, and a card
+# labelled SLATESDR still mounts. Runs before pirate-radio's own first-boot
+# script (90-pirate-radio). The card's slate-sdr/ folder is renamed when the
+# card is first used (pirate_storage_load).
+
+if [ -f /etc/config/slate-sdr ]; then
+	mv /etc/config/slate-sdr /etc/config/pirate-radio
+	if [ "$(uci -q get pirate-radio.storage.dir)" = slate-sdr ]; then
+		uci set pirate-radio.storage.dir='pirate-radio'
+		uci commit pirate-radio
+	fi
+fi
+
+# The old card mount (label SLATESDR) stays, beside the new PIRATERADIO one
+if uci -q get fstab.slatesdr > /dev/null; then
+	uci rename fstab.slatesdr=sdcard_slatesdr
+	uci commit fstab
+fi
+
+# The card's file server on port 8081 keeps its settings under the new name
+if uci -q get uhttpd.slatesdr > /dev/null; then
+	uci rename uhttpd.slatesdr=pirateradio
+	uci commit uhttpd
+fi
+
+exit 0

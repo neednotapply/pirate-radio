@@ -1,0 +1,58 @@
+#!/bin/sh
+# rpcd plugin for the Pirate Radio web UI's DreamPi page. A thin wrapper over the
+# pirate-dreampi tool.
+#
+#   ubus call pirate.dreampi status
+#   ubus call pirate.dreampi log
+#   ubus call pirate.dreampi set '{"enabled":true,"service":"ppp","dial_tone":true,"dcnow":true,"dmz":false}'
+#   ubus call pirate.dreampi dcnow
+#   ubus call pirate.dreampi dcnow_name '{"name":"Pirate Radio"}'
+#   ubus call pirate.dreampi dcnow_id '{"id":"B8:27:EB:12:34:56"}'
+
+. /usr/share/libubox/jshn.sh
+
+TOOL=${PIRATE_DREAMPI:-/usr/sbin/pirate-dreampi}
+
+run_dcnow_name() {
+	local input name
+	read -r input
+	json_load "$input"
+	json_get_var name name
+	"$TOOL" dcnow_name "$name"
+}
+
+run_dcnow_id() {
+	local input id
+	read -r input
+	json_load "$input"
+	json_get_var id id
+	"$TOOL" dcnow_id "$id"
+}
+
+run_set() {
+	local input enabled service dial_tone dcnow dmz
+	read -r input
+	json_load "$input"
+	json_get_var enabled enabled
+	json_get_var service service
+	json_get_var dial_tone dial_tone
+	json_get_var dcnow dcnow
+	json_get_var dmz dmz
+	"$TOOL" set "$enabled" "$service" "$dial_tone" "$dcnow" "$dmz"
+}
+
+case "$1" in
+list)
+	echo '{ "status": {}, "log": {}, "set": { "enabled": true, "service": "str", "dial_tone": true, "dcnow": true, "dmz": true }, "dcnow": {}, "dcnow_name": { "name": "str" }, "dcnow_id": { "id": "str" } }'
+	;;
+call)
+	case "$2" in
+	status)     "$TOOL" status ;;
+	log)        "$TOOL" log ;;
+	set)        run_set ;;
+	dcnow)      "$TOOL" dcnow ;;
+	dcnow_name) run_dcnow_name ;;
+	dcnow_id)   run_dcnow_id ;;
+	esac
+	;;
+esac

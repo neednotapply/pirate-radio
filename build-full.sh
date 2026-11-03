@@ -1,5 +1,5 @@
 #!/bin/sh
-# Full OpenWrt source build of the slate-sdr firmware for the GL-AR750S
+# Full OpenWrt source build of the pirate-radio firmware for the GL-AR750S
 # (NOR/NAND), with the kernel and Wi-Fi drivers rebuilt for spectral scan.
 # Takes about 40 minutes on 4 cores and 20 GB of disk. Needs OpenWrt's build
 # prerequisites (https://openwrt.org/docs/guide-developer/toolchain/install-buildsystem)
@@ -25,14 +25,14 @@ sed -E \
 	-e 's#https://git.openwrt.org/feed/packages.git#https://github.com/openwrt/packages.git#' \
 	-e '/^src-git (luci|routing|telephony|video) /d' \
 	feeds.conf.default > feeds.conf
-echo "src-link slatesdr $here/feed" >> feeds.conf
+echo "src-link pirateradio $here/feed" >> feeds.conf
 ./scripts/feeds update -a
 ./scripts/feeds install -a
 
 cp "$here/config/full.config" .config
 sed 's/#.*//' "$here/config/packages.txt" | xargs -n 1 | sed 's/.*/CONFIG_PACKAGE_&=y/' >> .config
-# SLATE_EXTRAS=1 adds the optional "complete"-build extras (see packages-extra.txt).
-if [ "${SLATE_EXTRAS:-0}" = 1 ]; then
+# PIRATE_EXTRAS=1 adds the optional "complete"-build extras (see packages-extra.txt).
+if [ "${PIRATE_EXTRAS:-0}" = 1 ]; then
 	sed 's/#.*//' "$here/config/packages-extra.txt" | xargs -n 1 | sed 's/.*/CONFIG_PACKAGE_&=y/' >> .config
 fi
 make defconfig
@@ -40,7 +40,7 @@ make defconfig
 # defconfig drops what it cannot satisfy; stop rather than build without it.
 for opt in CONFIG_KERNEL_RELAY=y CONFIG_PACKAGE_ATH_SPECTRAL=y \
 	CONFIG_PACKAGE_kmod-ath10k=y CONFIG_PACKAGE_ath10k-firmware-qca9887=y \
-	CONFIG_PACKAGE_kmod-ath9k=y CONFIG_PACKAGE_slate-sdr=y CONFIG_PACKAGE_slate-ui=y \
+	CONFIG_PACKAGE_kmod-ath9k=y CONFIG_PACKAGE_pirate-radio=y CONFIG_PACKAGE_pirate-radio-ui=y \
 	CONFIG_PACKAGE_dreampi=y \
 	CONFIG_PACKAGE_kmod-rt2800-usb=y CONFIG_PACKAGE_kmod-usb-acm=y \
 	CONFIG_PACKAGE_kmod-wireguard=y CONFIG_PACKAGE_kmod-zram=y; do

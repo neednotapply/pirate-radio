@@ -1,0 +1,218 @@
+#!/bin/sh
+# pirate-router: router basics for the Pirate Radio web UI — system + uplink status,
+# connected clients (from the DHCP leases), and the adblock toggle. Read-only
+# except `adblock on|off`. Prints one JSON object per subcommand, the reply the
+# pirate.router rpcd plugin returns.
+#
+#   pirate-router status
+#   pirate-router clients
+#   pirate-router adblock [on|off]
+
+. /usr/share/libubox/jshn.sh
+
+# PIRATE_LEASES points it at another leases file (tests).
+LEASES=${PIRATE_LEASES:-/tmp/dhcp.leases}
+
+cmd_status() {
+	local host model fw up load mt mf ma fst fsf online
+
+	host=$(cat /proc/sys/kernel/hostname 2>/dev/null)
+	model=$(cat /tmp/sysinfo/model 2>/dev/null)
+	fw=$(. /etc/openwrt_release 2>/dev/null; printf '%s' "$DISTRIB_DESCRIPTION")
+	up=$(cut -d. -f1 /proc/uptime 2>/dev/null)
+	load=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
+	mt=$(awk '/^MemTotal:/{print $2}' /proc/meminfo 2>/dev/null)
+	mf=$(awk '/^MemFree:/{print $2}' /proc/meminfo 2>/dev/null)
+	ma=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo 2>/dev/null)
+	fst=$(df -k /overlay 2>/dev/null | awk 'NR==2{print $2}')
+	fsf=$(df -k /overlay 2>/dev/null | awk 'NR==2{print $4}')
+	online=0
+	[ -n "$(ip route show default 2>/dev/null)" ] && online=1
+
+	json_init
+	json_add_string hostname "${host:-}"
+	json_add_string model "${model:-}"
+	json_add_string firmware "${fw:-}"
+	json_add_int uptime "${up:-0}"
+	json_add_string load "${load:-}"
+	json_add_object memory
+	json_add_int total "${mt:-0}"
+	json_add_int free "${mf:-0}"
+	json_add_int available "${ma:-0}"
+	json_close_object
+	json_add_object flash
+	json_add_int total "${fst:-0}"
+	json_add_int free "${fsf:-0}"
+	json_close_object
+	json_add_boolean online "$online"
+	json_dump
+}
+
+cmd_clients() {
+	local exp mac ip host cid name
+
+	json_init
+	json_add_array clients
+	if [ -f "$LEASES" ]; then
+		while read -r exp mac ip host cid; do
+			[ -n "$mac" ] || continue
+			name=$host
+			[ "$name" = "*" ] && name="-"
+			json_add_object ""
+			json_add_string mac "$mac"
+			json_add_string ip "$ip"
+			json_add_string host "$name"
+			json_close_object
+		done < "$LEASES"
+	fi
+	json_close_array
+	json_dump
+}
+
+cmd_adblock() {
+	local arg="$1" enabled running installed domains f
+
+	case "$arg" in
+	on)  uci -q set adblock.global.adb_enabled='1'; uci -q commit adblock; /etc/init.d/adblock start >/dev/null 2>&1 ;;
+	off) uci -q set adblock.global.adb_enabled='0'; uci -q commit adblock; /etc/init.d/adblock stop >/dev/null 2>&1 ;;
+	esac
+
+	installed=0
+	[ -x /etc/init.d/adblock ] && installed=1
+	enabled=$(uci -q get adblock.global.adb_enabled)
+	running=0
+	pgrep -f '[a]dblock' >/dev/null 2>&1 && running=1
+	domains=0
+	for f in /tmp/adb_list.overall /tmp/dnsmasq.d/adb_list.overall /var/run/adb_list.overall; do
+		[ -f "$f" ] && { domains=$(grep -c . "$f" 2>/dev/null); break; }
+	done
+
+	json_init
+	json_add_boolean installed "$installed"
+	json_add_boolean enabled "${enabled:-0}"
+	json_add_boolean running "$running"
+	json_add_int domains "${domains:-0}"
+	json_dump
+}
+
+# The live station (client) interface, if the device has a Wi-Fi uplink.
+sta_iface() {
+	local i
+	for i in $(iwinfo 2>/dev/null | sed -n 's/^\([a-zA-Z0-9._-]\{1,\}\) *ESSID.*/\1/p'); do
+		if iwinfo "$i" info 2>/dev/null | grep -q "Mode: Client"; then echo "$i"; return; fi
+	done
+	iwinfo 2>/dev/null | sed -n 's/^\([a-zA-Z0-9._-]\{1,\}\) *ESSID.*/\1/p' | head -1
+}
+
+# The UCI wireless section in station (uplink) mode.
+sta_section() {
+	uci show wireless 2>/dev/null | sed -n "s/^wireless\\.\\([^.]*\\)\\.mode='sta'/\\1/p" | head -1
+}
+
+# Set the root password. Reads the new password from stdin so it never appears
+# in the process list.
+cmd_set_password() {
+	local pw
+	IFS= read -r pw
+	if [ -z "$pw" ]; then echo '{ "error": "empty password" }'; return; fi
+	if [ "${#pw}" -lt 5 ]; then echo '{ "error": "use at least 5 characters" }'; return; fi
+	if printf '%s\n%s\n' "$pw" "$pw" | passwd root >/dev/null 2>&1; then
+		echo '{ "ok": true }'
+	else
+		echo '{ "error": "could not set the password" }'
+	fi
+}
+
+cmd_wifi_status() {
+	local sta ssid enc iface live_ssid signal connected cfg
+	sta=$(sta_section)
+	ssid=$(uci -q get "wireless.$sta.ssid")
+	enc=$(uci -q get "wireless.$sta.encryption")
+	iface=$(sta_iface)
+	connected=0
+	signal=0
+	live_ssid=
+	if [ -n "$iface" ]; then
+		live_ssid=$(iwinfo "$iface" info 2>/dev/null | sed -n 's/.*ESSID: "\(.*\)"/\1/p')
+		signal=$(iwinfo "$iface" info 2>/dev/null | sed -n 's/.*Signal: \(-\?[0-9]\{1,\}\) dBm.*/\1/p')
+		if iwinfo "$iface" info 2>/dev/null | grep -q "Access Point: [0-9A-Fa-f]"; then connected=1; fi
+	fi
+	case "$signal" in ''|*[!0-9-]*) signal=0 ;; esac
+	cfg=0
+	if [ -n "$sta" ]; then cfg=1; fi
+	json_init
+	json_add_boolean configured "$cfg"
+	json_add_string ssid "${ssid:-}"
+	json_add_string encryption "${enc:-}"
+	json_add_boolean connected "$connected"
+	json_add_string live_ssid "${live_ssid:-}"
+	json_add_int signal "$signal"
+	json_dump
+}
+
+cmd_wifi_scan() {
+	local iface try out=
+	# radio0 serves AP+STA, so scans are intermittent ("No event received"):
+	# retry a few times, and use the first interface that returns results.
+	for try in 1 2 3; do
+	for iface in $(iwinfo 2>/dev/null | sed -n 's/^\([a-zA-Z0-9._-]\{1,\}\) *ESSID.*/\1/p'); do
+		out=$(iwinfo "$iface" scan 2>/dev/null | awk '
+		function esc(s){ gsub(/\\/,"\\\\",s); gsub(/"/,"\\\"",s); return s }
+		function emit(){ if(have){ printf "%s{ \"ssid\": \"%s\", \"bssid\": \"%s\", \"channel\": %s, \"signal\": %s, \"enc\": \"%s\" }", (n++?", ":""), esc(ssid), bssid, (ch~/^[0-9]+$/?ch:0), (sig~/^-?[0-9]+$/?sig:0), enc } }
+		/Address:/ { emit(); have=1; bssid=$NF; ssid=""; ch=0; sig=0; enc="open" }
+		/ESSID:/ { if ($0 ~ /ESSID: "/) { s=$0; sub(/.*ESSID: "/,"",s); sub(/".*/,"",s); ssid=s } else ssid="" }
+		/Channel:/ { c=$0; sub(/.*Channel: /,"",c); sub(/[^0-9].*/,"",c); ch=c }
+		/Signal:/ { g=$0; sub(/.*Signal: /,"",g); sub(/ .*/,"",g); sig=g }
+		/Encryption:/ { if(/WPA3|SAE/)enc="wpa3"; else if(/WPA2|RSN/)enc="wpa2"; else if(/WPA/)enc="wpa"; else if(/WEP/)enc="wep"; else if(/[Nn]one|[Oo]pen/)enc="open" }
+		END{ emit() }
+		')
+		[ -n "$out" ] && break
+	done
+	[ -n "$out" ] && break
+	sleep 1
+	done
+	printf '{ "networks": [ %s ] }\n' "$out"
+}
+
+# Join an uplink Wi-Fi. SSID and encryption are arguments; the key arrives on
+# stdin (kept out of the process list). Wi-Fi reloads in the background so the
+# reply returns before the radio cycles (the AP comes back with it).
+cmd_wifi_join() {
+	local ssid="$1" enc="$2" key sta encryption
+	IFS= read -r key
+	if [ -z "$ssid" ]; then echo '{ "error": "no SSID" }'; return; fi
+	case "$enc" in
+	open) encryption=none ;;
+	wpa3) encryption=sae ;;
+	*)    encryption=psk2 ;;
+	esac
+	if [ "$encryption" != none ] && [ -z "$key" ]; then echo '{ "error": "this network needs a password" }'; return; fi
+	sta=$(sta_section)
+	if [ -z "$sta" ]; then echo '{ "error": "no station interface is configured" }'; return; fi
+	uci set "wireless.$sta.ssid=$ssid"
+	uci -q delete "wireless.$sta.bssid"
+	uci set "wireless.$sta.encryption=$encryption"
+	if [ "$encryption" = none ]; then
+		uci -q delete "wireless.$sta.key"
+	else
+		uci set "wireless.$sta.key=$key"
+	fi
+	uci commit wireless
+	( sleep 1; wifi reload ) >/dev/null 2>&1 &
+	json_init
+	json_add_boolean ok 1
+	json_add_string ssid "$ssid"
+	json_add_string encryption "$encryption"
+	json_dump
+}
+
+case "$1" in
+status)       cmd_status ;;
+clients)      cmd_clients ;;
+adblock)      cmd_adblock "$2" ;;
+set_password) cmd_set_password ;;
+wifi_status)  cmd_wifi_status ;;
+wifi_scan)    cmd_wifi_scan ;;
+wifi_join)    cmd_wifi_join "$2" "$3" ;;
+*) echo '{ "error": "usage: pirate-router status|clients|adblock|set_password|wifi_status|wifi_scan|wifi_join" }' ;;
+esac

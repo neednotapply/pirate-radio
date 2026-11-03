@@ -1,0 +1,142 @@
+#!/bin/sh
+# pirate-firmware: firmware flashing for the Pirate Radio web UI. Stages a sysupgrade
+# image, verifies it against this device (sysupgrade -T), backs up the current
+# config, and applies it. The Pirate Radio UI's Firmware tab drives this; it is the
+# flash path once LuCI (and its System > Flash page) is gone.
+#
+#   pirate-firmware status
+#   pirate-firmware verify
+#   pirate-firmware backup
+#   pirate-firmware fetch <url> [sha256]
+#   pirate-firmware apply [keep|reset]
+#   pirate-firmware clear
+#
+# Nothing is ever flashed until `apply`, which re-verifies the staged image
+# first and refuses if it is not a valid upgrade for this device. The image is
+# staged (never flashed) three ways: the browser PUTs it to /cgi-bin/pirate-upload,
+# `fetch` pulls it from a URL, or you scp it to $IMG yourself.
+
+. /usr/share/libubox/jshn.sh
+
+# Overridable for tests.
+IMG=${PIRATE_FIRMWARE_IMG:-/tmp/pirate-firmware.img}
+SYSUPGRADE=${PIRATE_SYSUPGRADE:-sysupgrade}
+BACKUP_DIR=${PIRATE_FIRMWARE_BACKUPS:-/tmp}
+
+cmd_status() {
+	local model fw space staged size verified
+	model=$(cat /tmp/sysinfo/model 2>/dev/null)
+	fw=$(. /etc/openwrt_release 2>/dev/null; printf '%s' "$DISTRIB_DESCRIPTION")
+	# Free space in the filesystem the image is staged in, in KB.
+	space=$(df -k "$(dirname "$IMG")" 2>/dev/null | awk 'NR==2{print $4}')
+	staged=0; size=0; verified=0
+	if [ -f "$IMG" ]; then
+		staged=1
+		size=$(wc -c < "$IMG" 2>/dev/null)
+		[ -f "$IMG.ok" ] && verified=1
+	fi
+	json_init
+	json_add_string model "${model:-}"
+	json_add_string firmware "${fw:-}"
+	json_add_int staging_free "${space:-0}"
+	json_add_boolean staged "$staged"
+	json_add_int staged_size "${size:-0}"
+	json_add_boolean verified "$verified"
+	json_dump
+}
+
+cmd_verify() {
+	local out rc
+	if [ ! -f "$IMG" ]; then echo '{ "ok": false, "error": "no image staged" }'; return; fi
+	out=$("$SYSUPGRADE" -T "$IMG" 2>&1); rc=$?
+	if [ "$rc" = 0 ]; then
+		: > "$IMG.ok"
+		json_init
+		json_add_boolean ok 1
+		json_add_string message "image is a valid upgrade for this device"
+		json_dump
+	else
+		rm -f "$IMG.ok"
+		json_init
+		json_add_boolean ok 0
+		json_add_string error "image failed verification"
+		json_add_string detail "$out"
+		json_dump
+	fi
+}
+
+cmd_backup() {
+	local f
+	f="$BACKUP_DIR/pirate-backup-$(date +%Y%m%d-%H%M%S).tar.gz"
+	if "$SYSUPGRADE" -b "$f" >/dev/null 2>&1 && [ -s "$f" ]; then
+		json_init
+		json_add_boolean ok 1
+		json_add_string file "$f"
+		json_add_int size "$(wc -c < "$f" 2>/dev/null)"
+		json_dump
+	else
+		echo '{ "ok": false, "error": "backup failed" }'
+	fi
+}
+
+cmd_fetch() {
+	local url="$1" want="$2" got
+	if [ -z "$url" ]; then echo '{ "ok": false, "error": "no URL" }'; return; fi
+	case "$url" in http://*|https://*) ;; *) echo '{ "ok": false, "error": "URL must be http(s)" }'; return ;; esac
+	rm -f "$IMG" "$IMG.ok"
+	if command -v uclient-fetch >/dev/null 2>&1; then
+		uclient-fetch -q -O "$IMG" "$url" >/dev/null 2>&1
+	else
+		wget -q -O "$IMG" "$url" >/dev/null 2>&1
+	fi
+	if [ ! -s "$IMG" ]; then rm -f "$IMG"; echo '{ "ok": false, "error": "download failed" }'; return; fi
+	if [ -n "$want" ]; then
+		got=$(sha256sum "$IMG" 2>/dev/null | awk '{print $1}')
+		if [ "$got" != "$want" ]; then
+			rm -f "$IMG"
+			echo '{ "ok": false, "error": "sha256 mismatch" }'; return
+		fi
+	fi
+	json_init
+	json_add_boolean ok 1
+	json_add_int size "$(wc -c < "$IMG" 2>/dev/null)"
+	[ -n "$want" ] && json_add_boolean sha256_ok 1
+	json_dump
+}
+
+# Apply the staged image. Re-verifies first and refuses a bad image. `reset`
+# flashes without keeping settings; the default keeps them.
+cmd_apply() {
+	local mode="$1" rc
+	if [ ! -f "$IMG" ]; then echo '{ "ok": false, "error": "no image staged" }'; return; fi
+	"$SYSUPGRADE" -T "$IMG" >/dev/null 2>&1; rc=$?
+	if [ "$rc" != 0 ]; then
+		echo '{ "ok": false, "error": "image failed verification; not flashing" }'
+		return
+	fi
+	set --
+	[ "$mode" = reset ] && set -- -n
+	json_init
+	json_add_boolean ok 1
+	json_add_string message "flashing now; the device will reboot"
+	json_add_string mode "${mode:-keep}"
+	json_dump
+	# Flush the reply, then flash. sysupgrade tears down userspace and reboots,
+	# so it runs detached after a short delay.
+	( sleep 2; exec "$SYSUPGRADE" "$@" "$IMG" ) >/dev/null 2>&1 &
+}
+
+cmd_clear() {
+	rm -f "$IMG" "$IMG.ok"
+	echo '{ "ok": true }'
+}
+
+case "$1" in
+status) cmd_status ;;
+verify) cmd_verify ;;
+backup) cmd_backup ;;
+fetch)  cmd_fetch "$2" "$3" ;;
+apply)  cmd_apply "$2" ;;
+clear)  cmd_clear ;;
+*) echo '{ "error": "usage: pirate-firmware status|verify|backup|fetch|apply|clear" }' ;;
+esac

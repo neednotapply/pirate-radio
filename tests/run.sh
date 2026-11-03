@@ -4,7 +4,7 @@
 #   tests/run.sh <directory with the built .apk files>
 #
 # Needs docker and a binfmt_misc entry for big-endian MIPS (Debian/Ubuntu:
-# apt install qemu-user-static). slate-sdr itself is taken from this tree,
+# apt install qemu-user-static). pirate-radio itself is taken from this tree,
 # so the tests always cover the current scripts.
 
 set -e
@@ -25,7 +25,7 @@ docker run --rm --user 0 -e OWNER="$(id -u):$(id -g)" \
 	-v "$pkgs:/pkgs:ro" -v "$ov:/ov" -v "$here/tests:/tests:ro" "$SDK_IMAGE" sh -c '
 	set -e
 	for f in /pkgs/*.apk; do
-		case "${f##*/}" in slate-sdr-* | slate-ui-*) continue ;; esac
+		case "${f##*/}" in pirate-radio-* | pirate-radio-ui-*) continue ;; esac
 		/builder/staging_dir/host/bin/apk extract --allow-untrusted --destination /ov "$f" > /dev/null
 	done
 	rm -rf /ov/lib/apk
@@ -34,57 +34,62 @@ docker run --rm --user 0 -e OWNER="$(id -u):$(id -g)" \
 	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakemodem /tests/fakemodem.c
 	chown -R "$OWNER" /ov'
 
-f="$here/feed/utils/slate-sdr/files"
+f="$here/feed/utils/pirate-radio/files"
 mkdir -p "$ov/etc/config" "$ov/etc/init.d" "$ov/usr/libexec" "$ov/usr/sbin" \
-	"$ov/usr/share/slate-sdr" "$ov/www/cgi-bin" "$ov/mnt/sdcard"
-cp "$f/slate-sdr.config" "$ov/etc/config/slate-sdr"
-cp "$f/slate-sdr.init" "$ov/etc/init.d/slate-sdr"
-cp "$f/job.sh" "$ov/usr/libexec/slate-sdr-job"
-cp "$f/slate-sdr.cli" "$ov/usr/sbin/slate-sdr"
-cp "$f/lib.sh" "$ov/usr/share/slate-sdr/lib.sh"
-cp "$f/status.cgi" "$ov/www/cgi-bin/slate-sdr"
-mkdir -p "$ov/etc/hotplug.d/usb"
-cp "$f/slate-sdr.hotplug" "$ov/etc/hotplug.d/usb/20-slate-sdr"
-chmod 755 "$ov/etc/init.d/slate-sdr" "$ov/usr/libexec/slate-sdr-job" \
-	"$ov/usr/sbin/slate-sdr" "$ov/www/cgi-bin/slate-sdr"
+	"$ov/usr/share/pirate-radio" "$ov/www/cgi-bin" "$ov/mnt/sdcard"
+cp "$f/pirate-radio.config" "$ov/etc/config/pirate-radio"
+cp "$f/pirate-radio.init" "$ov/etc/init.d/pirate-radio"
+cp "$f/job.sh" "$ov/usr/libexec/pirate-radio-job"
+cp "$f/pirate-radio.cli" "$ov/usr/sbin/pirate-radio"
+cp "$f/lib.sh" "$ov/usr/share/pirate-radio/lib.sh"
+cp "$f/status.cgi" "$ov/www/cgi-bin/pirate-radio"
+mkdir -p "$ov/etc/hotplug.d/usb" "$ov/etc/uci-defaults"
+cp "$f/pirate-radio.hotplug" "$ov/etc/hotplug.d/usb/20-pirate-radio"
+cp "$f/pirate-radio.migrate" "$ov/etc/uci-defaults/10-pirate-radio-migrate"
+chmod 755 "$ov/etc/init.d/pirate-radio" "$ov/usr/libexec/pirate-radio-job" \
+	"$ov/usr/sbin/pirate-radio" "$ov/www/cgi-bin/pirate-radio"
 
-# The slate-ui package carries the whole web interface and its backends —
+# The pirate-radio-ui package carries the whole web interface and its backends —
 # router basics, network recon, SDR, packet capture, passive handshake capture
-# and firmware — from this tree too. slate-upload is the firmware-staging CGI
-# (under files/); 95-slate-recon-gpsd is the gpsd first-boot default.
-u="$here/feed/utils/slate-ui/root"
+# and firmware — from this tree too. pirate-upload is the firmware-staging CGI
+# (under files/); 95-pirate-recon-gpsd is the gpsd first-boot default.
+u="$here/feed/utils/pirate-radio-ui/root"
 mkdir -p "$ov/usr/libexec/rpcd" "$ov/usr/share/rpcd/acl.d" "$ov/etc/uci-defaults"
-cp "$u/usr/sbin/slate-router" "$u/usr/sbin/slate-capture" "$u/usr/sbin/slate-handshake" \
-	"$u/usr/sbin/slate-firmware" "$u/usr/sbin/slate-recon" "$u/usr/sbin/slate-survey" \
-	"$u/usr/sbin/slate-threats" "$u/usr/sbin/slate-dashboard" "$ov/usr/sbin/"
-cp "$u/usr/libexec/rpcd/luci.slate-router" "$u/usr/libexec/rpcd/luci.slate-capture" \
-	"$u/usr/libexec/rpcd/luci.slate-handshake" "$u/usr/libexec/rpcd/luci.slate-firmware" \
-	"$u/usr/libexec/rpcd/luci.slate-sdr" "$u/usr/libexec/rpcd/luci.slate-recon" "$ov/usr/libexec/rpcd/"
-cp "$u/usr/libexec/luci-slate-sdr-devices" "$u/usr/libexec/slate-survey-merge" "$ov/usr/libexec/"
-cp "$u/usr/share/rpcd/acl.d/luci-app-slate-router.json" "$u/usr/share/rpcd/acl.d/luci-app-slate-capture.json" \
-	"$u/usr/share/rpcd/acl.d/luci-app-slate-handshake.json" "$u/usr/share/rpcd/acl.d/luci-app-slate-firmware.json" \
-	"$u/usr/share/rpcd/acl.d/luci-app-slate-sdr.json" "$u/usr/share/rpcd/acl.d/luci-app-slate-recon.json" \
+cp "$u/usr/sbin/pirate-router" "$u/usr/sbin/pirate-capture" "$u/usr/sbin/pirate-handshake" \
+	"$u/usr/sbin/pirate-firmware" "$u/usr/sbin/pirate-recon" "$u/usr/sbin/pirate-survey" \
+	"$u/usr/sbin/pirate-threats" "$u/usr/sbin/pirate-dashboard" "$ov/usr/sbin/"
+cp "$u/usr/libexec/rpcd/pirate.router" "$u/usr/libexec/rpcd/pirate.capture" \
+	"$u/usr/libexec/rpcd/pirate.handshake" "$u/usr/libexec/rpcd/pirate.firmware" \
+	"$u/usr/libexec/rpcd/pirate.sdr" "$u/usr/libexec/rpcd/pirate.recon" "$ov/usr/libexec/rpcd/"
+cp "$u/usr/libexec/pirate-radio-devices" "$u/usr/libexec/pirate-survey-merge" "$ov/usr/libexec/"
+cp "$u/usr/share/rpcd/acl.d/pirate-router.json" "$u/usr/share/rpcd/acl.d/pirate-capture.json" \
+	"$u/usr/share/rpcd/acl.d/pirate-handshake.json" "$u/usr/share/rpcd/acl.d/pirate-firmware.json" \
+	"$u/usr/share/rpcd/acl.d/pirate-sdr.json" "$u/usr/share/rpcd/acl.d/pirate-recon.json" \
 	"$ov/usr/share/rpcd/acl.d/"
-cp "$u/etc/uci-defaults/95-slate-recon-gpsd" "$ov/etc/uci-defaults/"
+cp "$u/etc/uci-defaults/95-pirate-recon-gpsd" "$ov/etc/uci-defaults/"
 mkdir -p "$ov/etc/init.d" "$ov/etc/hotplug.d/tty"
-cp "$u/usr/sbin/slate-gps" "$ov/usr/sbin/"
-cp "$u/etc/init.d/slate-gps" "$ov/etc/init.d/"
-cp "$u/etc/hotplug.d/tty/20-slate-gps" "$ov/etc/hotplug.d/tty/"
-chmod 755 "$ov/usr/sbin/slate-gps" "$ov/etc/init.d/slate-gps"
+cp "$u/usr/sbin/pirate-gps" "$ov/usr/sbin/"
+cp "$u/etc/init.d/pirate-gps" "$ov/etc/init.d/"
+cp "$u/etc/hotplug.d/tty/20-pirate-gps" "$ov/etc/hotplug.d/tty/"
+chmod 755 "$ov/usr/sbin/pirate-gps" "$ov/etc/init.d/pirate-gps"
 # The DreamPi page's backend (the dreampi package itself comes built, above)
-cp "$u/usr/sbin/slate-dreampi" "$ov/usr/sbin/"
-cp "$u/usr/libexec/rpcd/luci.slate-dreampi" "$ov/usr/libexec/rpcd/"
-cp "$u/usr/share/rpcd/acl.d/luci-app-slate-dreampi.json" "$ov/usr/share/rpcd/acl.d/"
-chmod 755 "$ov/usr/sbin/slate-dreampi" "$ov/usr/libexec/rpcd/luci.slate-dreampi"
-cp "$here/feed/utils/slate-ui/files/slate-upload" "$ov/www/cgi-bin/slate-upload"
-chmod 755 "$ov/usr/sbin/slate-router" "$ov/usr/sbin/slate-capture" "$ov/usr/sbin/slate-handshake" \
-	"$ov/usr/sbin/slate-firmware" "$ov/usr/sbin/slate-recon" "$ov/usr/sbin/slate-survey" \
-	"$ov/usr/sbin/slate-threats" "$ov/usr/sbin/slate-dashboard" \
-	"$ov/usr/libexec/rpcd/luci.slate-router" "$ov/usr/libexec/rpcd/luci.slate-capture" \
-	"$ov/usr/libexec/rpcd/luci.slate-handshake" "$ov/usr/libexec/rpcd/luci.slate-firmware" \
-	"$ov/usr/libexec/rpcd/luci.slate-sdr" "$ov/usr/libexec/rpcd/luci.slate-recon" \
-	"$ov/usr/libexec/luci-slate-sdr-devices" "$ov/usr/libexec/slate-survey-merge" \
-	"$ov/www/cgi-bin/slate-upload"
+cp "$u/usr/sbin/pirate-dreampi" "$ov/usr/sbin/"
+cp "$u/usr/libexec/rpcd/pirate.dreampi" "$ov/usr/libexec/rpcd/"
+cp "$u/usr/share/rpcd/acl.d/pirate-dreampi.json" "$ov/usr/share/rpcd/acl.d/"
+chmod 755 "$ov/usr/sbin/pirate-dreampi" "$ov/usr/libexec/rpcd/pirate.dreampi"
+cp "$here/feed/utils/pirate-radio-ui/files/pirate-upload" "$ov/www/cgi-bin/pirate-upload"
+# First boot (the hostname) and <hostname>.local on the router's DNS
+cp "$here/feed/utils/pirate-radio-ui/files/95-pirate-radio-ui" "$ov/etc/uci-defaults/"
+mkdir -p "$ov/etc/hotplug.d/iface"
+cp "$u/etc/hotplug.d/iface/30-pirate-local" "$ov/etc/hotplug.d/iface/"
+chmod 755 "$ov/usr/sbin/pirate-router" "$ov/usr/sbin/pirate-capture" "$ov/usr/sbin/pirate-handshake" \
+	"$ov/usr/sbin/pirate-firmware" "$ov/usr/sbin/pirate-recon" "$ov/usr/sbin/pirate-survey" \
+	"$ov/usr/sbin/pirate-threats" "$ov/usr/sbin/pirate-dashboard" \
+	"$ov/usr/libexec/rpcd/pirate.router" "$ov/usr/libexec/rpcd/pirate.capture" \
+	"$ov/usr/libexec/rpcd/pirate.handshake" "$ov/usr/libexec/rpcd/pirate.firmware" \
+	"$ov/usr/libexec/rpcd/pirate.sdr" "$ov/usr/libexec/rpcd/pirate.recon" \
+	"$ov/usr/libexec/pirate-radio-devices" "$ov/usr/libexec/pirate-survey-merge" \
+	"$ov/www/cgi-bin/pirate-upload"
 
 # The decoders and libraries OpenWrt itself packages come from its
 # repository when online; offline, <directory> must hold them too.

@@ -1,9 +1,13 @@
-# slate-sdr
+# pirate-radio
 
-OpenWrt firmware that turns a **GL.iNet GL-AR750S(-EXT) "Slate"** into a
-receiver station for an **RTL-SDR** and a **HackRF** on its USB port. It
-decodes and logs to the **microSD card** by itself, and it shares both radios
-over the network with SDR software on a computer.
+OpenWrt firmware that turns a **GL.iNet GL-AR750S(-EXT) "Slate"** into
+**Pirate Radio**, a receiver station for an **RTL-SDR** and a **HackRF** on
+its USB port. It decodes and logs to the **microSD card** by itself, and it
+shares both radios over the network with SDR software on a computer. On its
+network it answers at **`http://pirateradio.local/`**.
+
+(This project was called slate-sdr. An upgrade that keeps settings carries
+them over, and a card labelled `SLATESDR` keeps working.)
 
 Nothing in this firmware transmits. HackRF boards with a dead transmit path
 work fine.
@@ -41,7 +45,7 @@ radios.
   which fits the layout of GL.iNet's firmware 3.x and later.
 - RTL-SDR and/or HackRF. The router has **one USB port**, so for both
   radios use a **powered USB hub**: the HackRF draws about 500 mA by itself.
-- microSD card, **formatted exFAT and named `SLATESDR`** (format it on any
+- microSD card, **formatted exFAT and named `PIRATERADIO`** (format it on any
   computer). FAT32 and ext4 also work. Without the card, jobs keep serving
   the network and write nothing to the router's flash.
 - Antennas suited to what you want to receive: 1090 MHz for ADS-B, 433 or
@@ -74,14 +78,14 @@ SDR + recon load. Optional extras live in `config/packages-extra.txt` and are
 left out unless you ask for them — currently just the MQTT broker:
 
 ```sh
-SLATE_EXTRAS=1 ./build.sh          # "complete" image: adds the MQTT broker
-SLATE_EXTRAS=1 ./build-full.sh     # same, full source build
+PIRATE_EXTRAS=1 ./build.sh          # "complete" image: adds the MQTT broker
+PIRATE_EXTRAS=1 ./build-full.sh     # same, full source build
 ```
 
 **On GitHub:** every push to `main` runs the *Build firmware* workflow,
 which builds both images and uploads them as artifacts:
-`slate-sdr-firmware` after about 5 minutes (with the tests), and
-`slate-sdr-firmware-full` after about 40 minutes. Pull requests get the quick build
+`pirate-radio-firmware` after about 5 minutes (with the tests), and
+`pirate-radio-firmware-full` after about 40 minutes. Pull requests get the quick build
 only, and a newer push cancels the builds of an older one. *Actions → Build
 firmware → Run workflow* starts both by hand.
 
@@ -98,10 +102,11 @@ ath10k-ct. The radios, decoders and logging are the same in both.
 2. **Upgrade → Local upgrade**: upload the `…-sysupgrade.bin` and **untick
    "Keep settings"**. Alternatively, copy it over SSH and run
    `sysupgrade -n /tmp/<file>`.
-3. The router comes back as plain OpenWrt at `192.168.1.1`, with Wi-Fi off.
-   Open the Slate UI at `http://192.168.1.1/`: on a fresh flash it asks you to
-   set a root password before anything else. That password is then the Slate
-   UI and SSH login; change it later on the Router tab, or with `passwd` over
+3. The router comes back at `192.168.1.1`, named PirateRadio, with Wi-Fi off.
+   Open the Pirate Radio UI at `http://pirateradio.local/` (or
+   `http://192.168.1.1/`): on a fresh flash it asks you to set a root password
+   before anything else. That password is then the UI and SSH login
+   (`ssh root@pirateradio.local`); change it later on the Router tab, or with `passwd` over
    SSH. A password kept from earlier settings can't be reset from the UI: if
    it's forgotten, SSH in with a key and run `passwd`, or flash without keeping
    settings.
@@ -113,7 +118,7 @@ guide has the exact LED sequence for your U-Boot version. The
 [OpenWrt page for the GL-AR750S](https://openwrt.org/toh/gl.inet/gl-ar750s)
 covers both directions.
 
-**Later upgrades, from the Slate itself:** the Slate UI has a **Firmware** tab
+**Later upgrades, from the Slate itself:** the Pirate Radio UI has a **Firmware** tab
 that uploads (or fetches by URL) a `…-sysupgrade.bin`, checks it against this
 device with `sysupgrade -T`, and flashes only if that check passes — so the box
 can update itself without LuCI. It can also write a config backup first. The
@@ -128,16 +133,16 @@ server runs while either radio is in, and the aircraft map on port 8080 only
 while the ADS-B job runs. gpsd starts when a USB GPS appears (the devices in
 `/etc/config/gpsd`) and stops when it goes. Jobs whose radio is missing show
 as *waiting*. Other USB devices are left alone; the supported radios are
-listed in `slate_radio_kind` (`/usr/share/slate-sdr/lib.sh`). A HackRF with a
+listed in `pirate_radio_kind` (`/usr/share/pirate-radio/lib.sh`). A HackRF with a
 PortaPack on Mayhem firmware is only a USB serial console until you switch it
-to HackRF mode; the status page and the Slate UI say so, and gpsd doesn't
+to HackRF mode; the status page and the Pirate Radio UI say so, and gpsd doesn't
 take that console for a GPS.
 
-**Status page:** `http://192.168.1.1/cgi-bin/slate-sdr` shows the radios,
+**Status page:** `http://192.168.1.1/cgi-bin/pirate-radio` shows the radios,
 card and jobs, with links to the aircraft map, the ISM live view and the
-recorded files (`http://192.168.1.1:8081/slate-sdr/`).
+recorded files (`http://192.168.1.1:8081/pirate-radio/`).
 
-**In the Slate UI** (`http://192.168.1.1/`): the *Radios & SDR* tab has the
+**In the Pirate Radio UI** (`http://192.168.1.1/`): the *Radios & SDR* tab has the
 same status with every address the receivers serve, the aircraft map, the ISM
 devices rtl_433 has decoded (one row per device, with its latest readings) and
 the recorded files; using a radio hands the RTL-SDR to that job. The Dashboard,
@@ -147,17 +152,17 @@ the network, the router and firmware, and the DreamPi tab the Dreamcast (below).
 **Over SSH:**
 
 ```sh
-slate-sdr status                          # radios, card, jobs
-slate-sdr enable ism                      # (also: disable)
-slate-sdr record hackrf 433.92M 2M 30     # 30 s of IQ to the card, SigMF
-slate-sdr record rtlsdr 1090M 2.4M 10 --gain 40
-slate-sdr spectral                        # one Wi-Fi spectral scan (full build)
-slate-sdr log
+pirate-radio status                          # radios, card, jobs
+pirate-radio enable ism                      # (also: disable)
+pirate-radio record hackrf 433.92M 2M 30     # 30 s of IQ to the card, SigMF
+pirate-radio record rtlsdr 1090M 2.4M 10 --gain 40
+pirate-radio spectral                        # one Wi-Fi spectral scan (full build)
+pirate-radio log
 ```
 
-Jobs are set in `/etc/config/slate-sdr` (frequencies, gains, intervals,
+Jobs are set in `/etc/config/pirate-radio` (frequencies, gains, intervals,
 rotation, `extra_args` for any receiver option). Run
-`/etc/init.d/slate-sdr restart` after editing. Only one job runs per radio:
+`/etc/init.d/pirate-radio restart` after editing. Only one job runs per radio:
 for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
 
 **From a computer:**
@@ -174,15 +179,15 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
 
 **Also in the image:**
 
-- **Ad blocking** for the router's clients (on/off on the Slate UI's *Router*
+- **Ad blocking** for the router's clients (on/off on the Pirate Radio UI's *Router*
   tab). On a router with 128 MB of RAM, start with one list such as OISD small.
 - **MQTT broker** (mosquitto, set up over SSH) — in the **complete**
-  build only (`SLATE_EXTRAS=1`, see *Build*). rtl_433 publishes what it decodes
+  build only (`PIRATE_EXTRAS=1`, see *Build*). rtl_433 publishes what it decodes
   to it with `option extra_args '-F mqtt://127.0.0.1:1883,retain=1'` in the
   `ism` job, under `rtl_433/<hostname>/`. Leave that option out on the default
   (lean) image: it has no broker, and rtl_433 would keep trying to reach one.
 - **tcpdump** (mini) and **horst**, a Wi-Fi analyzer for monitor mode.
-- **Network recon** (the Slate UI's *Hosts*, *Wi-Fi Survey* and *Threats* tabs):
+- **Network recon** (the Pirate Radio UI's *Hosts*, *Wi-Fi Survey* and *Threats* tabs):
   - **Dashboard:** one glance at where the Slate is and what it sees — the
     joined network and whether it is online, hosts and access points logged,
     GPS, threats, the radios and the running SDR jobs, each tile linking to
@@ -206,7 +211,7 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
 
   Saved to the card under `recon/` and `survey/`. Receive/observe only — no
   attack features.
-- **DreamPi** (the Slate UI's *DreamPi* tab): a Sega Dreamcast gets online
+- **DreamPi** (the Pirate Radio UI's *DreamPi* tab): a Sega Dreamcast gets online
   through its own dial-up modem, as with a [DreamPi](https://github.com/Kazade/dreampi)
   on a Raspberry Pi, using the same USB voice modem (Conexant RD02-D400 /
   Dell NW147, Zoom 3095, …; listed in `/usr/share/dreampi/modems`). Cable:
@@ -248,7 +253,7 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
   Settings are in `/etc/config/dreampi`; `logread -e dreampi -e pppd` shows the
   calls.
 
-**On the card** (`slate-sdr/<job>/<date>/`):
+**On the card** (`pirate-radio/<job>/<date>/`):
 
 | Files | Open with |
 |---|---|
@@ -286,7 +291,7 @@ Tested in this repository's tests and builds:
   status page, the SDR and Network Recon backends (including the Wi-Fi survey
   database, GPS status, threat detection, the dashboard and the nmap scan
   profiles) and the rest of the web UI's backends
-  (slate-router, slate-capture, slate-handshake and slate-firmware: their rpcd
+  (pirate-router, pirate-capture, pirate-handshake and pirate-firmware: their rpcd
   plugins, input validation and JSON shapes, including the set-password, Wi-Fi
   join/scan/status and firmware verify/apply/upload methods — the flasher runs
   against a mock sysupgrade, so no real flash is ever attempted), and plug and
@@ -296,7 +301,9 @@ Tested in this repository's tests and builds:
   `tests/fakemodem`, a modem with a Dreamcast dialling on a pseudo-terminal;
   the call script, NAT rules, Dreamcast Now with its name form and the
   port-1998 configure helper, init script, hotplug hook, DMZ and the UI's
-  backend), against mock radios and tools on that same userland: 297 checks.
+  backend), against mock radios and tools on that same userland, and the rename from
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 306
+  checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -338,11 +345,11 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `slate-sdr`, `slate-ui`, `dreampi` |
-| `feed/utils/slate-sdr/files/` | the service: job runner, init script, CLI, status page, default config |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi` |
+| `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
-| `feed/utils/slate-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
-| `feed/utils/slate-ui/root/` | the UI's rpcd/ubus backends: router basics, firmware, capture, handshake, and the SDR (`luci.slate-sdr`) and recon (`slate-recon` / `slate-survey` / `slate-threats` / `slate-dashboard`) tools |
+| `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
+| `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics, firmware, capture, handshake, and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
 | `config/full.config` | full-build options (spectral scan, ath10k) |
 | `build.sh`, `scripts/` | the Docker build (SDK, then ImageBuilder) |
@@ -354,7 +361,7 @@ feed.
 
 ## Licence
 
-The scripts in `feed/utils/slate-sdr/files/` and `tests/`, and the build
+The scripts in `feed/utils/pirate-radio/files/` and `tests/`, and the build
 scripts, are MIT. The OpenWrt package Makefiles follow OpenWrt's
 GPL-2.0. Each packaged program keeps its own licence (in its Makefile's
 `PKG_LICENSE`). In `feed/net/dreampi/`, `src/dreampi.c`, `src/dcnow-config.c`

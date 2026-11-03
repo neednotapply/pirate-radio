@@ -1,0 +1,108 @@
+#!/bin/sh
+# rpcd plugin for pirate-sdr.
+#
+#   ubus call pirate.sdr use '{"job":"ism"}'
+#
+# Hands a job its radio: other enabled jobs on the same radio and device are
+# switched off, the job is switched on, and the service reloads, which
+# restarts only the instances that changed. Nothing changes when the job
+# already holds the radio.
+#
+#   ubus call pirate.sdr devices
+#
+# The devices rtl_433 has decoded, with their latest readings, from the ISM
+# job's logs on the card (see /usr/libexec/pirate-radio-devices).
+
+. /lib/functions.sh
+. /usr/share/libubox/jshn.sh
+. /usr/share/pirate-radio/lib.sh
+
+JOB=
+RADIO=
+DEV=
+STOPPED=
+
+release_radio() {
+	local cfg="$1" type radio dev enabled
+
+	[ "$cfg" = "$JOB" ] && return 0
+	config_get type "$cfg" type
+	radio=$(pirate_job_radio "$cfg" "$type")
+	[ "$radio" = "$RADIO" ] || return 0
+	config_get dev "$cfg" device 0
+	[ "$dev" = "$DEV" ] || return 0
+	config_get_bool enabled "$cfg" enabled 0
+	[ "$enabled" = 1 ] || return 0
+
+	uci set "pirate-radio.$cfg.enabled=0"
+	STOPPED="$STOPPED $cfg"
+}
+
+reply_error() {
+	json_init
+	json_add_string error "$1"
+	json_dump
+	exit 0
+}
+
+use_job() {
+	local input type enabled changed=0 cfg
+
+	read -r input
+	json_load "$input"
+	json_get_var JOB job
+
+	case "$JOB" in
+	''|*[!A-Za-z0-9_]*) reply_error "invalid job name" ;;
+	esac
+
+	config_load pirate-radio
+	config_get type "$JOB" type
+	[ -n "$type" ] || reply_error "no job '$JOB' in /etc/config/pirate-radio"
+
+	RADIO=$(pirate_job_radio "$JOB" "$type")
+	config_get DEV "$JOB" device 0
+	[ -n "$RADIO" ] && config_foreach release_radio job
+
+	config_get_bool enabled "$JOB" enabled 0
+	if [ "$enabled" != 1 ]; then
+		uci set "pirate-radio.$JOB.enabled=1"
+		changed=1
+	fi
+	[ -n "$STOPPED" ] && changed=1
+
+	if [ "$changed" = 1 ]; then
+		uci commit pirate-radio
+		# PIRATE_INIT: another init script to reload (tests)
+		"${PIRATE_INIT:-/etc/init.d/pirate-radio}" reload >/dev/null 2>&1
+		logger -t pirate-radio "LuCI handed the ${RADIO:-radio} to job '$JOB'${STOPPED:+, stopped:$STOPPED}"
+	fi
+
+	json_init
+	json_add_string job "$JOB"
+	json_add_string radio "$RADIO"
+	json_add_boolean switched "$changed"
+	json_add_array stopped
+	for cfg in $STOPPED; do
+		json_add_string "" "$cfg"
+	done
+	json_close_array
+	json_dump
+}
+
+list_devices() {
+	/usr/libexec/pirate-radio-devices 2>/dev/null ||
+		reply_error "could not read the ISM logs"
+}
+
+case "$1" in
+list)
+	echo '{ "use": { "job": "str" }, "devices": {} }'
+	;;
+call)
+	case "$2" in
+	use) use_job ;;
+	devices) list_devices ;;
+	esac
+	;;
+esac

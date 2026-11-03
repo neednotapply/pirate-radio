@@ -1,7 +1,7 @@
 # Optional "complete"-build extras, appended to the image only when
-# SLATE_EXTRAS=1 (see build.sh and build-full.sh). The lean default image
+# PIRATE_EXTRAS=1 (see build.sh and build-full.sh). The lean default image
 # leaves these out to save RAM and flash and to keep nothing extra running at
-# boot. Build the complete image with:  SLATE_EXTRAS=1 ./build.sh   (or
+# boot. Build the complete image with:  PIRATE_EXTRAS=1 ./build.sh   (or
 # ./build-full.sh).
 
 # MQTT broker and the command-line clients. rtl_433 can publish what it decodes

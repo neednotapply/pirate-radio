@@ -1,0 +1,171 @@
+#!/bin/sh
+# pirate-handshake: passive WPA handshake capture for the Pirate Radio web UI. Puts a
+# radio into MONITOR mode on one channel and records the EAPOL frames of the
+# WPA 4-way handshake (plus association requests, for the network name) to a
+# pcap on the microSD card with tcpdump.
+#
+# PASSIVE BY DESIGN: it only listens. It never transmits, never deauthenticates
+# and never forces a reconnection — it waits for a client to (re)connect on its
+# own. Intended for auditing networks you own or are authorized to test;
+# cracking happens offline on a computer, never here. Read-only except
+# start/stop.
+#
+#   pirate-handshake radios                 monitor-capable radios
+#   pirate-handshake start <phy> <channel> [name]
+#   pirate-handshake stop
+#   pirate-handshake status
+#   pirate-handshake list
+
+. /usr/share/libubox/jshn.sh
+
+STATE=/tmp/pirate-handshake.state
+MON=piratehs
+
+card_dir() {
+	local mp dir
+	mp=$(uci -q get pirate-radio.storage.mountpoint); [ -n "$mp" ] || mp=/mnt/sdcard
+	dir=$(uci -q get pirate-radio.storage.dir); [ -n "$dir" ] || dir=pirate-radio
+	printf '%s/%s/handshake' "$mp" "$dir"
+}
+
+alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+
+read_state() {
+	PID=; PHY=; CH=; MONIF=; FILE=; START=
+	# shellcheck disable=SC1090
+	[ -f "$STATE" ] && . "$STATE"
+}
+
+cmd_radios() {
+	local path phy mon
+	json_init
+	json_add_array radios
+	for path in /sys/class/ieee80211/*; do
+		[ -e "$path" ] || continue
+		phy=$(basename "$path")
+		mon=0
+		iw phy "$phy" info 2>/dev/null | grep -q '\* monitor' && mon=1
+		json_add_object ""
+		json_add_string phy "$phy"
+		json_add_boolean monitor "$mon"
+		json_close_object
+	done
+	json_close_array
+	json_dump
+}
+
+cmd_status() {
+	local running=0 size=0 elapsed=0 eapol=0 base
+
+	read_state
+	if alive "$PID"; then
+		running=1
+		[ -f "$FILE" ] && size=$(wc -c < "$FILE" 2>/dev/null)
+		[ -n "$START" ] && elapsed=$(( $(date +%s) - START ))
+		[ -f "$FILE" ] && eapol=$(tcpdump -r "$FILE" -nn 'ether proto 0x888e' 2>/dev/null | grep -c .)
+	fi
+	base=
+	[ -n "$FILE" ] && base=$(basename "$FILE")
+
+	json_init
+	json_add_boolean running "$running"
+	json_add_string phy "${PHY:-}"
+	json_add_string channel "${CH:-}"
+	json_add_string file "$base"
+	json_add_int size "${size:-0}"
+	json_add_int elapsed "${elapsed:-0}"
+	json_add_int eapol "${eapol:-0}"
+	json_dump
+}
+
+cmd_start() {
+	local phy="$1" ch="$2" name="$3" dir file ts
+
+	read_state
+	alive "$PID" && { echo '{ "error": "a handshake capture is already running" }'; return; }
+
+	# Validate inputs before touching the radio.
+	case "$ch" in
+	''|*[!0-9]*) echo '{ "error": "channel must be a number" }'; return ;;
+	esac
+	{ [ "$ch" -ge 1 ] && [ "$ch" -le 196 ]; } || { echo '{ "error": "channel out of range" }'; return; }
+	case "$name" in
+	*[!A-Za-z0-9._-]*) name= ;;
+	esac
+	[ -e "/sys/class/ieee80211/$phy" ] || { echo '{ "error": "no such radio" }'; return; }
+
+	dir=$(card_dir)
+	mkdir -p "$dir" 2>/dev/null || { echo '{ "error": "microSD card not mounted" }'; return; }
+
+	# A monitor interface listens only; it never associates or transmits.
+	iw phy "$phy" interface add "$MON" type monitor 2>/dev/null
+	[ -d "/sys/class/net/$MON" ] || { echo '{ "error": "could not create a monitor interface on this radio" }'; return; }
+	ip link set "$MON" up 2>/dev/null
+	iw dev "$MON" set channel "$ch" 2>/dev/null
+
+	ts=$(date +%Y%m%d-%H%M%S)
+	file="$dir/${name:+$name-}hs-ch${ch}-$ts.pcap"
+
+	# EAPOL (the 4-way handshake) plus association requests (which carry the SSID).
+	setsid tcpdump -i "$MON" -U -s 0 -w "$file" \
+		'ether proto 0x888e or (type mgt subtype assoc-req) or (type mgt subtype reassoc-req)' >/dev/null 2>&1 &
+	PID=$!
+
+	{
+		echo "PID=$PID"
+		echo "PHY='$phy'"
+		echo "CH='$ch'"
+		echo "MONIF='$MON'"
+		echo "FILE='$file'"
+		echo "START=$(date +%s)"
+	} > "$STATE"
+
+	sleep 1
+	if ! alive "$PID"; then
+		iw dev "$MON" del 2>/dev/null
+		rm -f "$STATE"
+		echo '{ "error": "capture failed to start (tcpdump could not open the monitor interface)" }'
+		return
+	fi
+	logger -t pirate-handshake "passive handshake capture on $phy ch $ch -> $file"
+	cmd_status
+}
+
+cmd_stop() {
+	read_state
+	alive "$PID" && kill "$PID" 2>/dev/null
+	[ -n "$MONIF" ] && iw dev "$MONIF" del 2>/dev/null
+	[ -d "/sys/class/net/$MON" ] && iw dev "$MON" del 2>/dev/null
+	rm -f "$STATE"
+	echo '{ "stopped": true }'
+}
+
+cmd_list() {
+	local dir f sz mt
+	dir=$(card_dir)
+	json_init
+	json_add_array files
+	if [ -d "$dir" ]; then
+		for f in "$dir"/*.pcap*; do
+			[ -f "$f" ] || continue
+			sz=$(wc -c < "$f" 2>/dev/null)
+			mt=$(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null)
+			json_add_object ""
+			json_add_string name "$(basename "$f")"
+			json_add_int size "${sz:-0}"
+			json_add_string mtime "${mt:-}"
+			json_close_object
+		done
+	fi
+	json_close_array
+	json_dump
+}
+
+case "$1" in
+radios) cmd_radios ;;
+start)  cmd_start "$2" "$3" "$4" ;;
+stop)   cmd_stop ;;
+status) cmd_status ;;
+list)   cmd_list ;;
+*) echo '{ "error": "usage: pirate-handshake radios|start <phy> <channel> [name]|stop|status|list" }' ;;
+esac

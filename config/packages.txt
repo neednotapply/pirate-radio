@@ -2,9 +2,9 @@
 # The device already brings kmod-usb2, kmod-usb-storage and block-mount.
 
 # The receivers, the SDR libraries and tools, and their service
-slate-sdr
+pirate-radio
 
-# Ad blocking for the router's clients, through its DNS (dnsmasq). The Slate UI
+# Ad blocking for the router's clients, through its DNS (dnsmasq). The Pirate Radio UI
 # (Router tab) toggles it; this is the standalone adblock package, no LuCI app.
 adblock
 
@@ -14,19 +14,20 @@ adblock
 zram-swap
 
 # The MQTT broker (mosquitto) is optional and now lives in
-# config/packages-extra.txt, added only to the "complete" build (SLATE_EXTRAS=1).
+# config/packages-extra.txt, added only to the "complete" build (PIRATE_EXTRAS=1).
 # The lean default image leaves it out so nothing extra runs at boot.
 
 # Packet capture, and a Wi-Fi analyzer for monitor mode
 tcpdump-mini
 horst
 
-# The Slate web interface: the single-page UI served at the web root (/) plus
+# The Pirate Radio web interface: the single-page UI served at the web root (/) plus
 # all its rpcd/ubus backends — router basics, network recon (arp-scan, nmap,
 # ip-full), SDR, packet capture, passive handshake capture and firmware
 # flashing. This is the device's interface in place of LuCI. Pulls uhttpd,
-# uhttpd-mod-ubus, rpcd and the recon tools.
-slate-ui
+# uhttpd-mod-ubus, rpcd, the recon tools and umdns, which answers to
+# pirateradio.local (the hostname) over mDNS.
+pirate-radio-ui
 
 # GPS for the Wi-Fi survey's wardriving positions: gpsd and gpspipe, plus the
 # kernel drivers a USB GPS enumerates with (CDC-ACM for u-blox; the common
@@ -43,13 +44,13 @@ kmod-usb-serial-ch341
 
 # DreamPi: a Dreamcast dials a USB voice modem plugged in here (the modems a
 # DreamPi uses) and gets online, through DreamPi's servers over PPP or through
-# DCNet. Idle until a modem is plugged in; the Slate UI's DreamPi tab. Pulls
+# DCNet. Idle until a modem is plugged in; the Pirate Radio UI's DreamPi tab. Pulls
 # ppp, which the image already has.
 dreampi
 
 # WireGuard, to tunnel back home over an untrusted uplink. The kernel module
 # must be built into the full image (its kernel is its own). Configure the
-# tunnel over SSH with uci/wg; the Slate UI has no WireGuard page yet.
+# tunnel over SSH with uci/wg; the Pirate Radio UI has no WireGuard page yet.
 kmod-wireguard
 wireguard-tools
 

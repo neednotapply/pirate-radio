@@ -11,13 +11,13 @@ sed -E \
 	-e 's#https://git.openwrt.org/feed/packages.git#https://github.com/openwrt/packages.git#' \
 	-e '/^src-git (luci|routing|telephony|video) /d' \
 	feeds.conf.default > feeds.conf
-echo "src-link slatesdr /feed" >> feeds.conf
+echo "src-link pirateradio /feed" >> feeds.conf
 
 quiet() {
 	"$@" > /tmp/step.log 2>&1 || { cat /tmp/step.log; exit 1; }
 }
 quiet ./scripts/feeds update -a
-quiet ./scripts/feeds install -a -p slatesdr
+quiet ./scripts/feeds install -a -p pirateradio
 
 cat > .config <<-CONFIG
 	CONFIG_ALL_NONSHARED=n
@@ -31,8 +31,8 @@ cat > .config <<-CONFIG
 	CONFIG_PACKAGE_soapy-hackrf=m
 	CONFIG_PACKAGE_soapy-rtlsdr=m
 	CONFIG_PACKAGE_soapy-remote-server=m
-	CONFIG_PACKAGE_slate-sdr=m
-	CONFIG_PACKAGE_slate-ui=m
+	CONFIG_PACKAGE_pirate-radio=m
+	CONFIG_PACKAGE_pirate-radio-ui=m
 	CONFIG_PACKAGE_dreampi=m
 CONFIG
 quiet make defconfig
@@ -42,13 +42,13 @@ for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote dreampi; 
 	make -j"$(nproc)" "package/$p/compile"
 done
 
-# slate-sdr and the slate-ui package (UI + its backends) are scripts only:
+# pirate-radio and the pirate-radio-ui package (UI + its backends) are scripts only:
 # package them without building their run-time dependencies, which the
 # ImageBuilder takes from OpenWrt's repository.
-for p in slate-sdr slate-ui; do
+for p in pirate-radio pirate-radio-ui; do
 	echo "-- $p"
-	quiet make -C "package/feeds/slatesdr/$p" TOPDIR="$PWD" compile
+	quiet make -C "package/feeds/pirateradio/$p" TOPDIR="$PWD" compile
 done
 
-cp bin/packages/*/slatesdr/*.apk /out/
+cp bin/packages/*/pirateradio/*.apk /out/
 ls -l /out

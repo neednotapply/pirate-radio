@@ -6,7 +6,7 @@
 set -eu
 
 cp /pkgs/*.apk packages/
-make image PROFILE="$PROFILE" PACKAGES="$PACKAGES" EXTRA_IMAGE_NAME=slate-sdr \
+make image PROFILE="$PROFILE" PACKAGES="$PACKAGES" EXTRA_IMAGE_NAME=pirate-radio \
 	BIN_DIR=/builder/firmware
 cp /builder/firmware/* /out/
 ls -l /out

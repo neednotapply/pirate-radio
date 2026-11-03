@@ -1,0 +1,38 @@
+#!/bin/sh
+# rpcd plugin for the Pirate Radio web UI's passive handshake capture. A thin wrapper
+# over the pirate-handshake tool.
+#
+#   ubus call pirate.handshake radios
+#   ubus call pirate.handshake status
+#   ubus call pirate.handshake list
+#   ubus call pirate.handshake start '{"phy":"phy1","channel":"6","name":""}'
+#   ubus call pirate.handshake stop
+
+. /usr/share/libubox/jshn.sh
+
+HS=${PIRATE_HANDSHAKE:-/usr/sbin/pirate-handshake}
+
+run_start() {
+	local input phy channel name
+	read -r input
+	json_load "$input"
+	json_get_var phy phy
+	json_get_var channel channel
+	json_get_var name name
+	"$HS" start "$phy" "$channel" "$name"
+}
+
+case "$1" in
+list)
+	echo '{ "radios": {}, "status": {}, "list": {}, "start": { "phy": "str", "channel": "str", "name": "str" }, "stop": {} }'
+	;;
+call)
+	case "$2" in
+	radios) "$HS" radios ;;
+	status) "$HS" status ;;
+	list)   "$HS" list ;;
+	start)  run_start ;;
+	stop)   "$HS" stop ;;
+	esac
+	;;
+esac

@@ -1,0 +1,15 @@
+{
+	"pirate-capture": {
+		"description": "Grant access to the capture workbench: list interfaces and captures, start/stop a capture",
+		"read": {
+			"ubus": {
+				"pirate.capture": [ "interfaces", "status", "list" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.capture": [ "start", "stop" ]
+			}
+		}
+	}
+}

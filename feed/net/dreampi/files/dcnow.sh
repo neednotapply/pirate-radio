@@ -21,7 +21,7 @@ API=${DREAMPI_DCNOW_API:-https://dcnow-2016.appspot.com/api/update}
 SITE=${DREAMPI_DCNOW_SITE:-dreamcast.online}
 LOG=${DREAMPI_RUN:-/var/run/dreampi}/dns.log
 UA="Mozilla/4.0 (compatible; MSIE 5.5; Windows NT), Dreamcast Now"
-SYSFS=${SLATE_SYSFS:-/sys}
+SYSFS=${PIRATE_SYSFS:-/sys}
 INTERVAL=${DREAMPI_DCNOW_INTERVAL:-15}
 
 sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }

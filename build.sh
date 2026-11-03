@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the slate-sdr firmware for the GL-AR750S (NOR/NAND) with Docker,
+# Builds the pirate-radio firmware for the GL-AR750S (NOR/NAND) with Docker,
 # in about 15 minutes:
 #   1. the OpenWrt SDK compiles the packages in feed/
 #   2. the ImageBuilder puts them, OpenWrt's own packages and its release
@@ -15,9 +15,9 @@ PROFILE=glinet_gl-ar750s-nor-nand
 here=$(cd "$(dirname "$0")" && pwd)
 out="$here/out"
 packages=$(sed 's/#.*//' "$here/config/packages.txt" | xargs)
-# SLATE_EXTRAS=1 adds the optional "complete"-build extras (e.g. the MQTT
+# PIRATE_EXTRAS=1 adds the optional "complete"-build extras (e.g. the MQTT
 # broker) from config/packages-extra.txt. The lean default leaves them out.
-if [ "${SLATE_EXTRAS:-0}" = 1 ]; then
+if [ "${PIRATE_EXTRAS:-0}" = 1 ]; then
 	packages="$packages $(sed 's/#.*//' "$here/config/packages-extra.txt" | xargs)"
 fi
 

@@ -1,0 +1,38 @@
+#!/bin/sh
+# rpcd plugin for the Pirate Radio web UI's capture workbench. A thin wrapper over the
+# pirate-capture tool.
+#
+#   ubus call pirate.capture interfaces
+#   ubus call pirate.capture status
+#   ubus call pirate.capture list
+#   ubus call pirate.capture start '{"iface":"br-lan","filter":"","name":""}'
+#   ubus call pirate.capture stop
+
+. /usr/share/libubox/jshn.sh
+
+CAP=${PIRATE_CAPTURE:-/usr/sbin/pirate-capture}
+
+run_start() {
+	local input iface filter name
+	read -r input
+	json_load "$input"
+	json_get_var iface iface
+	json_get_var filter filter
+	json_get_var name name
+	"$CAP" start "$iface" "$filter" "$name"
+}
+
+case "$1" in
+list)
+	echo '{ "interfaces": {}, "status": {}, "list": {}, "start": { "iface": "str", "filter": "str", "name": "str" }, "stop": {} }'
+	;;
+call)
+	case "$2" in
+	interfaces) "$CAP" interfaces ;;
+	status)     "$CAP" status ;;
+	list)       "$CAP" list ;;
+	start)      run_start ;;
+	stop)       "$CAP" stop ;;
+	esac
+	;;
+esac

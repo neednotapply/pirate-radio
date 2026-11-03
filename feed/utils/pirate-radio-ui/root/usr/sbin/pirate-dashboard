@@ -1,0 +1,58 @@
+#!/bin/sh
+# pirate-dashboard: one JSON summary for the Network Recon overview tab —
+# the joined network, hosts and access points seen, GPS, threats, the radios
+# and (if present) the SDR jobs. Gathers from the other recon tools so the
+# dashboard loads in a single call. Read-only and quick (no live GPS read or
+# port scan).
+
+RECON=${PIRATE_RECON:-/usr/sbin/pirate-recon}
+SURVEY=${PIRATE_SURVEY:-/usr/sbin/pirate-survey}
+THREATS=${PIRATE_THREATS:-/usr/sbin/pirate-threats}
+SDR=${PIRATE_SDR:-/usr/sbin/pirate-radio}
+
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+jf() { printf '%s' "$1" | jsonfilter -e "$2" 2>/dev/null; }
+
+uplink=$("$RECON" uplink 2>/dev/null)
+u_ssid=$(jf "$uplink" '@.ssid')
+u_iface=$(jf "$uplink" '@.iface')
+u_subnet=$(jf "$uplink" '@.subnet')
+u_gw=$(jf "$uplink" '@.gateway')
+online=false
+[ -n "$(ip route show default 2>/dev/null)" ] && online=true
+
+hosts=$("$RECON" hosts 2>/dev/null)
+h_count=$(jf "$hosts" '@.hosts[*].ip' | grep -c .)
+h_scanned=$(jf "$hosts" '@.scanned')
+
+s_count=$("$SURVEY" networks 2>/dev/null | jsonfilter -e '@.total' 2>/dev/null)
+
+rogue=$("$THREATS" rogue 2>/dev/null)
+t_count=$(printf '%s' "$rogue" | jsonfilter -e '@.threats[*].type' 2>/dev/null | grep -c .)
+t_high=$(printf '%s' "$rogue" | jsonfilter -e '@.threats[*].severity' 2>/dev/null | grep -c high)
+
+gps_installed=false; command -v gpspipe >/dev/null 2>&1 && gps_installed=true
+gps_running=false; pgrep gpsd >/dev/null 2>&1 && gps_running=true
+
+sdr=null
+if [ -x "$SDR" ]; then
+	running=$("$SDR" status 2>/dev/null | grep -c ' running')
+	sdr="{ \"present\": true, \"running\": ${running:-0} }"
+fi
+
+radios=$(iwinfo 2>/dev/null | awk '
+	function esc(s){ gsub(/\\/,"\\\\",s); gsub(/"/,"\\\"",s); return s }
+	function emit(){ if (name!="") printf "%s{ \"iface\": \"%s\", \"mode\": \"%s\", \"ssid\": \"%s\", \"channel\": %s }",
+		(n++?", ":""), name, mode, esc(ssid), (ch ~ /^[0-9]+$/ ? ch : "0") }
+	/^[a-zA-Z0-9]/ { emit(); name=$1; ssid=""; mode=""; ch="";
+		if (match($0,/ESSID: "/)) { s=$0; sub(/.*ESSID: "/,"",s); sub(/".*/,"",s); ssid=s } }
+	# The first "Mode: <word>" — not the later "HT Mode:" on the same line.
+	/Mode:/ { if (match($0, /Mode: [A-Za-z]+/)) mode = substr($0, RSTART+6, RLENGTH-6) }
+	/Channel:/ { c=$0; sub(/.*Channel: /,"",c); sub(/ .*/,"",c); ch=c }
+	END { emit() }
+')
+
+printf '{ "uplink": { "ssid": "%s", "iface": "%s", "subnet": "%s", "gateway": "%s", "online": %s }, "hosts": { "count": %d, "scanned": "%s" }, "survey": { "count": %s }, "threats": { "count": %d, "high": %d }, "gps": { "installed": %s, "running": %s }, "radios": [ %s ], "sdr": %s }\n' \
+	"$(esc "$u_ssid")" "$(esc "$u_iface")" "$(esc "$u_subnet")" "$(esc "$u_gw")" "$online" \
+	"${h_count:-0}" "$(esc "$h_scanned")" "${s_count:-0}" "$t_count" "$t_high" \
+	"$gps_installed" "$gps_running" "$radios" "$sdr"

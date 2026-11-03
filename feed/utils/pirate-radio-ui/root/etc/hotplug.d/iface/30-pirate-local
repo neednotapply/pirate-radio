@@ -1,0 +1,24 @@
+#!/bin/sh
+# <hostname>.local (pirateradio.local) on the router's own DNS too, for the
+# devices on its network that ask DNS rather than mDNS (umdns answers mDNS):
+# kept in step with the LAN address and the hostname whenever the LAN comes
+# up (/etc/hotplug.d/iface/30-pirate-local).
+
+[ "$ACTION" = ifup ] && [ "$INTERFACE" = lan ] || exit 0
+
+ip=$(uci -q get network.lan.ipaddr)
+ip=${ip%% *}
+ip=${ip%%/*}
+name=$(uci -q get system.@system[0].hostname | tr '[:upper:]' '[:lower:]')
+[ -n "$ip" ] && [ -n "$name" ] || exit 0
+name="$name.local"
+
+[ "$(uci -q get dhcp.pirate_local.name) $(uci -q get dhcp.pirate_local.ip)" = "$name $ip" ] && exit 0
+uci -q batch <<-EOF
+	set dhcp.pirate_local=domain
+	set dhcp.pirate_local.name='$name'
+	set dhcp.pirate_local.ip='$ip'
+	commit dhcp
+EOF
+"${PIRATE_DNSMASQ_INIT:-/etc/init.d/dnsmasq}" reload > /dev/null 2>&1
+exit 0

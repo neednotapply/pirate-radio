@@ -1,0 +1,222 @@
+#!/bin/sh
+# pirate-recon: look at the network this router has joined.
+#
+#   pirate-recon uplink            the joined network: interface, subnet, gateway
+#   pirate-recon discover          hosts on it (arp-scan, layer 2), as JSON
+#   pirate-recon ports <target>    open ports on one host (nmap -F), as JSON
+#   pirate-recon hosts             the last discover result
+#
+# Everything is passive or aimed at one host you name: discover only asks who
+# is on the local segment, and a port scan needs an explicit target. Results
+# are JSON on stdout, and saved to the microSD card under recon/ when it is
+# mounted. Meant for the network recon tab in LuCI (pirate.recon).
+
+# PIRATE_RECON_STORE points it at another folder for results (tests).
+STORE=${PIRATE_RECON_STORE:-/mnt/sdcard/recon}
+
+# The joined network is wherever the default route points.
+uplink_iface() { ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}'; }
+uplink_gw()    { ip route show default 2>/dev/null | awk '{print $3; exit}'; }
+
+iface_subnet() {
+	ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4; exit}' |
+		while IFS=/ read -r ip bits; do
+			# shellcheck disable=SC2046  # split the IP into its four octets
+			set -- $(echo "$ip" | tr . ' ')
+			m=$(( 0xffffffff << (32 - bits) & 0xffffffff ))
+			net=$(( ($1<<24 | $2<<16 | $3<<8 | $4) & m ))
+			printf '%d.%d.%d.%d/%d\n' $((net>>24&255)) $((net>>16&255)) $((net>>8&255)) $((net&255)) "$bits"
+		done
+}
+
+iface_ip() { ip -4 -o addr show dev "$1" 2>/dev/null | awk '{print $4; exit}' | cut -d/ -f1; }
+
+# JSON string escape: backslash and double quote.
+esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+# The lladdr for an IP in the neighbour table (field after "lladdr").
+mac_of() {
+	ip neigh show dev "$1" 2>/dev/null | awk -v ip="$2" \
+		'$1==ip { for(i=1;i<=NF;i++) if($i=="lladdr"){print $(i+1); exit} }'
+}
+
+store_dir() {
+	[ -d "$STORE" ] || { grep -q ' /mnt/sdcard ' /proc/mounts 2>/dev/null && mkdir -p "$STORE"; }
+	[ -d "$STORE" ] && echo "$STORE"
+}
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+cmd_uplink() {
+	local iface gw subnet ssid self gwmac
+	iface=$(uplink_iface)
+	[ -n "$iface" ] || { echo '{ "error": "no default route: not joined to a network" }'; return; }
+	gw=$(uplink_gw)
+	subnet=$(iface_subnet "$iface")
+	self=$(iface_ip "$iface")
+	gwmac=$(mac_of "$iface" "$gw")
+	ssid=$(iwinfo "$iface" info 2>/dev/null | sed -n 's/.*ESSID: "\(.*\)"/\1/p')
+
+	printf '{ "iface": "%s", "subnet": "%s", "gateway": "%s", "gateway_mac": "%s", "self": "%s", "ssid": "%s" }\n' \
+		"$(esc "$iface")" "$(esc "$subnet")" "$(esc "$gw")" "$(esc "$gwmac")" "$(esc "$self")" "$(esc "$ssid")"
+}
+
+cmd_discover() {
+	local iface gw self subnet out d first=1
+	iface=${1:-$(uplink_iface)}
+	[ -n "$iface" ] || { echo '{ "error": "no interface to scan" }'; return; }
+	gw=$(uplink_gw)
+	self=$(iface_ip "$iface")
+	subnet=$(iface_subnet "$iface")
+
+	out="{ \"scanned\": \"$(now)\", \"iface\": \"$(esc "$iface")\", \"subnet\": \"$(esc "$subnet")\", \"gateway\": \"$(esc "$gw")\", \"self\": \"$(esc "$self")\", \"hosts\": ["
+
+	# arp-scan the local segment; one JSON object per answering host.
+	while IFS="$(printf '\t')" read -r ip mac vendor; do
+		case "$ip" in
+		[0-9]*.[0-9]*.[0-9]*.[0-9]*) ;;
+		*) continue ;;
+		esac
+		[ "$first" = 1 ] || out="$out,"
+		first=0
+		out="$out { \"ip\": \"$(esc "$ip")\", \"mac\": \"$(esc "$mac")\", \"vendor\": \"$(esc "$vendor")\""
+		[ "$ip" = "$gw" ] && out="$out, \"gateway\": true"
+		[ "$ip" = "$self" ] && out="$out, \"self\": true"
+		out="$out }"
+	done <<-EOF
+	$(arp-scan --interface="$iface" --localnet --ignoredups 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'"$(printf '\t')")
+	EOF
+
+	out="$out ] }"
+	printf '%s\n' "$out"
+
+	d=$(store_dir) && printf '%s\n' "$out" > "$d/hosts.json"
+}
+
+cmd_hosts() {
+	[ -f "$STORE/hosts.json" ] && cat "$STORE/hosts.json" || echo '{ "hosts": [], "note": "no scan yet" }'
+}
+
+cmd_ports() {
+	local target="$1" d grep_out host entries e port proto svc ports first=1 oifs
+	case "$target" in
+	''|*[!A-Za-z0-9.:_-]*) echo '{ "error": "give one host to scan: an IP or name" }'; return ;;
+	esac
+
+	# -F: the 100 most common ports. -T4 and --open to keep it short.
+	grep_out=$(nmap -F -T4 --open -oG - "$target" 2>/dev/null)
+	host=$(printf '%s\n' "$grep_out" | sed -n 's/^Host: \([^ ]*\).*/\1/p' | head -n 1)
+
+	ports="{ \"scanned\": \"$(now)\", \"target\": \"$(esc "$target")\", \"host\": \"$(esc "${host:-$target}")\", \"ports\": ["
+	# The "Ports:" field is a comma list of port/state/proto//service//.
+	entries=$(printf '%s\n' "$grep_out" | sed -n 's/.*Ports: //p' | head -n 1)
+	oifs=$IFS
+	IFS=,
+	for e in $entries; do
+		e=$(printf '%s' "$e" | tr -d ' ')
+		case "$e" in
+		*/open/*)
+			port=$(printf '%s' "$e" | cut -d/ -f1)
+			proto=$(printf '%s' "$e" | cut -d/ -f3)
+			svc=$(printf '%s' "$e" | cut -d/ -f5)
+			[ "$first" = 1 ] || ports="$ports,"
+			first=0
+			ports="$ports { \"port\": $port, \"proto\": \"$(esc "$proto")\", \"service\": \"$(esc "$svc")\" }"
+			;;
+		esac
+	done
+	IFS=$oifs
+
+	ports="$ports ] }"
+	printf '%s\n' "$ports"
+
+	d=$(store_dir) && printf '%s\n' "$ports" >> "$d/ports-$(date -u +%Y%m%d).ndjson"
+}
+
+# cmd_scan <profile> <target>: an nmap scan with a named profile, against one
+# host you name or a subnet (CIDR). Profiles: quick (top 100), top1000 and ping
+# (host liveness). Results are JSON and a readable
+# copy is saved to the card. A port scan is active and needs an explicit target.
+cmd_scan() {
+	local profile="$1" target="$2" d saved grep_out out first=1 hostline ip portsfield e port proto svc ver pfirst oifs
+
+	case "$target" in
+	''|*[!A-Za-z0-9.:_/-]*) echo '{ "error": "give a host or subnet to scan: an IP, name, or CIDR" }'; return ;;
+	esac
+	# Build nmap flags as positional parameters (profile/target are already saved).
+	case "$profile" in
+	quick)   set -- -F -T4 --open ;;
+	top1000) set -- -T4 --open ;;
+	ping)    set -- -sn -T4 ;;
+	*) echo '{ "error": "unknown profile" }'; return ;;
+	esac
+
+	d=$(store_dir)
+	saved=
+	[ -n "$d" ] && saved="scan-$profile-$(date -u +%Y%m%d-%H%M%S).txt"
+
+	# One nmap run: grepable to stdout, plus a readable copy to the card.
+	if [ -n "$saved" ]; then
+		grep_out=$(nmap "$@" -oG - -oN "$d/$saved" "$target" 2>/dev/null)
+	else
+		grep_out=$(nmap "$@" -oG - "$target" 2>/dev/null)
+	fi
+
+	out="{ \"scanned\": \"$(now)\", \"profile\": \"$(esc "$profile")\", \"target\": \"$(esc "$target")\", \"saved\": \"$(esc "${saved:-}")\", \"hosts\": ["
+
+	if [ "$profile" = ping ]; then
+		while IFS= read -r hostline; do
+			ip=$(printf '%s' "$hostline" | awk '{print $2}')
+			[ -n "$ip" ] || continue
+			[ "$first" = 1 ] || out="$out,"
+			first=0
+			out="$out { \"ip\": \"$(esc "$ip")\" }"
+		done <<-EOF
+		$(printf '%s\n' "$grep_out" | grep '^Host:.*Status: Up')
+		EOF
+	else
+		while IFS= read -r hostline; do
+			ip=$(printf '%s' "$hostline" | awk '{print $2}')
+			[ -n "$ip" ] || continue
+			portsfield=$(printf '%s' "$hostline" | awk -F'\t' '{for(i=1;i<=NF;i++) if($i ~ /^Ports: /){sub(/^Ports: /,"",$i); print $i}}')
+			[ "$first" = 1 ] || out="$out,"
+			first=0
+			out="$out { \"ip\": \"$(esc "$ip")\", \"ports\": ["
+			pfirst=1
+			oifs=$IFS
+			IFS=,
+			for e in $portsfield; do
+				e=$(printf '%s' "$e" | sed 's/^ *//; s/ *$//')
+				case "$e" in
+				*/open/*)
+					port=$(printf '%s' "$e" | cut -d/ -f1)
+					proto=$(printf '%s' "$e" | cut -d/ -f3)
+					svc=$(printf '%s' "$e" | cut -d/ -f5)
+					ver=$(printf '%s' "$e" | cut -d/ -f7)
+					[ "$pfirst" = 1 ] || out="$out,"
+					pfirst=0
+					out="$out { \"port\": $port, \"proto\": \"$(esc "$proto")\", \"service\": \"$(esc "$svc")\", \"version\": \"$(esc "$ver")\" }"
+					;;
+				esac
+			done
+			IFS=$oifs
+			out="$out ] }"
+		done <<-EOF
+		$(printf '%s\n' "$grep_out" | grep '^Host:.*Ports:')
+		EOF
+	fi
+
+	out="$out ] }"
+	printf '%s\n' "$out"
+
+	d=$(store_dir) && printf '%s\n' "$out" >> "$d/scans.ndjson"
+}
+
+case "$1" in
+uplink)   cmd_uplink ;;
+discover) shift; cmd_discover "$@" ;;
+hosts)    cmd_hosts ;;
+ports)    shift; cmd_ports "$@" ;;
+scan)     shift; cmd_scan "$@" ;;
+*) echo "usage: pirate-recon {uplink|discover|hosts|ports <target>|scan <profile> <target>}" >&2; exit 1 ;;
+esac
