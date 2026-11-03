@@ -694,7 +694,8 @@ check "gps hotplug: nothing while slate-gps is stopped" [ -z "$(ghp ACTION=add D
 echo "# DreamPi (dreampi; tests/fakemodem plays the modem and the Dreamcast)"
 DP="$T/dp"
 mkdir -p "$DP/bin" "$DP/run"
-export DREAMPI_RUN="$DP/run" DP_CALLS="$DP/calls"
+# (DP too: the mocks below read their canned replies from it)
+export DP DREAMPI_RUN="$DP/run" DP_CALLS="$DP/calls"
 # A Conexant USB modem (Dell NW147) on ttyACM1, a u-blox GPS on ttyACM2
 mkusb 1-4 0572 1340 "" "USB Modem"
 mkusb 1-5 1546 01a7 "" "u-blox 7 - GPS/GNSS Receiver"
