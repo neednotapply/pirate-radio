@@ -131,7 +131,11 @@ U-Boot recovery page above stays the backstop if a flash ever goes wrong.
 RTL-SDR or a HackRF) is plugged in and stops when it's removed; the SoapySDR
 server runs while either radio is in, and the aircraft map on port 8080 only
 while the ADS-B job runs. gpsd starts when a USB GPS appears (the devices in
-`/etc/config/gpsd`) and stops when it goes. Jobs whose radio is missing show
+`/etc/config/gpsd`) and stops when it goes. DreamPi runs only while its USB
+modem is in: its modem daemon, the Dreamcast's DNS server and the Dreamcast
+Now helper, with its packet fixes, `dreampi.local` and (if on) the DMZ; they
+all go when the modem does. A USB Wi-Fi adapter is OpenWrt's own (netifd), and
+the microSD card mounts when it goes in. Jobs whose radio is missing show
 as *waiting*. Other USB devices are left alone; the supported radios are
 listed in `pirate_radio_kind` (`/usr/share/pirate-radio/lib.sh`). A HackRF with a
 PortaPack on Mayhem firmware is only a USB serial console until you switch it
@@ -302,7 +306,7 @@ Tested in this repository's tests and builds:
   the call script, NAT rules, Dreamcast Now with its name form and the
   port-1998 configure helper, init script, hotplug hook, DMZ and the UI's
   backend), against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 306
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 310
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

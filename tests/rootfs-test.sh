@@ -875,9 +875,8 @@ uci set dreampi.main.enabled=1
 uci set dreampi.main.dial_tone=1
 uci set dreampi.main.service=ppp
 uci commit dreampi
-rm -f /dev/ttyACM1
 dpinit
-check "init: without the modem, only the Dreamcast Now helper" sh -c "[ \"\$(grep '^instance' '$DP/init.out')\" = 'instance config: /usr/sbin/dcnow-config' ]"
+check "init: the Dreamcast Now helper with the modem" has "$DP/init.out" "^instance config: /usr/sbin/dcnow-config$"
 
 # dreampi.local, where the site's configure page looks, is this router
 [ -f /etc/config/network ] || : > /etc/config/network
@@ -905,13 +904,26 @@ check "init: DMZ to the Dreamcast" sh -c "[ \"\$(uci get firewall.dreamcast_dmz.
 : > "$DP_CALLS"
 dpinit
 check "init: the firewall left alone when the DMZ is unchanged" sh -c "! grep -q firewall '$DP_CALLS'"
+
+# The modem pulled out: everything DreamPi runs or set up stops, and comes
+# back when it's plugged in again
+rm -f /dev/ttyACM1
+: > "$DP_CALLS"
+dpinit
+check "unplugged: nothing runs" sh -c "! grep -q '^instance' '$DP/init.out'"
+check "unplugged: no DMZ, no dreampi.local" sh -c "! uci -q get firewall.dreamcast_dmz && ! uci -q get dhcp.dreampi_local && grep -qx 'firewall reload' '$DP_CALLS' && grep -qx 'dnsmasq-init reload' '$DP_CALLS'"
+check "unplugged: the packet fixes are cleared" grep -q '^nft delete table ip dreampi' "$DP_CALLS"
+: > /dev/ttyACM1
+dpinit
+check "plugged in again: all back" sh -c "[ \"\$(grep -c '^instance' '$DP/init.out')\" = 3 ] && uci -q get firewall.dreamcast_dmz > /dev/null && uci -q get dhcp.dreampi_local > /dev/null"
 uci set dreampi.main.enabled=0
 uci commit dreampi
 dpinit
-check "init: no DMZ when turned off" sh -c "! uci -q get firewall.dreamcast_dmz && grep -qx 'firewall reload' '$DP_CALLS'"
+check "init: no DMZ when turned off" sh -c "! uci -q get firewall.dreamcast_dmz && ! grep -q '^instance' '$DP/init.out'"
 uci set dreampi.main.enabled=1
 uci set dreampi.main.dmz=0
 uci commit dreampi
+rm -f /dev/ttyACM1
 
 # The hotplug hook: a modem plugged in, any serial device gone
 dphp() { : > "$DP_CALLS"; dpenv "$@" sh /etc/hotplug.d/tty/30-dreampi > /dev/null 2>&1; cat "$DP_CALLS"; }

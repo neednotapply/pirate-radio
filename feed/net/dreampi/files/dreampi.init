@@ -1,11 +1,12 @@
 #!/bin/sh /etc/rc.common
 # DreamPi for the Slate: answers a Dreamcast's modem through a USB voice modem
 # while one is plugged in (the tty hotplug hook reloads this on every plug and
-# unplug). Runs the modem daemon (dreampi) and, for PPP calls, a DNS server
-# for the Dreamcast on the PPP link (dnsmasq, with DreamPi's DNS servers) and
-# DreamPi's packet fixes (/usr/libexec/dreampi/nat). While on, modem or not,
-# DreamPi's Dreamcast Now helper (dcnow-config) answers
-# dreamcast.online/now/configure/ at dreampi.local:1998.
+# unplug). Plugged in, it runs the modem daemon (dreampi), a DNS server for the
+# Dreamcast on the PPP link (dnsmasq, with DreamPi's DNS servers) and DreamPi's
+# Dreamcast Now helper (dcnow-config, which answers
+# dreamcast.online/now/configure/ at dreampi.local:1998), and sets up DreamPi's
+# packet fixes (/usr/libexec/dreampi/nat), dreampi.local and the DMZ when it's
+# on. Pulled out, all of that stops.
 
 START=95
 STOP=10
@@ -96,7 +97,7 @@ pap_secrets() {
 }
 
 start_service() {
-	local enabled device baud service dial_tone local_ip dc_ip dmz
+	local enabled device baud service dial_tone local_ip dc_ip dmz present
 
 	. /usr/share/dreampi/lib.sh
 	mkdir -p "$RUN"
@@ -110,21 +111,15 @@ start_service() {
 	config_get dc_ip main dreamcast_ip 192.168.169.2
 	config_get_bool dmz main dmz 0
 
-	[ "$enabled" = 1 ] || dmz=0
-	dmz_sync "$dmz" "$dc_ip"
-	local_name_sync "$enabled"
-	if [ "$enabled" != 1 ]; then
-		/usr/libexec/dreampi/nat clear
-		return 0
-	fi
-
-	procd_open_instance config
-	procd_set_param command /usr/sbin/dcnow-config
-	procd_set_param respawn
-	procd_close_instance
-
+	# Everything DreamPi runs or sets up follows the modem: plugged in (and
+	# DreamPi on), it all starts; pulled out, it all stops
 	[ -n "$device" ] || device=$(dreampi_modems | head -n 1 | cut -d' ' -f1)
-	if [ -z "$device" ] || [ ! -e "$device" ]; then
+	present=0
+	[ "$enabled" = 1 ] && [ -n "$device" ] && [ -e "$device" ] && present=1
+	[ "$present" = 1 ] || dmz=0
+	dmz_sync "$dmz" "$dc_ip"
+	local_name_sync "$present"
+	if [ "$present" != 1 ]; then
 		/usr/libexec/dreampi/nat clear
 		return 0
 	fi
@@ -146,6 +141,11 @@ start_service() {
 
 	procd_open_instance dns
 	procd_set_param command /usr/sbin/dnsmasq -k -C "$RUN/dnsmasq.conf"
+	procd_set_param respawn
+	procd_close_instance
+
+	procd_open_instance config
+	procd_set_param command /usr/sbin/dcnow-config
 	procd_set_param respawn
 	procd_close_instance
 }
