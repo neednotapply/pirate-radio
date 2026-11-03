@@ -828,14 +828,16 @@ check "dcnow: config reports the id and the setting" [ "$(dpenv /usr/libexec/dre
 dcnow-config -p 18998 > "$DP/helper.log" 2>&1 &
 dch=$!
 sleep 1
-hreq() { printf '%s' "$1" | /bin/busybox nc 127.0.0.1 18998 | tr -d '\r'; }
-hreq "$(printf 'GET / HTTP/1.0\r\nHost: dreampi.local:1998\r\nOrigin: http://dreamcast.online\r\n\r\n')" > "$DP/helper.out"
+# (requests piped straight in: $(...) would drop the blank line that ends
+# the headers)
+hreq() { /bin/busybox nc 127.0.0.1 18998 | tr -d '\r' > "$DP/helper.out"; }
+printf 'GET / HTTP/1.0\r\nHost: dreampi.local:1998\r\nOrigin: http://dreamcast.online\r\n\r\n' | hreq
 check "helper: a GET gets the id, open to the site" sh -c "grep -qx 'Access-Control-Allow-Origin: \\*' '$DP/helper.out' && grep -q '\"mac_address\": \"$(sha 94:83:C4:90:C2:D4)\"' '$DP/helper.out'"
-hreq "$(printf 'OPTIONS / HTTP/1.0\r\nOrigin: http://dreamcast.online\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Private-Network: true\r\n\r\n')" > "$DP/helper.out"
+printf 'OPTIONS / HTTP/1.0\r\nOrigin: http://dreamcast.online\r\nAccess-Control-Request-Method: GET\r\nAccess-Control-Request-Private-Network: true\r\n\r\n' | hreq
 check "helper: the private-network preflight is allowed" sh -c "head -n 1 '$DP/helper.out' | grep -q ' 204 ' && grep -qx 'Access-Control-Allow-Private-Network: true' '$DP/helper.out'"
-hreq "$(printf 'POST /toggle/ HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 32\r\n\r\ndisable=Disable+Dreamcast+Now%%21')" > "$DP/helper.out"
+printf 'POST /toggle/ HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 32\r\n\r\ndisable=Disable+Dreamcast+Now%%21' | hreq
 check "helper: the site's Disable button turns reporting off" sh -c "grep -q '\"is_enabled\": false' '$DP/helper.out' && [ \"\$(uci get dreampi.main.dcnow)\" = 0 ]"
-hreq "$(printf 'POST /toggle/ HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 30\r\n\r\nenable=Enable+Dreamcast+Now%%21')" > "$DP/helper.out"
+printf 'POST /toggle/ HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: 30\r\n\r\nenable=Enable+Dreamcast+Now%%21' | hreq
 check "helper: and Enable on" sh -c "grep -q '\"is_enabled\": true' '$DP/helper.out' && [ \"\$(uci get dreampi.main.dcnow)\" = 1 ]"
 kill "$dch"
 uci set dreampi.main.dcnow=0
