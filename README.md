@@ -374,7 +374,7 @@ Tested in this repository's tests and builds:
   deleting, the screen stream and its stop, buttons, the clock, restarting,
   and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 382
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 447
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
