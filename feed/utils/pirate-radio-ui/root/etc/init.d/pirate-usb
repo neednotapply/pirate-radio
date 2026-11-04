@@ -1,0 +1,42 @@
+#!/bin/sh /etc/rc.common
+# Plug and play for USB drives: a flash drive or disk plugged into the USB
+# port is mounted under /mnt/usb and shared while it is plugged in, on the
+# network over SMB (ksmbd, and wsdd2 so Windows lists the router) and to the
+# web UI's Drives tab over HTTP on port 8082. At boot this mounts and shares
+# whatever is plugged in already; after that the block hotplug hook
+# (/etc/hotplug.d/block/30-pirate-usb) keeps it in step. ksmbd and wsdd2 are
+# not started at boot (96-pirate-usb disables them). Stop this to unmount the
+# drives and stop sharing.
+
+START=99
+STOP=10
+USE_PROCD=1
+
+TOOL=/usr/sbin/pirate-usb
+ROOT=/mnt/usb
+RUN=/var/run/pirate-usb
+ACTIVE=/var/run/pirate-usb.active
+
+start_service() {
+	: > "$ACTIVE"
+	"$TOOL" scan
+	"$TOOL" share
+	[ -n "$("$TOOL" drives)" ] || return 0
+
+	# The drives over HTTP, for the Drives tab's links: behind the router's
+	# own login, with no CGI and no following links out of the drives.
+	mkdir -p "$RUN"
+	# shellcheck disable=SC2016
+	echo '/:root:$p$root' > "$RUN/httpd.conf"
+	procd_open_instance http
+	procd_set_param command /usr/sbin/uhttpd -f -h "$ROOT" -p 0.0.0.0:8082 -p '[::]:8082' \
+		-c "$RUN/httpd.conf" -r "Pirate Radio" -x /.no-cgi -S -R -N 20 -T 30
+	procd_set_param respawn
+	procd_close_instance
+}
+
+stop_service() {
+	rm -f "$ACTIVE"
+	"$TOOL" unshare
+	"$TOOL" unmount_all
+}

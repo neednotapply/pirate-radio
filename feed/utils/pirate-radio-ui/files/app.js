@@ -125,7 +125,44 @@
 		return s;
 	}
 
+	var DEMO_USB = { enabled: true, password: false, ejected: false };
+	var DEMO_USB_FILES = {
+		"": [{ name: "Music", dir: true }, { name: "Photos", dir: true }, { name: "notes.txt", size: 2048 },
+			{ name: "pirate-radio-backup.tar.gz", size: 48213 }],
+		"Music": [{ name: "mixtape.mp3", size: 7340032 }],
+		"Photos": [{ name: "2026", dir: true }, { name: "slate.jpg", size: 2516582 }],
+		"Photos/2026": [{ name: "dreamcast.jpg", size: 1887436 }]
+	};
+	function demoUsb() {
+		var drives = DEMO_USB.ejected ? [] : [{ name: "KINGSTON", device: "sdb1", disk: "sdb", label: "KINGSTON", fs: "exfat",
+			model: "Kingston DataTraveler 3.0", size: 30943995904, used: 13207024435, free: 17736971469, readonly: false }];
+		return { installed: true, enabled: DEMO_USB.enabled, sharing: DEMO_USB.enabled && drives.length > 0, user: "pirate",
+			password: DEMO_USB.password, host: "PirateRadio", http_port: 8082, drives: drives };
+	}
+
 	var MOCK = {
+		"pirate.usb:status": demoUsb,
+		"pirate.usb:list": function (p) {
+			if (p.name !== "KINGSTON" || DEMO_USB.ejected) return { error: "no such drive" };
+			var list = DEMO_USB_FILES[p.path || ""];
+			if (!list) return { error: "no such folder" };
+			var t = Math.round(Date.now() / 1000) - 86400;
+			return { path: p.path || "", total: list.length, truncated: false, entries: list.map(function (f, i) {
+				return { name: f.name, dir: !!f.dir, size: f.size || 0, mtime: t - i * 3600 };
+			}) };
+		},
+		"pirate.usb:eject": function (p) {
+			if (p.name !== "KINGSTON" || DEMO_USB.ejected) return { error: "no such drive" };
+			DEMO_USB.ejected = true;
+			setTimeout(function () { DEMO_USB.ejected = false; }, 15000);   // "plugged in again"
+			return { ok: true, name: p.name };
+		},
+		"pirate.usb:set": function (p) { DEMO_USB.enabled = !!p.enabled; return demoUsb(); },
+		"pirate.usb:set_password": function (p) {
+			if (p.password && p.password.length < 5) return { error: "use at least 5 characters" };
+			DEMO_USB.password = !!p.password;
+			return demoUsb();
+		},
 		"pirate.recon:dashboard": {
 			uplink: { ssid: "NoInternetHere-5", iface: "phy1-sta0",
 				subnet: "192.168.1.0/24", gateway: "192.168.1.1", online: true },
@@ -446,6 +483,11 @@
 		if (b >= 1048576) return (b / 1048576).toFixed(1) + " MB";
 		if (b >= 1024) return Math.round(b / 1024) + " KB";
 		return b + " B";
+	}
+	function gb(b) {
+		b = +b || 0;
+		if (b >= 1073741824) return (b / 1073741824).toFixed(1) + " GB";
+		return size(b);
 	}
 	function secClass(sec) {
 		if (sec === "Open") return "sec-open";
@@ -1738,6 +1780,285 @@
 		}).catch(function () {});
 	}
 
+	/* ---------- Drives (USB flash drives and disks) ---------- */
+
+	var USB_TIMER = null;
+
+	function renderDrives() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Drives", "USB flash drives and disks, shared while plugged in"));
+
+		var drPanel = panel("Plugged in");
+		var drWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		drPanel.appendChild(drWrap);
+
+		// The file browser, for the drive being browsed
+		var fbPanel = panel(null);
+		fbPanel.style.marginTop = "14px";
+		fbPanel.hidden = true;
+		var fbHead = el("h3", { class: "sub-h" });
+		var fbCrumbs = el("div", { class: "crumbs" });
+		var fbWrap = el("div");
+		fbPanel.appendChild(fbHead); fbPanel.appendChild(fbCrumbs); fbPanel.appendChild(fbWrap);
+
+		var shPanel = panel("Network share");
+		shPanel.style.marginTop = "14px";
+		var shState = el("div", { class: "toolbar" });
+		var shAccess = el("p", { class: "descr" });
+		var enChk = el("input", { type: "checkbox" });
+		var enStatus = el("span", { class: "status" });
+		var pw1 = el("input", { class: "inp", type: "password", autocomplete: "new-password", placeholder: "at least 5 characters" });
+		var pw2 = el("input", { class: "inp", type: "password", autocomplete: "new-password", placeholder: "again" });
+		var pwStatus = el("span", { class: "status" });
+		var pwClear = btn("Remove the password", { cls: "reset", onclick: function () { setPassword(""); } });
+		var shForm = el("div", { hidden: "" });
+		shForm.appendChild(el("div", { class: "toolbar" },
+			el("label", { class: "chkline" }, enChk, document.createTextNode(" Share the drives on the network (SMB)")),
+			btn("Save", { onclick: saveEnabled }), enStatus));
+		shForm.appendChild(el("h4", { class: "sub-h2", text: "Share password" }));
+		shForm.appendChild(shAccess);
+		shForm.appendChild(el("div", { class: "form" },
+			el("label", {}, el("span", { class: "lbl", text: "New password" }), pw1),
+			el("label", {}, el("span", { class: "lbl", text: "Retype it" }), pw2)));
+		shForm.appendChild(el("div", { class: "toolbar" },
+			btn("Set password", { primary: true, onclick: function () { setPassword(null); } }), pwClear, pwStatus));
+		var shMissing = el("div", { class: "muted", hidden: "", text:
+			"This firmware has no SMB server (ksmbd): drives show here, but not on the network." });
+		shPanel.appendChild(shState); shPanel.appendChild(shForm); shPanel.appendChild(shMissing);
+
+		var howPanel = panel("Connecting");
+		howPanel.style.marginTop = "14px";
+		var howWrap = el("div");
+		howPanel.appendChild(howWrap);
+
+		VIEW.appendChild(drPanel); VIEW.appendChild(fbPanel); VIEW.appendChild(shPanel); VIEW.appendChild(howPanel);
+
+		var last = null;          // the last status
+		var browsing = null;      // { name, path } of the folder on show
+		var formSet = false;
+		var webHost = location.hostname || "192.168.1.1";
+
+		function smbHost(s) { return String(s.host || "pirateradio").toLowerCase() + ".local"; }
+		function fileUrl(port, name, path) {
+			var parts = [name].concat(path ? path.split("/") : []);
+			return "http://" + webHost + ":" + port + "/" + parts.map(encodeURIComponent).join("/");
+		}
+		function failed(e) {
+			if (String(e.message || e) === "unauthorized") { onError(e); return true; }
+			return false;
+		}
+
+		function meter(used, total) {
+			var pct = total ? Math.min(100, Math.round(used * 100 / total)) : 0;
+			var m = el("div", { class: "meter" + (pct >= 90 ? " full" : "") });
+			var fill = el("span");
+			fill.style.width = pct + "%";
+			m.appendChild(fill);
+			return m;
+		}
+		function driveCard(d, s) {
+			var card = el("div", { class: "drive" });
+			var head = el("div", { class: "drive-head" },
+				el("strong", { text: d.name }),
+				badge(d.fs || "?", "sec-neutral"),
+				d.readonly ? badge("read-only", "sec-warn") : null,
+				el("span", { class: "muted", text: d.model || "" }));
+			card.appendChild(head);
+			card.appendChild(meter(d.used, d.size));
+			card.appendChild(el("div", { class: "status", text:
+				gb(d.free) + " free of " + gb(d.size) + " · " + d.device }));
+			var pairs = [];
+			if (s.installed && s.enabled) {
+				pairs.push(["Windows", "\\\\" + smbHost(s) + "\\" + d.name]);
+				pairs.push(["macOS, Linux", "smb://" + smbHost(s) + "/" + d.name]);
+			}
+			if (pairs.length) {
+				var dl = el("dl", { class: "kv" });
+				pairs.forEach(function (p) { dl.appendChild(el("dt", { text: p[0] })); dl.appendChild(el("dd", { text: p[1] })); });
+				card.appendChild(dl);
+			}
+			var ejStatus = el("span", { class: "status" });
+			card.appendChild(el("div", { class: "toolbar drive-actions" },
+				btn("Browse", { primary: true, onclick: function () { browse(d.name, ""); } }),
+				el("a", { class: "btn", href: fileUrl(s.http_port || 8082, d.name, "") + "/", target: "_blank", rel: "noopener",
+					text: "Open in a new tab" }),
+				btn("Eject", { onclick: function () { eject(d, ejStatus); } }),
+				ejStatus));
+			return card;
+		}
+		var shown = "";
+		function showStatus(s) {
+			// Polled every few seconds: redraw only when something changed
+			var key = JSON.stringify(s);
+			if (key === shown) return;
+			shown = key;
+			last = s;
+			var drives = s.drives || [];
+			clear(drWrap);
+			if (!drives.length) {
+				drWrap.appendChild(el("div", { class: "placeholder" },
+					el("b", { text: "No drive plugged in" }),
+					el("div", { class: "muted", text: "Plug a USB flash drive or disk into the router's USB port (through a hub " +
+						"if something else is plugged in). It shows up here, and on the network, within a few seconds." })));
+			} else {
+				drives.forEach(function (d) { drWrap.appendChild(driveCard(d, s)); });
+				drWrap.appendChild(el("p", { class: "descr", text:
+					"Eject a drive before pulling it out: it is written to as you use it. FAT32, exFAT, NTFS and ext4 work." }));
+			}
+			// The drive being browsed went away
+			if (browsing && !drives.some(function (d) { return d.name === browsing.name; })) {
+				browsing = null; fbPanel.hidden = true;
+			}
+
+			clear(shState);
+			shMissing.hidden = !!s.installed;
+			shForm.hidden = !s.installed;
+			if (s.installed) {
+				var st = !s.enabled ? ["off", "sec-neutral", "Sharing is turned off; the drives show only here."] :
+					s.sharing ? ["sharing", "sec-ok", "On the network as " + smbHost(s) + "."] :
+					["idle", "sec-neutral", "Starts when a drive is plugged in."];
+				shState.appendChild(badge(st[0], st[1]));
+				shState.appendChild(el("span", { class: "status", text: st[2] }));
+				// The checkbox follows the saved setting until it is first shown
+				if (!formSet) { enChk.checked = !!s.enabled; formSet = true; }
+				shAccess.textContent = s.password ?
+					"Password-protected: sign in as \"" + s.user + "\" with the share password. Set a new one below, " +
+					"or remove it to let anyone on the network in." :
+					"No password: anyone on the router's network can read and write the drives. Windows 11 refuses " +
+					"to connect without one: set a password, and sign in as \"" + s.user + "\" with it.";
+				pwClear.hidden = !s.password;
+			}
+
+			clear(howWrap);
+			var h = smbHost(s);
+			howWrap.appendChild(el("p", { class: "descr", text:
+				"Windows: in File Explorer's address bar, type \\\\" + h + " (the router also appears under Network). " +
+				"macOS: Finder → Go → Connect to Server → smb://" + h + ". Android and iOS: a file manager's " +
+				"\"connect to server\" (SMB) with " + h + "." }));
+			howWrap.appendChild(el("p", { class: "descr", text:
+				"\"Open in a new tab\" and the files below open from the router (port " + (s.http_port || 8082) + "), " +
+				"which asks for the router's sign-in: root and its password. Only the router's own network reaches the " +
+				"drives; nothing is shared to the internet." }));
+		}
+
+		function crumbsFor(name, path) {
+			clear(fbCrumbs);
+			var parts = path ? path.split("/") : [];
+			var link = function (label, p) {
+				return el("button", { type: "button", class: "linkbtn", text: label, onclick: function () { browse(name, p); } });
+			};
+			fbCrumbs.appendChild(link(name, ""));
+			parts.forEach(function (seg, i) {
+				fbCrumbs.appendChild(el("span", { class: "muted", text: " / " }));
+				var p = parts.slice(0, i + 1).join("/");
+				fbCrumbs.appendChild(i === parts.length - 1 ? el("span", { text: seg }) : link(seg, p));
+			});
+		}
+		function when(t) {
+			if (!t) return "";
+			var d = new Date(t * 1000);
+			function two(n) { return (n < 10 ? "0" : "") + n; }
+			return d.getFullYear() + "-" + two(d.getMonth() + 1) + "-" + two(d.getDate()) + " " + two(d.getHours()) + ":" + two(d.getMinutes());
+		}
+		function browse(name, path) {
+			browsing = { name: name, path: path };
+			fbPanel.hidden = false;
+			fbHead.textContent = "Files on " + name;
+			crumbsFor(name, path);
+			clear(fbWrap).appendChild(el("div", { class: "muted", text: "Loading…" }));
+			call("pirate.usb", "list", { name: name, path: path }).then(function (r) {
+				if (!browsing || browsing.name !== name || browsing.path !== path) return;
+				if (r.error) { clear(fbWrap).appendChild(alertEl("warn", r.error)); return; }
+				var list = r.entries || [];
+				var port = (last && last.http_port) || 8082;
+				clear(fbWrap);
+				if (!list.length) { fbWrap.appendChild(el("div", { class: "placeholder", text: "This folder is empty." })); return; }
+				var rows = [];
+				if (r.path) {
+					var up = r.path.split("/").slice(0, -1).join("/");
+					rows.push([el("button", { type: "button", class: "linkbtn", text: "↑ up", onclick: function () { browse(name, up); } }), "", ""]);
+				}
+				list.forEach(function (f) {
+					var p = r.path ? r.path + "/" + f.name : f.name;
+					rows.push([
+						f.dir ? el("button", { type: "button", class: "linkbtn", text: f.name + "/", onclick: function () { browse(name, p); } })
+							: el("a", { href: fileUrl(port, name, p), target: "_blank", rel: "noopener", text: f.name }),
+						f.dir ? "" : size(f.size),
+						when(f.mtime)
+					]);
+				});
+				fbWrap.appendChild(tableEl(["Name", "Size", "Modified"], rows));
+				if (r.truncated) fbWrap.appendChild(el("p", { class: "descr", text:
+					"Showing the first " + list.length + " of " + r.total + " entries; open the folder in a new tab, or over the network, for all of them." }));
+			}).catch(function (e) {
+				if (failed(e)) return;
+				clear(fbWrap).appendChild(alertEl("warn", String(e.message || e)));
+			});
+		}
+
+		function eject(d, line) {
+			if (!window.confirm("Eject " + d.name + "? It stops being shared and is safe to pull out; plug it in again to use it.")) return;
+			line.className = "status"; line.textContent = "ejecting…";
+			call("pirate.usb", "eject", { name: d.name }).then(function (r) {
+				if (r.error) { line.className = "status err"; line.textContent = r.error; return; }
+				line.className = "status ok-text"; line.textContent = "ejected: safe to pull out";
+				if (browsing && browsing.name === d.name) { browsing = null; fbPanel.hidden = true; }
+				setTimeout(status, 800);
+			}).catch(function (e) {
+				if (failed(e)) return;
+				line.className = "status err"; line.textContent = String(e.message || e);
+			});
+		}
+		function saveEnabled() {
+			enStatus.className = "status"; enStatus.textContent = "saving…";
+			call("pirate.usb", "set", { enabled: enChk.checked }).then(function (r) {
+				if (r.error) { enStatus.className = "status err"; enStatus.textContent = r.error; return; }
+				enStatus.className = "status ok-text"; enStatus.textContent = "saved";
+				showStatus(r);
+			}).catch(function (e) {
+				if (failed(e)) return;
+				enStatus.className = "status err"; enStatus.textContent = String(e.message || e);
+			});
+		}
+		// pw: null takes the form's; "" removes the password
+		function setPassword(pw) {
+			var bad = function (msg) { pwStatus.className = "status err"; pwStatus.textContent = msg; };
+			if (pw === null) {
+				if (pw1.value.length < 5) return bad("use at least 5 characters");
+				if (pw1.value !== pw2.value) return bad("the two entries differ");
+				pw = pw1.value;
+			} else if (!window.confirm("Remove the share password? Anyone on the network can then read and write the drives.")) {
+				return;
+			}
+			pwStatus.className = "status"; pwStatus.textContent = "saving…";
+			call("pirate.usb", "set_password", { password: pw }).then(function (r) {
+				if (r.error) return bad(r.error);
+				pw1.value = ""; pw2.value = "";
+				pwStatus.className = "status ok-text";
+				pwStatus.textContent = r.password ? "password set" : "password removed";
+				showStatus(r);
+			}).catch(function (e) {
+				if (failed(e)) return;
+				bad(String(e.message || e));
+			});
+		}
+		function status() {
+			return call("pirate.usb", "status").then(showStatus).catch(function (e) {
+				if (failed(e)) return;
+				clear(drWrap).appendChild(alertEl("warn", String(e.message || e)));
+			});
+		}
+
+		// Drives come and go as they're plugged in and pulled out: keep the
+		// page current while it is open.
+		if (USB_TIMER) clearInterval(USB_TIMER);
+		USB_TIMER = setInterval(function () {
+			if (current !== "drives") { clearInterval(USB_TIMER); USB_TIMER = null; return; }
+			status();
+		}, 4000);
+		status();
+	}
+
 	/* ---------- fallback for an unknown route ---------- */
 
 	function renderPlaceholder(name) {
@@ -1756,6 +2077,7 @@
 		["threats", "Threats"],
 		["router", "Router"],
 		["dreampi", "DreamPi"],
+		["drives", "Drives"],
 		["capture", "Capture"],
 		["handshake", "Handshake"],
 		["firmware", "Firmware"]
@@ -1784,6 +2106,7 @@
 		if (id === "threats") return renderThreats();
 		if (id === "router") return renderRouter();
 		if (id === "dreampi") return renderDreampi();
+		if (id === "drives") return renderDrives();
 		if (id === "capture") return renderCapture();
 		if (id === "handshake") return renderHandshake();
 		if (id === "firmware") return renderFirmware();

@@ -64,6 +64,16 @@ kmod-nls-utf8
 exfat-mkfs
 exfat-fsck
 
+# USB flash drives and disks: plugged in, a drive is mounted and shared on the
+# network (SMB: ksmbd, the kernel's server; wsdd2 lists the router in
+# Windows' Network view) and on the Pirate Radio UI's Drives tab; pulled out,
+# sharing stops (pirate-usb, in pirate-radio-ui). Neither server runs while
+# no drive is plugged in. NTFS needs ntfs3 on top of the card's filesystems
+# below; the full image's kernel is its own, so these kmods are built in.
+ksmbd-server
+wsdd2
+kmod-fs-ntfs3
+
 # lsusb, for checking what is plugged in
 usbutils
 

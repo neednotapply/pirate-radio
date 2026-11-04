@@ -1,0 +1,15 @@
+#!/bin/sh
+# USB drive sharing (pirate-usb): ksmbd, the SMB server, and wsdd2, which lists
+# the router in Windows' Network view, run only while a USB drive is plugged
+# in. pirate-usb starts and stops them, so neither starts at boot.
+
+[ -x /etc/init.d/ksmbd ] && /etc/init.d/ksmbd disable
+[ -x /etc/init.d/wsdd2 ] && /etc/init.d/wsdd2 disable
+
+# What Windows and macOS show for the server
+if [ -n "$(uci -q get 'ksmbd.@globals[0]')" ]; then
+	uci -q set 'ksmbd.@globals[0].description=Pirate Radio'
+	uci -q commit ksmbd
+fi
+
+exit 0

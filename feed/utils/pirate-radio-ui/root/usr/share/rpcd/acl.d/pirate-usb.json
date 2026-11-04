@@ -1,0 +1,15 @@
+{
+	"pirate-usb": {
+		"description": "Grant access to USB drives: the plugged-in drives, their folders, ejecting them and the network share settings",
+		"read": {
+			"ubus": {
+				"pirate.usb": [ "status", "list" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.usb": [ "eject", "set", "set_password" ]
+			}
+		}
+	}
+}

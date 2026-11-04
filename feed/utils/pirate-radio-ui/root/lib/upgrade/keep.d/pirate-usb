@@ -1,0 +1,2 @@
+# The SMB share password (pirate-usb), kept across firmware upgrades
+/etc/ksmbd/ksmbdpwd.db

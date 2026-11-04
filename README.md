@@ -134,8 +134,10 @@ while the ADS-B job runs. gpsd starts when a USB GPS appears (the devices in
 `/etc/config/gpsd`) and stops when it goes. DreamPi runs only while its USB
 modem is in: its modem daemon, the Dreamcast's DNS server and the Dreamcast
 Now helper, with its packet fixes, `dreampi.local` and (if on) the DMZ; they
-all go when the modem does. A USB Wi-Fi adapter is OpenWrt's own (netifd), and
-the microSD card mounts when it goes in. Jobs whose radio is missing show
+all go when the modem does. A USB flash drive or disk is mounted and shared
+while it is in, and sharing stops when the last one is pulled out (below). A
+USB Wi-Fi adapter is OpenWrt's own (netifd), and the microSD card mounts when
+it goes in. Jobs whose radio is missing show
 as *waiting*. Other USB devices are left alone; the supported radios are
 listed in `pirate_radio_kind` (`/usr/share/pirate-radio/lib.sh`). A HackRF with a
 PortaPack on Mayhem firmware is only a USB serial console until you switch it
@@ -151,7 +153,8 @@ same status with every address the receivers serve, the aircraft map, the ISM
 devices rtl_433 has decoded (one row per device, with its latest readings) and
 the recorded files; using a radio hands the RTL-SDR to that job. The Dashboard,
 Hosts, Wi-Fi Survey, Threats, Router, Capture, Handshake and Firmware tabs cover
-the network, the router and firmware, and the DreamPi tab the Dreamcast (below).
+the network, the router and firmware, the DreamPi tab the Dreamcast and the
+Drives tab USB drives (below).
 
 **Over SSH:**
 
@@ -257,6 +260,32 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
   Settings are in `/etc/config/dreampi`; `logread -e dreampi -e pppd` shows the
   calls.
 
+**USB drives:** plug a flash drive or disk into the USB port (through the hub
+if a radio is in too) and within a few seconds it is mounted at
+`/mnt/usb/<its label>` and shared:
+
+- **On the network**, over SMB: `\\pirateradio.local\<label>` in Windows'
+  File Explorer (the router also shows under Network), `smb://pirateradio.local`
+  in macOS's Finder (Go → Connect to Server), or a phone's file manager. The
+  server is the kernel's ksmbd, with wsdd2 so that Windows lists it, and only
+  the router's own network reaches it. Until a share password is set, anyone
+  on that network can read and write the drives. **Windows 11 won't connect
+  without a password**: set one on the Drives tab and sign in as `pirate`
+  with it.
+- **On the Drives tab**: each drive, its free space and network paths, a file
+  browser, and links that open files from the router (port 8082, behind the
+  router's own sign-in, root and its password). **Eject** stops sharing a
+  drive, unmounts it and powers it down, ready to pull out.
+
+Pull it out and it is unmounted and no longer shared; with no drive left,
+the SMB server and port 8082 stop. FAT32, exFAT, NTFS and ext4 drives work;
+one that won't mount for writing (NTFS that Windows didn't shut down
+cleanly) is shared read-only. The microSD card, and anything else
+`/etc/config/fstab` names, is left to block-mount and not shared. Turn
+sharing off on the tab to keep the drives to the Drives tab; the settings are
+in `/etc/config/pirate-usb`, and `logread -e pirate-usb` shows drives coming
+and going.
+
 **On the card** (`pirate-radio/<job>/<date>/`):
 
 | Files | Open with |
@@ -305,8 +334,11 @@ Tested in this repository's tests and builds:
   `tests/fakemodem`, a modem with a Dreamcast dialling on a pseudo-terminal;
   the call script, NAT rules, Dreamcast Now with its name form and the
   port-1998 configure helper, init script, hotplug hook, DMZ and the UI's
-  backend), against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 310
+  backend), USB drives (mounting by label and filesystem, the microSD card
+  and swap left alone, read-only fallback, the shares and share password,
+  the folder listing and its limits, eject, and the block hotplug hook),
+  against mock radios and tools on that same userland, and the rename from
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 362
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
@@ -357,7 +389,7 @@ Not yet run:
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
-| `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics, firmware, capture, handshake, and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
+| `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics, firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
 | `config/full.config` | full-build options (spectral scan, ath10k) |
 | `build.sh`, `scripts/` | the Docker build (SDK, then ImageBuilder) |

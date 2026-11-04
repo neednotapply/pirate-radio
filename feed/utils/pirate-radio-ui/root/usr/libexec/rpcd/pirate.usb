@@ -1,0 +1,62 @@
+#!/bin/sh
+# rpcd plugin for the Pirate Radio web UI's Drives page: USB drives plugged
+# into the router. A thin wrapper over the pirate-usb tool.
+#
+#   ubus call pirate.usb status
+#   ubus call pirate.usb list '{"name":"KINGSTON","path":"Photos/2026"}'
+#   ubus call pirate.usb eject '{"name":"KINGSTON"}'
+#   ubus call pirate.usb set '{"enabled":true}'
+#   ubus call pirate.usb set_password '{"password":"…"}'   ("" = none: guests)
+
+. /usr/share/libubox/jshn.sh
+
+TOOL=${PIRATE_USB:-/usr/sbin/pirate-usb}
+
+run_list() {
+	local input name path
+	read -r input
+	json_load "$input"
+	json_get_var name name
+	json_get_var path path
+	"$TOOL" list "$name" "$path"
+}
+
+run_eject() {
+	local input name
+	read -r input
+	json_load "$input"
+	json_get_var name name
+	"$TOOL" eject "$name"
+}
+
+run_set() {
+	local input enabled
+	read -r input
+	json_load "$input"
+	json_get_var enabled enabled
+	"$TOOL" set "$enabled"
+}
+
+run_set_password() {
+	local input pw
+	read -r input
+	json_load "$input"
+	json_get_var pw password
+	# The password goes to the tool on stdin, never on its command line.
+	printf '%s' "$pw" | "$TOOL" set_password
+}
+
+case "$1" in
+list)
+	echo '{ "status": {}, "list": { "name": "str", "path": "str" }, "eject": { "name": "str" }, "set": { "enabled": true }, "set_password": { "password": "str" } }'
+	;;
+call)
+	case "$2" in
+	status)       "$TOOL" status ;;
+	list)         run_list ;;
+	eject)        run_eject ;;
+	set)          run_set ;;
+	set_password) run_set_password ;;
+	esac
+	;;
+esac

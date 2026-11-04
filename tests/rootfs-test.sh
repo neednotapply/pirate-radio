@@ -1061,6 +1061,240 @@ lhp ACTION=ifup INTERFACE=lan
 lhp ACTION=ifup INTERFACE=wan
 check "local: dnsmasq left alone when nothing changed, other interfaces ignored" [ ! -s "$DP_CALLS" ]
 
+echo "# pirate-radio-ui: USB drives plug and play (pirate-usb)"
+U="$T/usb"
+UM="$U/bin"
+mkdir -p "$UM" "$U/blk" "$U/dev" "$U/mnt" "$U/run"
+: > "$U/mounts"
+export USB_T="$U"
+# Mocks: block info (canned per device), mount and umount (a fake
+# /proc/mounts), df, logger, the ksmbd and wsdd2 init scripts, ksmbd.adduser,
+# and the pirate-usb init script (a reload scans and shares, as its
+# start_service does).
+cat > "$UM/block" <<-'EOF'
+	#!/bin/sh
+	[ "$1" = info ] && [ -f "$USB_T/blk/${2#/dev/}" ] && cat "$USB_T/blk/${2#/dev/}"
+	exit 0
+EOF
+cat > "$UM/mount" <<-'EOF'
+	#!/bin/sh
+	# mount -t <fs> -o <options> <device> <folder>
+	echo "mount $*" >> "$USB_T/calls"
+	case "$4" in rw,*) [ -e "$USB_T/rofail.${5#/dev/}" ] && exit 32 ;; esac
+	echo "$5 $6 $2 $4 0 0" >> "$PIRATE_MOUNTS"
+EOF
+cat > "$UM/umount" <<-'EOF'
+	#!/bin/sh
+	echo "umount $*" >> "$USB_T/calls"
+	lazy=
+	[ "$1" = -l ] && { lazy=1; shift; }
+	[ -z "$lazy" ] && [ -e "$USB_T/busy" ] && exit 1
+	grep -v " $1 " "$PIRATE_MOUNTS" > "$PIRATE_MOUNTS.new"
+	mv "$PIRATE_MOUNTS.new" "$PIRATE_MOUNTS"
+EOF
+cat > "$UM/df" <<-'EOF'
+	#!/bin/sh
+	echo "Filesystem 1024-blocks Used Available Capacity Mounted on"
+	echo "/dev/x 1000 400 600 40% $2"
+EOF
+cat > "$UM/logger" <<-'EOF'
+	#!/bin/sh
+	echo "$*" >> "$USB_T/log"
+EOF
+cat > "$UM/ksmbd-init" <<-'EOF'
+	#!/bin/sh
+	n=${0##*/}
+	case "$1" in
+	running) [ -e "$USB_T/$n.on" ] ;;
+	start | restart) echo "$n $1" >> "$USB_T/calls"; : > "$USB_T/$n.on" ;;
+	stop) echo "$n $1" >> "$USB_T/calls"; rm -f "$USB_T/$n.on" ;;
+	esac
+EOF
+cp "$UM/ksmbd-init" "$UM/wsdd2-init"
+cat > "$UM/adduser" <<-'EOF'
+	#!/bin/sh
+	# ksmbd.adduser -P <db> -C <conf> [-d] <user>; the password, typed and
+	# retyped, on stdin
+	echo "adduser $*" >> "$USB_T/calls"
+	db= del=
+	while [ $# -gt 1 ]; do
+		case "$1" in -P) db=$2; shift 2 ;; -C) shift 2 ;; -d) del=1; shift ;; *) shift ;; esac
+	done
+	if [ -n "$del" ]; then grep -v "^$1:" "$db" > "$db.new"; mv "$db.new" "$db"; exit 0; fi
+	read -r a; read -r b
+	[ "$a" = "$b" ] || exit 1
+	echo "$a" > "$USB_T/pw-got"
+	{ grep -v "^$1:" "$db" 2> /dev/null; echo "$1:hash"; } > "$db.new"
+	mv "$db.new" "$db"
+EOF
+cat > "$UM/pirate-usb-init" <<-'EOF'
+	#!/bin/sh
+	echo "init $*" >> "$USB_T/calls"
+	[ "$1" = reload ] && pirate-usb scan && pirate-usb share
+	exit 0
+EOF
+chmod +x "$UM"/*
+uenv() {
+	env PATH="$UM:$PATH" PIRATE_USB_ROOT="$U/mnt/usb" PIRATE_USB_RUN="$U/run" PIRATE_SYSFS="$U/sys" \
+		PIRATE_DEV_ROOT="$U" PIRATE_MOUNTS="$U/mounts" PIRATE_USB_INIT="$UM/pirate-usb-init" \
+		PIRATE_KSMBD_INIT="$UM/ksmbd-init" PIRATE_WSDD2_INIT="$UM/wsdd2-init" PIRATE_KSMBD_ADDUSER="$UM/adduser" \
+		PIRATE_KSMBD_SHARES="$U/run/config/ksmbd" PIRATE_KSMBD_PWDDB="$U/ksmbdpwd.db" "$@"
+}
+pu() { uenv pirate-usb "$@"; }
+# mkdisk <disk> <usb|mmc> <vendor> <model>; mkpart <disk> <partition> <block info>
+mkdisk() {
+	local d="$U/sys/devices/platform/ahb/mmc0/block/$1"
+	[ "$2" = usb ] && d="$U/sys/devices/platform/ahb/1b000000.usb/usb1/1-1/1-1:1.0/host1/block/$1"
+	mkdir -p "$d/device" "$U/sys/class/block" "$U/sys/block"
+	printf '%-8s\n' "$3" > "$d/device/vendor"
+	printf '%-16s\n' "$4" > "$d/device/model"
+	: > "$d/device/delete"
+	ln -sfn "$d" "$U/sys/class/block/$1"
+	ln -sfn "$d" "$U/sys/block/$1"
+	: > "$U/dev/$1"
+}
+mkpart() {
+	local d
+	d="$(readlink -f "$U/sys/block/$1")/$2"
+	mkdir -p "$d"
+	echo "${2#"$1"}" > "$d/partition"
+	ln -sfn "$d" "$U/sys/class/block/$2"
+	: > "$U/dev/$2"
+	echo "/dev/$2: $3" > "$U/blk/$2"
+}
+# The microSD card (fstab's, by its label) with swap on it; a flash drive; an
+# NTFS disk with the flash drive's label; a disk that isn't on USB; a drive
+# that only mounts read-only, with a name ksmbd keeps; a disk without
+# partitions.
+[ -f /etc/config/fstab ] || : > /etc/config/fstab
+uci set fstab.pirateradio=mount
+uci set fstab.pirateradio.label=PIRATERADIO
+uci set fstab.pirateradio.target=/mnt/sdcard
+uci commit fstab
+mkdisk sda usb Generic "STORAGE DEVICE"
+mkpart sda sda1 'UUID="9279-E51D" LABEL="PIRATERADIO" VERSION="1.0" TYPE="exfat"'
+mkpart sda sda2 'VERSION="1" TYPE="swap"'
+mkdisk sdb usb Kingston "DataTraveler 3.0"
+mkpart sdb sdb1 'UUID="1234-ABCD" LABEL="My Stick!" VERSION="FAT32" TYPE="vfat"'
+mkdisk sdc usb WD Elements
+mkpart sdc sdc1 'UUID="01D9F00DCAFE" LABEL="My Stick" TYPE="ntfs"'
+mkdisk sdd mmc Generic Internal
+mkpart sdd sdd1 'UUID="b6c2" TYPE="ext4"'
+mkdisk sde usb SanDisk Cruzer
+mkpart sde sde1 'UUID="AAAA-BBBB" LABEL="GLOBAL" TYPE="exfat"'
+: > "$U/rofail.sde1"
+mkdisk sdf usb Seagate Expansion
+echo '/dev/sdf: UUID="77d1" TYPE="ext4"' > "$U/blk/sdf"
+mkdir -p "$U/mnt/usb/stale" "$U/mnt/usb/kept"
+: > "$U/mnt/usb/kept/file"
+pu scan
+check "usb: a flash drive is mounted under its label, for anyone to write" grep -q "^/dev/sdb1 $U/mnt/usb/My_Stick vfat rw,noatime,umask=0000,utf8,shortname=mixed,flush," "$U/mounts"
+check "usb: the microSD card (fstab's) is left to block-mount" sh -c "! grep -q '^/dev/sda1 ' '$U/mounts'"
+check "usb: swap isn't mounted" sh -c "! grep -q '^/dev/sda2 ' '$U/mounts'"
+check "usb: a disk not on USB is left alone" sh -c "! grep -q '^/dev/sdd1 ' '$U/mounts'"
+check "usb: NTFS mounts with ntfs3; the same label gets a name of its own" grep -q "^/dev/sdc1 $U/mnt/usb/My_Stick_sdc1 ntfs3 rw,noatime," "$U/mounts"
+check "usb: a drive that won't mount for writing mounts read-only; a name ksmbd keeps is changed" grep -q "^/dev/sde1 $U/mnt/usb/GLOBAL_sde1 exfat ro," "$U/mounts"
+check "usb: a disk without partitions is mounted under its device's name" grep -q "^/dev/sdf $U/mnt/usb/sdf ext4 rw,noatime " "$U/mounts"
+check "usb: a partitioned disk itself isn't mounted" sh -c "! grep -q '^/dev/sdb ' '$U/mounts'"
+check "usb: empty folders left behind are cleared, others kept" sh -c "[ ! -e '$U/mnt/usb/stale' ] && [ -f '$U/mnt/usb/kept/file' ]"
+check "usb: drives lists the four" [ "$(pu drives | wc -l)" = 4 ]
+n=$(wc -l < "$U/mounts")
+pu scan
+check "usb: scanning again mounts nothing twice" [ "$(wc -l < "$U/mounts")" = "$n" ]
+pu status > "$U/status.json"
+ujs() { jsonfilter -i "$U/status.json" -e "$1"; }
+check "usb status: the drive, its model and space" [ "$(ujs '@.drives[0].name') $(ujs '@.drives[0].fs') $(ujs '@.drives[0].model') $(ujs '@.drives[0].size') $(ujs '@.drives[0].free')" = "My_Stick vfat Kingston DataTraveler 3.0 1024000 614400" ]
+check "usb status: the read-only drive says so" [ "$(ujs '@.drives[@.name="GLOBAL_sde1"].readonly') $(ujs '@.drives[0].readonly')" = "true false" ]
+check "usb status: not sharing yet, no password" [ "$(ujs '@.installed') $(ujs '@.sharing') $(ujs '@.password') $(ujs '@.user')" = "true false false pirate" ]
+
+: > "$U/calls"
+pu share
+sleep 1
+check "usb share: ksmbd and wsdd2 started" sh -c "grep -qx 'ksmbd-init start' '$U/calls' && grep -qx 'wsdd2-init start' '$U/calls'"
+check "usb share: one guest share per drive" sh -c "[ \$(grep -c '^config share' '$U/run/config/ksmbd') = 4 ] && [ \$(grep -c \"guest_ok 'yes'\" '$U/run/config/ksmbd') = 4 ] && grep -q \"path '$U/mnt/usb/My_Stick'\" '$U/run/config/ksmbd'"
+check "usb share: the read-only drive is shared read-only" sh -c "grep -A5 \"name 'GLOBAL_sde1'\" '$U/run/config/ksmbd' | grep -q \"read_only 'yes'\""
+: > "$U/calls"
+pu share
+check "usb share: nothing restarts when nothing changed" [ ! -s "$U/calls" ]
+check "usb status: sharing" [ "$(pu status | jsonfilter -e '@.sharing')" = true ]
+
+DR="$U/mnt/usb/My_Stick"
+mkdir -p "$DR/Photos/2026"
+: > "$DR/b.txt"
+printf 12345 > "$DR/A.txt"
+ln -s /etc "$DR/etc-link"
+ln -s Photos "$DR/pics"
+pu list My_Stick "" > "$U/list.json"
+check "usb list: folders, then files, by name; links out of the drive left out" [ "$(jsonfilter -i "$U/list.json" -e '@.entries[*].name' | tr '\n' ' ')" = "Photos pics A.txt b.txt " ]
+check "usb list: a file's size" [ "$(jsonfilter -i "$U/list.json" -e '@.entries[@.name="A.txt"].size')" = 5 ]
+check "usb list: a folder on the drive" [ "$(pu list My_Stick Photos | jsonfilter -e '@.path') $(pu list My_Stick Photos | jsonfilter -e '@.entries[0].name')" = "Photos 2026" ]
+check "usb list: .. is refused" [ "$(pu list My_Stick 'Photos/../..' | jsonfilter -e '@.error')" = "no such folder" ]
+check "usb list: a link out of the drive is refused" [ "$(pu list My_Stick etc-link | jsonfilter -e '@.error')" = "no such folder" ]
+check "usb list: only drives mounted here" [ "$(pu list .. | jsonfilter -e '@.error'), $(pu list nothere | jsonfilter -e '@.error')" = "no such drive, no such drive" ]
+
+# The block hotplug hook (hotplug-call sources it; here it runs under sh)
+UH=/etc/hotplug.d/block/30-pirate-usb
+uhp() { : > "$U/calls"; uenv PIRATE_USB_ACTIVE="$U/active" "$@" sh "$UH" > /dev/null 2>&1; cat "$U/calls"; }
+mkdisk sdg usb Lexar JumpDrive
+mkpart sdg sdg1 'UUID="C0DE-0001" LABEL="PHOTOS" TYPE="vfat"'
+rm -f "$U/active"
+check "usb hotplug: nothing while pirate-usb is stopped" [ -z "$(uhp ACTION=add DEVNAME=sdg1)" ]
+: > "$U/active"
+check "usb hotplug: a disk with partitions plugged in: nothing to mount" [ -z "$(uhp ACTION=add DEVNAME=sdg)" ]
+o=$(uhp ACTION=add DEVNAME=sdg1)
+check "usb hotplug: its partition is mounted and shared" sh -c "echo '$o' | grep -q '^mount -t vfat .* /dev/sdg1 $U/mnt/usb/PHOTOS$' && echo '$o' | grep -qx 'init reload' && grep -q \"name 'PHOTOS'\" '$U/run/config/ksmbd'"
+check "usb hotplug: other block devices are ignored" [ -z "$(uhp ACTION=add DEVNAME=mtdblock3)" ]
+# Pulled out: the kernel's devices are gone by the time the hook runs
+rm -rf "$U/sys/class/block/sdg1" "$U/sys/class/block/sdg" "$U/dev/sdg1" "$U/dev/sdg"
+o=$(uhp ACTION=remove DEVNAME=sdg1)
+check "usb hotplug: pulled out, it is detached at once and no longer shared" sh -c "echo '$o' | grep -qx 'umount -l $U/mnt/usb/PHOTOS' && echo '$o' | grep -qx 'init reload' && [ ! -e '$U/mnt/usb/PHOTOS' ] && ! grep -q \"name 'PHOTOS'\" '$U/run/config/ksmbd'"
+check "usb hotplug: its disk going away changes nothing" [ -z "$(uhp ACTION=remove DEVNAME=sdg)" ]
+
+: > "$U/busy"
+pu eject My_Stick > "$U/eject.json"
+check "usb eject: a drive in use stays mounted and shared" sh -c "jsonfilter -i '$U/eject.json' -e '@.error' | grep -q 'in use' && grep -q '^/dev/sdb1 ' '$U/mounts' && grep -q \"name 'My_Stick'\" '$U/run/config/ksmbd' && ! grep -qx sdb '$U/run/ejected'"
+rm -f "$U/busy"
+: > "$U/calls"
+pu eject My_Stick > "$U/eject.json"
+check "usb eject: unmounted, unshared and powered down" sh -c "[ \"\$(jsonfilter -i '$U/eject.json' -e '@.ok')\" = true ] && ! grep -q '^/dev/sdb1 ' '$U/mounts' && ! grep -q \"name 'My_Stick'\" '$U/run/config/ksmbd' && [ \"\$(cat '$U/sys/block/sdb/device/delete')\" = 1 ] && grep -qx 'init reload' '$U/calls'"
+pu scan
+check "usb eject: an ejected drive isn't mounted again until plugged in again" sh -c "! grep -q '^/dev/sdb1 ' '$U/mounts'"
+pu add sdb1
+check "usb eject: plugged in again, it is mounted again" sh -c "grep -q '^/dev/sdb1 $U/mnt/usb/My_Stick ' '$U/mounts' && ! grep -qx sdb '$U/run/ejected'"
+pu share
+o=$(pu remove sdc1; echo "rc=$?")
+check "usb: remove unmounts a drive that was pulled out" sh -c "! grep -q '^/dev/sdc1 ' '$U/mounts' && [ ! -e '$U/mnt/usb/My_Stick_sdc1' ] && echo '$o' | grep -qx rc=0"
+check "usb: remove of a drive not mounted here does nothing" sh -c "! env PATH='$UM:$PATH' PIRATE_USB_ROOT='$U/mnt/usb' PIRATE_MOUNTS='$U/mounts' pirate-usb remove sda1"
+
+: > "$U/calls"
+check "usb password: too short is refused" [ "$(printf abc | pu set_password | jsonfilter -e '@.error')" = "use at least 5 characters" ]
+printf 'S3cret pass' | pu set_password > "$U/pw.json"
+check "usb password: set through ksmbd.adduser's stdin, never its command line" sh -c "[ \"\$(cat '$U/pw-got')\" = 'S3cret pass' ] && ! grep -q S3cret '$U/calls'"
+check "usb password: the shares want it now" sh -c "[ \"\$(jsonfilter -i '$U/pw.json' -e '@.password')\" = true ] && ! grep -q \"guest_ok 'yes'\" '$U/run/config/ksmbd' && grep -q \"users 'pirate'\" '$U/run/config/ksmbd'"
+check "usb password: ksmbd restarted to take it" grep -qx 'ksmbd-init restart' "$U/calls"
+: > "$U/calls"
+printf 'N3w secret' | pu set_password > /dev/null
+check "usb password: a new one restarts ksmbd too" grep -qx 'ksmbd-init restart' "$U/calls"
+printf '' | pu set_password > "$U/pw.json"
+check "usb password: removed, guests get in again" sh -c "[ \"\$(jsonfilter -i '$U/pw.json' -e '@.password')\" = false ] && grep -q 'adduser .*-d pirate' '$U/calls' && grep -q \"guest_ok 'yes'\" '$U/run/config/ksmbd'"
+
+: > "$U/calls"
+pu set 0 > "$U/set.json"
+check "usb set: sharing off stops ksmbd and wsdd2" sh -c "[ \"\$(jsonfilter -i '$U/set.json' -e '@.enabled')\" = false ] && grep -qx 'ksmbd-init stop' '$U/calls' && grep -qx 'wsdd2-init stop' '$U/calls' && [ ! -e '$U/run/config/ksmbd' ]"
+check "usb set: the drives stay mounted for the web UI" [ "$(pu drives | wc -l)" = 4 ]
+check "usb set: rejects anything but on and off" [ "$(pu set maybe | jsonfilter -e '@.error')" = "enabled: true or false" ]
+: > "$U/calls"
+pu set 1 > /dev/null
+check "usb set: sharing on starts ksmbd again" grep -qx 'ksmbd-init start' "$U/calls"
+
+check "usb rpcd: its methods" sh -c '/usr/libexec/rpcd/pirate.usb list | jsonfilter -e "@.set_password.password" | grep -qx str'
+check "usb rpcd: list" [ "$(echo '{"name":"My_Stick","path":"Photos"}' | uenv /usr/libexec/rpcd/pirate.usb call list | jsonfilter -e '@.entries[0].name')" = 2026 ]
+check "usb rpcd: the password goes through on stdin" [ "$(echo '{"password":"abc"}' | uenv /usr/libexec/rpcd/pirate.usb call set_password | jsonfilter -e '@.error')" = "use at least 5 characters" ]
+
+pu unmount_all
+check "usb: unmount_all unmounts every drive" sh -c "[ -z \"\$(env PIRATE_USB_ROOT='$U/mnt/usb' PIRATE_MOUNTS='$U/mounts' pirate-usb drives)\" ] && [ ! -e '$U/mnt/usb/My_Stick' ]"
+check "usb: first boot, without ksmbd installed" sh /etc/uci-defaults/96-pirate-usb
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

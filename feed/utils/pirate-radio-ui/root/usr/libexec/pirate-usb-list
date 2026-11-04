@@ -1,0 +1,75 @@
+#!/usr/bin/ucode
+// pirate-usb-list: one folder on a USB drive, for the web UI's Drives tab.
+//
+//   pirate-usb-list <drive folder> [path in it]
+//
+// Prints { path, entries: [{ name, dir, size, mtime }], total, truncated }:
+// folders first, then files, by name; at most MAX entries. Nothing outside
+// the drive's folder is listed or followed: ".." is refused, and symbolic
+// links that lead out of the drive are left out. Called by pirate-usb list.
+
+'use strict';
+
+import { lsdir, stat, lstat, realpath } from 'fs';
+
+const MAX = 2000;
+
+function fail(msg) {
+	printf('%J\n', { error: msg });
+	exit(0);
+}
+
+let base = ARGV[0], rel = ARGV[1] ?? '';
+let parts = filter(split(rel, '/'), (p) => p != '' && p != '.');
+for (let p in parts)
+	if (p == '..')
+		fail('no such folder');
+
+let root = realpath(base);
+if (!root)
+	fail('no such drive');
+let inside = (p) => p == root || index(p, root + '/') == 0;
+
+let dir = realpath(length(parts) ? root + '/' + join('/', parts) : root);
+if (!dir || !inside(dir))
+	fail('no such folder');
+let st = stat(dir);
+if (!st || st.type != 'directory')
+	fail('no such folder');
+
+let names = lsdir(dir);
+if (names == null)
+	fail("couldn't read the folder");
+
+let entries = [];
+for (let n in names) {
+	let p = dir + '/' + n;
+	let s = lstat(p);
+	if (!s)
+		continue;
+	if (s.type == 'link') {
+		let t = realpath(p);
+		if (!t || !inside(t))
+			continue;
+		s = stat(t);
+		if (!s)
+			continue;
+	}
+	let isdir = s.type == 'directory';
+	push(entries, { name: n, dir: isdir, size: isdir ? 0 : s.size, mtime: s.mtime });
+}
+
+sort(entries, (a, b) => {
+	if (a.dir != b.dir)
+		return a.dir ? -1 : 1;
+	let x = lc(a.name), y = lc(b.name);
+	return x < y ? -1 : (x > y ? 1 : 0);
+});
+
+let total = length(entries);
+printf('%J\n', {
+	path: dir == root ? '' : substr(dir, length(root) + 1),
+	entries: total > MAX ? slice(entries, 0, MAX) : entries,
+	total: total,
+	truncated: total > MAX
+});

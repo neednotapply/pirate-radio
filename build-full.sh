@@ -43,7 +43,9 @@ for opt in CONFIG_KERNEL_RELAY=y CONFIG_PACKAGE_ATH_SPECTRAL=y \
 	CONFIG_PACKAGE_kmod-ath9k=y CONFIG_PACKAGE_pirate-radio=y CONFIG_PACKAGE_pirate-radio-ui=y \
 	CONFIG_PACKAGE_dreampi=y \
 	CONFIG_PACKAGE_kmod-rt2800-usb=y CONFIG_PACKAGE_kmod-usb-acm=y \
-	CONFIG_PACKAGE_kmod-wireguard=y CONFIG_PACKAGE_kmod-zram=y; do
+	CONFIG_PACKAGE_kmod-wireguard=y CONFIG_PACKAGE_kmod-zram=y \
+	CONFIG_PACKAGE_ksmbd-server=y CONFIG_PACKAGE_kmod-fs-ksmbd=y CONFIG_PACKAGE_wsdd2=y \
+	CONFIG_PACKAGE_kmod-fs-ntfs3=y; do
 	grep -qx "$opt" .config || { echo "make defconfig dropped $opt" >&2; exit 1; }
 done
 if grep -qx 'CONFIG_PACKAGE_kmod-ath10k-ct=y' .config; then

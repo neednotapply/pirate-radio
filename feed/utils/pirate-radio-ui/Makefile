@@ -70,6 +70,17 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_DATA) ./root/etc/hotplug.d/tty/20-pirate-gps $(1)/etc/hotplug.d/tty/20-pirate-gps
 	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/libexec $(1)/usr/libexec/rpcd $(1)/usr/share/rpcd/acl.d
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-gps $(1)/usr/sbin/pirate-gps
+	# USB drives plug and play: mounted, and shared over SMB (ksmbd-server,
+	# wsdd2) and to the Drives page while plugged in
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/block $(1)/lib/upgrade/keep.d
+	$(INSTALL_BIN) ./root/etc/init.d/pirate-usb $(1)/etc/init.d/pirate-usb
+	$(INSTALL_DATA) ./root/etc/hotplug.d/block/30-pirate-usb $(1)/etc/hotplug.d/block/30-pirate-usb
+	$(INSTALL_BIN) ./root/etc/uci-defaults/96-pirate-usb $(1)/etc/uci-defaults/96-pirate-usb
+	$(INSTALL_DATA) ./root/lib/upgrade/keep.d/pirate-usb $(1)/lib/upgrade/keep.d/pirate-usb
+	$(INSTALL_BIN) ./root/usr/sbin/pirate-usb $(1)/usr/sbin/pirate-usb
+	$(INSTALL_BIN) ./root/usr/libexec/pirate-usb-list $(1)/usr/libexec/pirate-usb-list
+	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.usb $(1)/usr/libexec/rpcd/pirate.usb
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-usb.json $(1)/usr/share/rpcd/acl.d/pirate-usb.json
 	# Router basics
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-router $(1)/usr/sbin/pirate-router
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.router $(1)/usr/libexec/rpcd/pirate.router

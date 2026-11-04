@@ -353,3 +353,20 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .inp:focus { outline: 2px solid rgba(45,212,191,.5); border-color: transparent; }
 .status.ok-text { color: var(--ok); }
 .status.err { color: var(--bad); }
+
+/* Drives: one card per USB drive, its usage, and the file browser */
+.drive { border-top: 1px solid var(--line); padding: 14px 0 4px; }
+.drive:first-child { border-top: 0; padding-top: 2px; }
+.drive-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.drive-head strong { font-size: 16px; letter-spacing: .2px; }
+.drive .kv { margin: 10px 0 12px; }
+.drive-actions { margin: 0 0 8px; }
+a.btn { display: inline-block; text-decoration: none; }
+.meter { height: 8px; border-radius: 6px; background: var(--line); overflow: hidden; margin-bottom: 6px; }
+.meter > span { display: block; height: 100%; background: var(--accent); border-radius: 6px; }
+.meter.full > span { background: var(--warn); }
+.crumbs { font-family: var(--mono); font-size: 13px; margin: -4px 0 12px; overflow-wrap: anywhere; }
+.linkbtn { appearance: none; background: none; border: 0; padding: 0; font: inherit; color: var(--accent-2); cursor: pointer; text-align: left; }
+.linkbtn:hover { text-decoration: underline; }
+.tbl a { color: var(--accent-2); text-decoration: none; }
+.tbl a:hover { text-decoration: underline; }

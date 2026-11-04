@@ -1,0 +1,423 @@
+#!/bin/sh
+# pirate-usb: plug and play for USB drives. A flash drive or disk plugged into
+# the router's USB port is mounted under /mnt/usb/<its label> and shared while
+# it is plugged in: on the network over SMB (ksmbd, with wsdd2 so Windows'
+# Network view lists the router) and to the web UI's Drives tab (HTTP on port
+# 8082, behind the router's login). When the last drive goes, sharing stops.
+# The block hotplug hook (/etc/hotplug.d/block/30-pirate-usb) mounts and
+# unmounts; the pirate-usb init script shares what is mounted.
+#
+# Whatever fstab names (the microSD card, by its label) is block-mount's and
+# is left alone, as are filesystems this can't mount (swap and the like).
+#
+# SMB: guests read and write the drives until a share password is set; with
+# one, only its user (pirate.usb's "user", "pirate") gets in. Windows 11 turns
+# guests away, so it needs the password.
+#
+#   pirate-usb add <dev>           mount a drive that was plugged in (sdb1)
+#   pirate-usb remove <dev>        unmount a drive that was pulled out
+#   pirate-usb scan                mount every USB drive not mounted yet
+#   pirate-usb drives              the mounted drives: <device> <folder> <type> <options>
+#   pirate-usb share [force]       share the mounted drives over SMB, or stop if none
+#   pirate-usb unshare             stop sharing over SMB
+#   pirate-usb unmount_all         unmount every drive
+#   pirate-usb status              JSON: the drives and the share settings
+#   pirate-usb list <name> [path]  JSON: a folder on a drive
+#   pirate-usb eject <name>        unmount a drive (with its disk's other partitions)
+#                                  and power the disk down, ready to pull out
+#   pirate-usb set <enabled>       share over SMB or not (1/0)
+#   pirate-usb set_password        the share password, read from stdin
+#                                  (empty: no password, guests get in)
+
+. /usr/share/libubox/jshn.sh
+
+# Overridable for tests.
+ROOT=${PIRATE_USB_ROOT:-/mnt/usb}
+RUN=${PIRATE_USB_RUN:-/var/run/pirate-usb}
+SYSFS=${PIRATE_SYSFS:-/sys}
+DEV_ROOT=${PIRATE_DEV_ROOT:-}
+MOUNTS=${PIRATE_MOUNTS:-/proc/mounts}
+INIT=${PIRATE_USB_INIT:-/etc/init.d/pirate-usb}
+KSMBD_INIT=${PIRATE_KSMBD_INIT:-/etc/init.d/ksmbd}
+WSDD2_INIT=${PIRATE_WSDD2_INIT:-/etc/init.d/wsdd2}
+ADDUSER=${PIRATE_KSMBD_ADDUSER:-ksmbd.adduser}
+SHARES=${PIRATE_KSMBD_SHARES:-/var/run/config/ksmbd}
+PWDDB=${PIRATE_KSMBD_PWDDB:-/etc/ksmbd/ksmbdpwd.db}
+LIST=${PIRATE_USB_LIST:-/usr/libexec/pirate-usb-list}
+HTTP_PORT=8082
+
+opt() { uci -q get "pirate-usb.share.$1" || echo "$2"; }
+share_user() {
+	local u
+	u=$(opt user pirate)
+	case "$u" in '' | *[!a-z0-9_-]*) u=pirate ;; esac
+	echo "$u"
+}
+has_password() { grep -q "^$(share_user):" "$PWDDB" 2> /dev/null; }
+log() { logger -t pirate-usb "$*"; }
+err() {
+	json_init
+	json_add_string error "$1"
+	json_dump
+}
+
+# on_usb <dev>: a block device on the USB bus (not the router's own flash)
+on_usb() {
+	case "$(readlink -f "$SYSFS/class/block/$1" 2> /dev/null)" in
+	*/usb[0-9]*/*) return 0 ;;
+	esac
+	return 1
+}
+
+# disk_of <dev>: the disk a partition is on (sdb1 -> sdb; sdb -> sdb)
+disk_of() {
+	local p
+	if [ -e "$SYSFS/class/block/$1/partition" ]; then
+		p=$(readlink -f "$SYSFS/class/block/$1")
+		p=${p%/*}
+		echo "${p##*/}"
+	else
+		echo "$1"
+	fi
+}
+
+# ejected <dev>: its disk was ejected and hasn't been plugged in again
+ejected() { grep -qx "$(disk_of "$1")" "$RUN/ejected" 2> /dev/null; }
+
+# mounted_dir <folder>: something is mounted there
+mounted_dir() { awk -v d="$1" '$2 == d { f = 1 } END { exit !f }' "$MOUNTS"; }
+
+# mount_of <dev>: the folder under $ROOT a device is mounted at
+mount_of() { awk -v d="/dev/$1" -v r="$ROOT/" '$1 == d && index($2, r) == 1 { print $2; exit }' "$MOUNTS"; }
+
+# fstab_owned <dev> <uuid> <label>: an fstab section names it, so it is
+# block-mount's (the microSD card, by its label)
+fstab_owned() {
+	uci -q show fstab | sed "s/='\(.*\)'\$/=\1/" | awk -v dev="/dev/$1" -v uuid="$2" -v label="$3" '
+		{ i = index($0, "="); k = substr($0, 1, i - 1); v = substr($0, i + 1) }
+		k ~ /\.uuid$/ && uuid != "" && tolower(v) == tolower(uuid) { f = 1 }
+		k ~ /\.label$/ && label != "" && v == label { f = 1 }
+		k ~ /\.device$/ && v == dev { f = 1 }
+		END { exit !f }'
+}
+
+# drive_name <dev> <label>: the folder and share name: the label, made safe
+# (letters, digits, . _ -), or the device's name
+drive_name() {
+	local n lc
+	n=$(printf '%s' "$2" | tr -c 'A-Za-z0-9._-' '_' | sed 's/^[._-]*//; s/_*$//' | cut -c 1-32)
+	# shellcheck disable=SC2018,SC2019
+	lc=$(echo "$n" | tr A-Z a-z)
+	# Names ksmbd keeps for itself
+	case "$lc" in
+	'') n=$1 ;;
+	global | homes | printers | print | ipc) n=${n}_$1 ;;
+	esac
+	mounted_dir "$ROOT/$n" && n=${n}_$1
+	echo "$n"
+}
+
+# mount_dev <dev>: mount a USB drive under $ROOT, if it is one this should
+mount_dev() {
+	local dev="$1" info type label uuid fs o dir
+
+	[ -e "$DEV_ROOT/dev/$dev" ] || return 1
+	on_usb "$dev" || return 1
+	grep -q "^/dev/$dev " "$MOUNTS" && return 1
+
+	info=$(block info "/dev/$dev" 2> /dev/null)
+	type=$(echo "$info" | sed -n 's/.* TYPE="\([^"]*\)".*/\1/p')
+	label=$(echo "$info" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')
+	uuid=$(echo "$info" | sed -n 's/.* UUID="\([^"]*\)".*/\1/p')
+	# Anyone may write (the SMB server writes as root anyway); FAT and NTFS
+	# have no owners to keep.
+	case "$type" in
+	vfat) fs=vfat o=umask=0000,utf8,shortname=mixed,flush,errors=remount-ro ;;
+	exfat) fs=exfat o=umask=0000,iocharset=utf8,errors=remount-ro ;;
+	ntfs | ntfs3) fs=ntfs3 o=umask=0000,iocharset=utf8 ;;
+	ext2 | ext3 | ext4) fs=ext4 o= ;;
+	f2fs | btrfs | xfs | hfsplus) fs=$type o= ;;
+	*) return 1 ;;
+	esac
+	fstab_owned "$dev" "$uuid" "$label" && return 1
+
+	dir="$ROOT/$(drive_name "$dev" "$label")"
+	mkdir -p "$dir" || return 1
+	# Read-only if it won't mount for writing (an NTFS drive Windows didn't
+	# shut down cleanly, say)
+	if mount -t "$fs" -o "rw,noatime${o:+,$o}" "/dev/$dev" "$dir" 2> /dev/null; then
+		log "$dev ($type${label:+, $label}) plugged in: mounted at $dir"
+	elif mount -t "$fs" -o "ro${o:+,$o}" "/dev/$dev" "$dir" 2> /dev/null; then
+		log "$dev ($type${label:+, $label}) plugged in: mounted read-only at $dir"
+	else
+		rmdir "$dir" 2> /dev/null
+		log "$dev ($type${label:+, $label}) plugged in: could not mount it"
+		return 1
+	fi
+}
+
+cmd_add() {
+	local disk
+	disk=$(disk_of "$1")
+	# Plugged in again after an eject
+	[ -f "$RUN/ejected" ] && sed -i "/^$disk\$/d" "$RUN/ejected"
+	mount_dev "$1"
+}
+
+cmd_remove() {
+	local dir
+	dir=$(mount_of "$1")
+	[ -n "$dir" ] || return 1
+	# It is gone already: detach it now, whatever still has files open
+	umount -l "$dir" 2> /dev/null
+	rmdir "$dir" 2> /dev/null
+	log "$1 pulled out: unmounted $dir"
+}
+
+cmd_scan() {
+	local d
+	mkdir -p "$ROOT"
+	# Folders left behind (a power cut), empty and not mounted on
+	for d in "$ROOT"/*; do
+		[ -d "$d" ] && ! mounted_dir "$d" && rmdir "$d" 2> /dev/null
+	done
+	for d in "$SYSFS"/class/block/sd*; do
+		[ -e "$d" ] || continue
+		ejected "${d##*/}" || mount_dev "${d##*/}"
+	done
+	return 0
+}
+
+cmd_drives() { awk -v r="$ROOT/" 'index($2, r) == 1 { print $1, $2, $3, $4 }' "$MOUNTS"; }
+
+# The ksmbd shares (UCI, appended to /etc/config/ksmbd by its init script):
+# one per mounted drive
+share_conf() {
+	local dev dir type opts ro n=0 pw=0 u
+	u=$(share_user)
+	has_password && pw=1
+	cmd_drives | while read -r dev dir type opts; do
+		ejected "${dev#/dev/}" && continue
+		ro=no
+		case ",$opts," in *,ro,*) ro=yes ;; esac
+		n=$((n + 1))
+		printf "config share 'usb%d'\n" "$n"
+		printf "\toption name '%s'\n" "${dir##*/}"
+		printf "\toption path '%s'\n" "$dir"
+		printf "\toption comment 'USB drive'\n"
+		printf "\toption browseable 'yes'\n"
+		printf "\toption read_only '%s'\n" "$ro"
+		printf "\toption create_mask '0666'\n"
+		printf "\toption dir_mask '0777'\n"
+		printf "\toption force_root '1'\n"
+		if [ "$pw" = 1 ]; then
+			printf "\toption guest_ok 'no'\n"
+			printf "\toption users '%s'\n" "$u"
+		else
+			printf "\toption guest_ok 'yes'\n"
+		fi
+		echo
+	done
+}
+
+running() { [ -x "$1" ] && "$1" running > /dev/null 2>&1; }
+
+cmd_unshare() {
+	rm -f "$SHARES"
+	running "$WSDD2_INIT" && "$WSDD2_INIT" stop > /dev/null 2>&1
+	running "$KSMBD_INIT" && "$KSMBD_INIT" stop > /dev/null 2>&1
+	return 0
+}
+
+cmd_share() {
+	local conf='' old
+	[ -x "$KSMBD_INIT" ] || return 0
+	[ "$(opt enabled 1)" = 1 ] && conf=$(share_conf)
+	if [ -z "$conf" ]; then
+		cmd_unshare
+		return 0
+	fi
+	mkdir -p "${SHARES%/*}"
+	old=$(cat "$SHARES" 2> /dev/null)
+	printf '%s\n' "$conf" > "$SHARES"
+	# ksmbd's init script rewrites its config and starts afresh: only when
+	# the shares change (or the password does)
+	if ! running "$KSMBD_INIT"; then
+		"$KSMBD_INIT" start
+	elif [ "$conf" != "$old" ] || [ "$1" = force ]; then
+		"$KSMBD_INIT" restart
+	fi > /dev/null 2>&1
+	# wsdd2 lists the router in Windows' Network view; its start takes 5 s
+	if [ -x "$WSDD2_INIT" ] && ! running "$WSDD2_INIT"; then
+		("$WSDD2_INIT" start > /dev/null 2>&1 &)
+	fi
+	return 0
+}
+
+cmd_unmount_all() {
+	local dev dir rest
+	sync
+	cmd_drives | while read -r dev dir rest; do
+		umount "$dir" 2> /dev/null || umount -l "$dir" 2> /dev/null
+		rmdir "$dir" 2> /dev/null
+		log "${dev#/dev/} unmounted from $dir"
+	done
+	return 0
+}
+
+trim() { sed 's/^ *//; s/ *$//'; }
+
+cmd_status() {
+	local dev dir type opts name disk info label vendor model sz used free ro on=0 drives
+
+	running "$KSMBD_INIT" && on=1
+	drives=$(cmd_drives)
+	json_init
+	json_add_boolean installed "$([ -x "$KSMBD_INIT" ] && echo 1 || echo 0)"
+	json_add_boolean enabled "$(opt enabled 1)"
+	json_add_boolean sharing "$on"
+	json_add_string user "$(share_user)"
+	json_add_boolean password "$(has_password && echo 1 || echo 0)"
+	json_add_string host "$(uci -q get 'system.@system[0].hostname' || cat /proc/sys/kernel/hostname)"
+	json_add_int http_port "$HTTP_PORT"
+	json_add_array drives
+	while read -r dev dir type opts; do
+		[ -n "$dev" ] || continue
+		dev=${dev#/dev/}
+		ejected "$dev" && continue
+		name=${dir##*/}
+		disk=$(disk_of "$dev")
+		info=$(block info "/dev/$dev" 2> /dev/null)
+		label=$(echo "$info" | sed -n 's/.* LABEL="\([^"]*\)".*/\1/p')
+		vendor=$(cat "$SYSFS/block/$disk/device/vendor" 2> /dev/null | trim)
+		model=$(cat "$SYSFS/block/$disk/device/model" 2> /dev/null | trim)
+		# shellcheck disable=SC2046
+		set -- $(df -Pk "$dir" 2> /dev/null | awk 'NR == 2 { print $2, $3, $4 }')
+		sz=${1:-0} used=${2:-0} free=${3:-0}
+		ro=0
+		case ",$opts," in *,ro,*) ro=1 ;; esac
+		json_add_object ""
+		json_add_string name "$name"
+		json_add_string device "$dev"
+		json_add_string disk "$disk"
+		json_add_string label "$label"
+		json_add_string fs "$type"
+		json_add_string model "$(echo "$vendor $model" | trim)"
+		json_add_int size $((sz * 1024))
+		json_add_int used $((used * 1024))
+		json_add_int free $((free * 1024))
+		json_add_boolean readonly "$ro"
+		json_close_object
+	done <<- EOF
+		$drives
+	EOF
+	json_close_array
+	json_dump
+}
+
+# A drive's name, as the web UI gives it: one mounted under $ROOT
+valid_drive() {
+	case "$1" in '' | */* | .*) return 1 ;; esac
+	mounted_dir "$ROOT/$1" && ! ejected "$(awk -v d="$ROOT/$1" '$2 == d { sub("^/dev/", "", $1); print $1; exit }' "$MOUNTS")"
+}
+
+cmd_list() {
+	valid_drive "$1" || { err "no such drive"; return; }
+	ucode "$LIST" "$ROOT/$1" "$2"
+}
+
+cmd_eject() {
+	local name="$1" dev disk dirs d
+	valid_drive "$name" || { err "no such drive"; return; }
+	dev=$(awk -v d="$ROOT/$name" '$2 == d { print $1; exit }' "$MOUNTS")
+	disk=$(disk_of "${dev#/dev/}")
+	mkdir -p "$RUN"
+	echo "$disk" >> "$RUN/ejected"
+	# Stop sharing it first, so the SMB server lets go of it
+	cmd_share
+	sync
+	dirs=$(cmd_drives | while read -r dev d rest; do
+		[ "$(disk_of "${dev#/dev/}")" = "$disk" ] && echo "$d"
+	done)
+	for d in $dirs; do
+		if ! umount "$d" 2> /dev/null; then
+			sed -i "/^$disk\$/d" "$RUN/ejected"
+			cmd_share
+			err "$name is in use; close the files open on it and try again"
+			return
+		fi
+		rmdir "$d" 2> /dev/null
+	done
+	log "$disk ($name) ejected"
+	# Power it down: the disk goes away as if pulled out, and comes back
+	# when plugged in again
+	[ -w "$SYSFS/block/$disk/device/delete" ] && echo 1 > "$SYSFS/block/$disk/device/delete"
+	"$INIT" reload > /dev/null 2>&1
+	json_init
+	json_add_boolean ok 1
+	json_add_string name "$name"
+	json_dump
+}
+
+cmd_set() {
+	local v
+	case "$1" in
+	1 | true) v=1 ;;
+	0 | false) v=0 ;;
+	*) err "enabled: true or false"; return ;;
+	esac
+	[ -f /etc/config/pirate-usb ] || : > /etc/config/pirate-usb
+	uci -q set pirate-usb.share=share
+	uci -q set pirate-usb.share.enabled="$v"
+	uci -q commit pirate-usb
+	"$INIT" reload > /dev/null 2>&1
+	cmd_status
+}
+
+# The password comes on stdin, never on a command line; ksmbd.adduser reads it
+# (twice, as typed and retyped) on its stdin too.
+cmd_set_password() {
+	local pw u empty
+	IFS= read -r pw
+	u=$(share_user)
+	command -v "$ADDUSER" > /dev/null || { err "the SMB server isn't installed"; return; }
+	mkdir -p "$RUN"
+	empty="$RUN/empty.conf"
+	: > "$empty"
+	if [ -z "$pw" ]; then
+		if has_password && ! "$ADDUSER" -P "$PWDDB" -C "$empty" -d "$u" > /dev/null 2>&1; then
+			err "couldn't remove the password"
+			return
+		fi
+	else
+		[ "${#pw}" -ge 5 ] || { err "use at least 5 characters"; return; }
+		[ "${#pw}" -le 128 ] || { err "use at most 128 characters"; return; }
+		mkdir -p "${PWDDB%/*}"
+		if ! printf '%s\n%s\n' "$pw" "$pw" | "$ADDUSER" -P "$PWDDB" -C "$empty" "$u" > /dev/null 2>&1; then
+			err "couldn't set the password"
+			return
+		fi
+	fi
+	cmd_share force
+	cmd_status
+}
+
+case "$1" in
+add) cmd_add "$2" ;;
+remove) cmd_remove "$2" ;;
+scan) cmd_scan ;;
+drives) cmd_drives ;;
+share) cmd_share "$2" ;;
+unshare) cmd_unshare ;;
+unmount_all) cmd_unmount_all ;;
+status) cmd_status ;;
+list) cmd_list "$2" "$3" ;;
+eject) cmd_eject "$2" ;;
+set) cmd_set "$2" ;;
+set_password) cmd_set_password ;;
+*)
+	echo "usage: pirate-usb add|remove <dev> | scan | drives | share [force] | unshare | unmount_all |" \
+		"status | list <name> [path] | eject <name> | set <enabled> | set_password" >&2
+	exit 1
+	;;
+esac
