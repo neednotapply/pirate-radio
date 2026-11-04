@@ -838,36 +838,44 @@ static void write_chunk(struct op *o, const uint8_t *p, size_t n, bool last)
 	buf_free(&c);
 }
 
+/* Whether another message of the file can be framed now */
+static bool write_more(const struct op *o)
+{
+	return !o->last_sent && out.len < OUT_HIGH &&
+	       (o->final || o->data.len - o->pos >= CHUNK);
+}
+
 /* Hand the file's data on to the Flipper, CHUNK bytes a message, as the
- * serial port takes it; the last message (has_next false) ends the file. */
+ * serial port takes it; the last message (has_next false) ends the file.
+ * It goes on until the port is full (it asks for more then), the piece is
+ * used up or the file has ended: a port that took it all asks for nothing. */
 static void write_pump(void)
 {
 	struct op *o = cur;
 
 	if (!o || o->kind != OP_WRITE || fd < 0 || broken)
 		return;
-	while (!o->last_sent && out.len < OUT_HIGH) {
-		size_t avail = o->data.len - o->pos, n = avail < CHUNK ? avail : CHUNK;
-		bool last;
+	do {
+		while (write_more(o)) {
+			size_t avail = o->data.len - o->pos, n = avail < CHUNK ? avail : CHUNK;
+			bool last = o->final && n == avail;
 
-		if (avail < CHUNK && !o->final)
-			break;
-		last = o->final && n == avail;
-		write_chunk(o, o->data.d + o->pos, n, last);
-		o->pos += n;
-		if (last)
-			o->last_sent = true;
-	}
-	if (o->pos == o->data.len) {
-		o->data.len = 0;
-		o->pos = 0;
-	} else if (o->pos >= 4 * CHUNK) {
-		buf_drop(&o->data, o->pos);
-		o->pos = 0;
-	}
-	out_flush();
-	if (broken)
-		return;
+			write_chunk(o, o->data.d + o->pos, n, last);
+			o->pos += n;
+			if (last)
+				o->last_sent = true;
+		}
+		if (o->pos == o->data.len) {
+			o->data.len = 0;
+			o->pos = 0;
+		} else if (o->pos >= 4 * CHUNK) {
+			buf_drop(&o->data, o->pos);
+			o->pos = 0;
+		}
+		out_flush();
+		if (broken)
+			return;
+	} while (write_more(o));
 	/* The caller sends the next piece once this one is on its way */
 	if (o->piece_waiting && !o->final && o->data.len - o->pos < CHUNK && out.len < OUT_HIGH)
 		piece_reply(o, NULL);

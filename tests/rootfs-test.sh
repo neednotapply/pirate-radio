@@ -1459,6 +1459,18 @@ check "flipper: renamed" [ "$(fz list '{"path":"/ext/new"}' | jsonfilter -e '@.f
 check "flipper: delete: a folder with files in it" [ "$(fze delete '{"path":"/ext/new"}')" = "the folder isn't empty" ]
 check "flipper: delete: and all in it" fz_ok delete '{"path":"/ext/new","recursive":true}'
 check "flipper: delete: gone" [ "$(fze list '{"path":"/ext/new"}')" = "no such file or folder" ]
+# Pieces like the page's: more than the daemon holds unsent at once (8 KiB),
+# which a port that takes it all at once mustn't leave stuck
+fz_b64x() { s=QUFB; i=1; while [ $i -lt "$1" ]; do s="$s$s"; i=$((i * 2)); done; echo "$s"; }
+p1=$(fz_b64x 8192)
+p2=$(fz_b64x 4096)
+check "flipper: write: a 24 KiB piece" [ "$(fz write "{\"path\":\"/ext/big.bin\",\"offset\":0,\"data\":\"$p1\",\"more\":true}" | jsonfilter -e '@.received')" = 24576 ]
+check "flipper: write: and 12 KiB more" [ "$(fz write "{\"path\":\"/ext/big.bin\",\"offset\":24576,\"data\":\"$p2\",\"more\":false}" | jsonfilter -e '@.size')" = 36864 ]
+check "flipper: write: 36 KiB, 72 messages" grep -q '^write /ext/big.bin 36864 72$' "$FZ/fake.log"
+r=$(fz_read /ext/big.bin)
+check "flipper: read: 36 KiB" [ "$(echo "$r" | jsonfilter -e '@.size')" = 36864 ]
+check "flipper: read: 36 KiB, as written" [ "$(fz read '{"path":"/ext/big.bin","offset":0}' | jsonfilter -e '@.data')" = "$p1$p2" ]
+fz delete '{"path":"/ext/big.bin"}' > /dev/null
 check "flipper: storage" [ "$(fz storage '{"path":"/int"}' | jsonfilter -e '@.total') $(fz storage '{"path":"/int"}' | jsonfilter -e '@.free')" = "262144 131072" ]
 r=$(fz screen '{"seq":0}')
 s1=$(echo "$r" | jsonfilter -e '@.seq')
