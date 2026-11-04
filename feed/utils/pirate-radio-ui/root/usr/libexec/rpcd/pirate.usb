@@ -5,7 +5,7 @@
 #   ubus call pirate.usb status
 #   ubus call pirate.usb list '{"name":"KINGSTON","path":"Photos/2026"}'
 #   ubus call pirate.usb eject '{"name":"KINGSTON"}'
-#   ubus call pirate.usb set '{"enabled":true}'
+#   ubus call pirate.usb set '{"enabled":true,"card":false}'   (either may be left out)
 #   ubus call pirate.usb set_password '{"password":"…"}'   ("" = none: guests)
 
 . /usr/share/libubox/jshn.sh
@@ -30,11 +30,12 @@ run_eject() {
 }
 
 run_set() {
-	local input enabled
+	local input enabled card
 	read -r input
 	json_load "$input"
 	json_get_var enabled enabled
-	"$TOOL" set "$enabled"
+	json_get_var card card
+	"$TOOL" set "$enabled" "$card"
 }
 
 run_set_password() {
@@ -48,7 +49,7 @@ run_set_password() {
 
 case "$1" in
 list)
-	echo '{ "status": {}, "list": { "name": "str", "path": "str" }, "eject": { "name": "str" }, "set": { "enabled": true }, "set_password": { "password": "str" } }'
+	echo '{ "status": {}, "list": { "name": "str", "path": "str" }, "eject": { "name": "str" }, "set": { "enabled": true, "card": true }, "set_password": { "password": "str" } }'
 	;;
 call)
 	case "$2" in

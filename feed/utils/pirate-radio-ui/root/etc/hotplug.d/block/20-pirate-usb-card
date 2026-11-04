@@ -1,0 +1,15 @@
+#!/bin/sh
+# The microSD card put back in (/etc/hotplug.d/block/20-pirate-usb-card): if
+# it is to be shared, share it again (the pirate-usb init script) now that
+# block-mount's hook (10-mount) has mounted it where fstab says. USB drives
+# are 05-pirate-usb's, which runs before 10-mount.
+
+[ "$ACTION" = add ] || exit 0
+case "$DEVNAME" in sd*) ;; *) exit 0 ;; esac
+
+# Only once pirate-usb has started since boot, and not been stopped since.
+[ -e "${PIRATE_USB_ACTIVE:-/var/run/pirate-usb.active}" ] || exit 0
+
+# PIRATE_USB, PIRATE_USB_INIT: others to run (tests)
+"${PIRATE_USB:-/usr/sbin/pirate-usb}" card_in "$DEVNAME" || exit 0
+exec "${PIRATE_USB_INIT:-/etc/init.d/pirate-usb}" reload

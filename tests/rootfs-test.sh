@@ -1078,8 +1078,15 @@ cat > "$UM/block" <<-'EOF'
 EOF
 cat > "$UM/mount" <<-'EOF'
 	#!/bin/sh
-	# mount -t <fs> -o <options> <device> <folder>
+	# mount -t <fs> -o <options> <device> <folder>; mount -o bind <folder> <folder>
 	echo "mount $*" >> "$USB_T/calls"
+	if [ "$1 $2" = "-o bind" ]; then
+		l=$(awk -v s="$3" '$2 == s { print $1, $3, $4; exit }' "$PIRATE_MOUNTS")
+		[ -n "$l" ] || exit 32
+		set -- $l "$4"
+		echo "$1 $4 $2 $3 0 0" >> "$PIRATE_MOUNTS"
+		exit 0
+	fi
 	case "$4" in rw,*) [ -e "$USB_T/rofail.${5#/dev/}" ] && exit 32 ;; esac
 	echo "$5 $6 $2 $4 0 0" >> "$PIRATE_MOUNTS"
 EOF
@@ -1138,7 +1145,7 @@ uenv() {
 	env PATH="$UM:$PATH" PIRATE_USB_ROOT="$U/mnt/usb" PIRATE_USB_RUN="$U/run" PIRATE_SYSFS="$U/sys" \
 		PIRATE_DEV_ROOT="$U" PIRATE_MOUNTS="$U/mounts" PIRATE_USB_INIT="$UM/pirate-usb-init" \
 		PIRATE_KSMBD_INIT="$UM/ksmbd-init" PIRATE_WSDD2_INIT="$UM/wsdd2-init" PIRATE_KSMBD_ADDUSER="$UM/adduser" \
-		PIRATE_KSMBD_SHARES="$U/run/config/ksmbd" PIRATE_KSMBD_PWDDB="$U/ksmbdpwd.db" "$@"
+		PIRATE_KSMBD_SHARES="$U/run/config/ksmbd" PIRATE_KSMBD_PWDDB="$U/ksmbdpwd.db" PIRATE_CARD_MP="$U/sdcard" "$@"
 }
 pu() { uenv pirate-usb "$@"; }
 # mkdisk <disk> <usb|mmc> <vendor> <model>; mkpart <disk> <partition> <block info>
@@ -1303,14 +1310,55 @@ check "usb set: rejects anything but on and off" [ "$(pu set maybe | jsonfilter 
 pu set 1 > /dev/null
 check "usb set: sharing on starts ksmbd again" grep -qx 'ksmbd-init start' "$U/calls"
 
+# The microSD card (block-mount's, at a mount point of its own): shared only
+# when asked to, from a bind mount at $ROOT/microSD; never ejected
+mkdir -p "$U/sdcard"
+echo "/dev/sda1 $U/sdcard exfat rw,noatime 0 0" >> "$U/mounts"
+pu scan
+pu status > "$U/status.json"
+check "usb card: not shared unless asked to" sh -c "! grep -q '^/dev/sda1 $U/mnt/usb/' '$U/mounts' && [ ! -e '$U/mnt/usb/microSD' ]"
+check "usb card: the status says it is in, not shared" [ "$(ujs '@.card') $(ujs '@.card_in')" = "false true" ]
+: > "$U/calls"
+pu set '' 1 > "$U/status.json"
+check "usb card: asked to, it is shared as microSD" sh -c "grep -qx 'mount -o bind $U/sdcard $U/mnt/usb/microSD' '$U/calls' && grep -q '^/dev/sda1 $U/mnt/usb/microSD exfat ' '$U/mounts' && grep -q \"name 'microSD'\" '$U/run/config/ksmbd'"
+check "usb card: the status marks it, and sharing stays on" [ "$(ujs '@.card') $(ujs '@.enabled') $(ujs '@.drives[@.name="microSD"].card') $(ujs '@.drives[@.name="microSD"].model') $(ujs '@.drives[@.name="My_Stick"].card')" = "true true true microSD card false" ]
+check "usb card: it can't be ejected" [ "$(pu eject microSD | jsonfilter -e '@.error')" = "the microSD card can't be ejected here: turn off sharing it instead" ]
+check "usb card: still shared after that, its reader left on" sh -c "grep -q '^/dev/sda1 $U/mnt/usb/microSD ' '$U/mounts' && [ ! -s '$U/sys/block/sda/device/delete' ]"
+pu scan
+check "usb card: scanning again shares it once" [ "$(grep -c "^/dev/sda1 $U/mnt/usb/" "$U/mounts")" = 1 ]
+check "usb card: set rejects anything but on and off for it" [ "$(pu set '' maybe | jsonfilter -e '@.error')" = "card: true or false" ]
+# Taken out: the drives' hook (05) runs before block-mount's, which has yet
+# to unmount it from its own mount point
+rm -f "$U/sys/class/block/sda1" "$U/dev/sda1"
+o=$(uhp ACTION=remove DEVNAME=sda1)
+check "usb card: taken out, it is unshared at once" sh -c "echo '$o' | grep -qx 'umount -l $U/mnt/usb/microSD' && echo '$o' | grep -qx 'init reload' && [ ! -e '$U/mnt/usb/microSD' ] && [ ! -e '$U/run/card' ] && ! grep -q \"name 'microSD'\" '$U/run/config/ksmbd'"
+grep -v "^/dev/sda1 " "$U/mounts" > "$U/mounts.new" && mv "$U/mounts.new" "$U/mounts"
+# Put back in: the drives' hook first (not one of its drives), then
+# block-mount mounts it, then the card's hook (20) shares it again
+mkpart sda sda1 'UUID="9279-E51D" LABEL="PIRATERADIO" VERSION="1.0" TYPE="exfat"'
+check "usb card: put back in, the drives' hook leaves it to block-mount" [ -z "$(uhp ACTION=add DEVNAME=sda1)" ]
+echo "/dev/sda1 $U/sdcard exfat rw,noatime 0 0" >> "$U/mounts"
+uhc() { : > "$U/calls"; uenv PIRATE_USB_ACTIVE="$U/active" "$@" sh /etc/hotplug.d/block/20-pirate-usb-card > /dev/null 2>&1; cat "$U/calls"; }
+o=$(uhc ACTION=add DEVNAME=sda1)
+check "usb card: mounted again by block-mount, it is shared again" sh -c "echo '$o' | grep -qx 'init reload' && grep -q '^/dev/sda1 $U/mnt/usb/microSD ' '$U/mounts' && grep -q \"name 'microSD'\" '$U/run/config/ksmbd'"
+check "usb card: its hook ignores drives, a card shared already, and removals" [ -z "$(uhc ACTION=add DEVNAME=sdb1)$(uhc ACTION=add DEVNAME=sda1)$(uhc ACTION=remove DEVNAME=sda1)" ]
+: > "$U/calls"
+pu set '' 0 > "$U/status.json"
+check "usb card: turned off, it is unshared" sh -c "! grep -q '^/dev/sda1 $U/mnt/usb/' '$U/mounts' && [ ! -e '$U/mnt/usb/microSD' ] && [ ! -e '$U/run/card' ] && ! grep -q \"name 'microSD'\" '$U/run/config/ksmbd' && grep -q '^/dev/sda1 $U/sdcard ' '$U/mounts'"
+check "usb card: turned off, the status says so" [ "$(ujs '@.card') $(ujs '@.card_in') $(ujs '@.drives[@.name="microSD"].name')" = "false true " ]
+check "usb card: turned off, putting it in shares nothing" [ -z "$(uhc ACTION=add DEVNAME=sda1)" ]
+
 check "usb rpcd: its methods" sh -c '/usr/libexec/rpcd/pirate.usb list | jsonfilter -e "@.set_password.password" | grep -qx str'
 check "usb rpcd: list" [ "$(echo '{"name":"My_Stick","path":"Photos"}' | uenv /usr/libexec/rpcd/pirate.usb call list | jsonfilter -e '@.entries[0].name')" = 2026 ]
 check "usb rpcd: the password goes through on stdin" [ "$(echo '{"password":"abc"}' | uenv /usr/libexec/rpcd/pirate.usb call set_password | jsonfilter -e '@.error')" = "use at least 5 characters" ]
+echo '{"card":true}' | uenv /usr/libexec/rpcd/pirate.usb call set > "$U/set.json"
+check "usb rpcd: set the card alone" sh -c "[ \"\$(jsonfilter -i '$U/set.json' -e '@.card') \$(jsonfilter -i '$U/set.json' -e '@.enabled')\" = 'true true' ] && grep -q '^/dev/sda1 $U/mnt/usb/microSD ' '$U/mounts'"
 
 pu unmount_all
 # (My_Stick's folder keeps the files put in it above: here it was never
 # really a mount point)
 check "usb: unmount_all unmounts every drive" sh -c "[ -z \"\$(env PIRATE_USB_ROOT='$U/mnt/usb' PIRATE_MOUNTS='$U/mounts' pirate-usb drives)\" ] && [ ! -e '$U/mnt/usb/sdf' ] && [ ! -e '$U/mnt/usb/GLOBAL_sde1' ]"
+check "usb: unmount_all lets the card go too, from its share only" sh -c "[ ! -e '$U/mnt/usb/microSD' ] && [ ! -e '$U/run/card' ] && grep -q '^/dev/sda1 $U/sdcard ' '$U/mounts'"
 check "usb: first boot, without ksmbd installed" sh /etc/uci-defaults/96-pirate-usb
 
 echo

@@ -10,6 +10,13 @@
 # Whatever fstab names (the microSD card, by its label) is block-mount's and
 # is left alone, as are filesystems this can't mount (swap and the like).
 #
+# The microSD card is shared too if asked to (pirate-usb.share.card, off at
+# first: it holds Pirate Radio's recordings and captures): its mount point
+# (pirate-radio.storage.mountpoint) is bind-mounted at /mnt/usb/microSD,
+# where it is shared like a drive, but can't be ejected. When the card is put
+# back in, block-mount mounts it and its hotplug hook (20-pirate-usb-card)
+# shares it again.
+#
 # SMB: guests read and write the drives until a share password is set; with
 # one, only its user (pirate.usb's "user", "pirate") gets in. Windows 11 turns
 # guests away, so it needs the password.
@@ -25,9 +32,13 @@
 #   pirate-usb list <name> [path]  JSON: a folder on a drive
 #   pirate-usb eject <name>        unmount a drive (with its disk's other partitions)
 #                                  and power the disk down, ready to pull out
-#   pirate-usb set <enabled>       share over SMB or not (1/0)
+#   pirate-usb set <enabled> [card]
+#                                  share over SMB or not; share the microSD
+#                                  card or not (1/0; empty: unchanged)
 #   pirate-usb set_password        the share password, read from stdin
 #                                  (empty: no password, guests get in)
+#   pirate-usb card_in <dev>       true if <dev> is the microSD card, just
+#                                  mounted, and to be shared (the hotplug hook)
 
 . /usr/share/libubox/jshn.sh
 
@@ -44,6 +55,7 @@ ADDUSER=${PIRATE_KSMBD_ADDUSER:-ksmbd.adduser}
 SHARES=${PIRATE_KSMBD_SHARES:-/var/run/config/ksmbd}
 PWDDB=${PIRATE_KSMBD_PWDDB:-/etc/ksmbd/ksmbdpwd.db}
 LIST=${PIRATE_USB_LIST:-/usr/libexec/pirate-usb-list}
+CARD_MP=${PIRATE_CARD_MP:-}
 HTTP_PORT=8082
 
 opt() { uci -q get "pirate-usb.share.$1" || echo "$2"; }
@@ -117,6 +129,57 @@ drive_name() {
 	echo "$n"
 }
 
+# The microSD card: where Pirate Radio mounts it (fstab, by its label)
+card_mp() {
+	[ -n "$CARD_MP" ] && { echo "$CARD_MP"; return; }
+	uci -q get pirate-radio.storage.mountpoint || echo /mnt/sdcard
+}
+
+# card_dev: the card's device (sda1) while it is in and mounted. Its mount
+# outlives it for a moment when it is taken out: the device has gone by then.
+card_dev() {
+	local d
+	d=$(awk -v m="$(card_mp)" '$2 == m { print $1; exit }' "$MOUNTS")
+	d=${d#/dev/}
+	[ -n "$d" ] && [ -e "$SYSFS/class/block/$d" ] && echo "$d"
+}
+
+# card_dir: the folder under $ROOT the card is shared from, if it is
+card_dir() { cat "$RUN/card" 2> /dev/null; }
+
+card_unbind() {
+	if mounted_dir "$1"; then
+		umount "$1" 2> /dev/null || umount -l "$1" 2> /dev/null
+	fi
+	rmdir "$1" 2> /dev/null
+	rm -f "$RUN/card"
+	log "the microSD card is no longer shared"
+}
+
+# card_sync: the card shared from $ROOT (bind-mounted from its mount point)
+# while it is in and to be shared; not otherwise
+card_sync() {
+	local dev dir
+	dir=$(card_dir)
+	dev=$(card_dev)
+	if [ "$(opt card 0)" = 1 ] && [ -n "$dev" ]; then
+		[ -n "$dir" ] && [ "$(mount_of "$dev")" = "$dir" ] && return 0
+		[ -n "$dir" ] && card_unbind "$dir"
+		dir="$ROOT/$(drive_name "$dev" microSD)"
+		mkdir -p "$dir" "$RUN" || return 0
+		if mount -o bind "$(card_mp)" "$dir" 2> /dev/null; then
+			echo "$dir" > "$RUN/card"
+			log "the microSD card ($(card_mp)) shared as ${dir##*/}"
+		else
+			rmdir "$dir" 2> /dev/null
+			log "the microSD card ($(card_mp)): could not share it"
+		fi
+	elif [ -n "$dir" ]; then
+		card_unbind "$dir"
+	fi
+	return 0
+}
+
 # mount_dev <dev>: mount a USB drive under $ROOT, if it is one this should
 mount_dev() {
 	local dev="$1" info type label uuid fs o dir
@@ -171,7 +234,18 @@ cmd_remove() {
 	# It is gone already: detach it now, whatever still has files open
 	umount -l "$dir" 2> /dev/null
 	rmdir "$dir" 2> /dev/null
-	log "$1 pulled out: unmounted $dir"
+	if [ "$dir" = "$(card_dir)" ]; then
+		rm -f "$RUN/card"
+		log "the microSD card was taken out: unmounted $dir"
+	else
+		log "$1 pulled out: unmounted $dir"
+	fi
+}
+
+# The card put back in: block-mount has mounted it (the hotplug hook runs
+# after block-mount's), and it is to be shared but isn't yet
+cmd_card_in() {
+	[ -n "$1" ] && [ "$(opt card 0)" = 1 ] && [ "$(card_dev)" = "$1" ] && [ -z "$(mount_of "$1")" ]
 }
 
 cmd_scan() {
@@ -185,7 +259,7 @@ cmd_scan() {
 		[ -e "$d" ] || continue
 		ejected "${d##*/}" || mount_dev "${d##*/}"
 	done
-	return 0
+	card_sync
 }
 
 cmd_drives() { awk -v r="$ROOT/" 'index($2, r) == 1 { print $1, $2, $3, $4 }' "$MOUNTS"; }
@@ -262,16 +336,18 @@ cmd_unmount_all() {
 		rmdir "$dir" 2> /dev/null
 		log "${dev#/dev/} unmounted from $dir"
 	done
+	rm -f "$RUN/card"
 	return 0
 }
 
 trim() { sed 's/^ *//; s/ *$//'; }
 
 cmd_status() {
-	local dev dir type opts name disk info label vendor model sz used free ro on=0 drives
+	local dev dir type opts name disk info label vendor model sz used free ro on=0 drives cdir
 
 	running "$KSMBD_INIT" && on=1
 	drives=$(cmd_drives)
+	cdir=$(card_dir)
 	json_init
 	json_add_boolean installed "$([ -x "$KSMBD_INIT" ] && echo 1 || echo 0)"
 	json_add_boolean enabled "$(opt enabled 1)"
@@ -280,6 +356,8 @@ cmd_status() {
 	json_add_boolean password "$(has_password && echo 1 || echo 0)"
 	json_add_string host "$(uci -q get 'system.@system[0].hostname' || cat /proc/sys/kernel/hostname)"
 	json_add_int http_port "$HTTP_PORT"
+	json_add_boolean card "$(opt card 0)"
+	json_add_boolean card_in "$([ -n "$(card_dev)" ] && echo 1 || echo 0)"
 	json_add_array drives
 	while read -r dev dir type opts; do
 		[ -n "$dev" ] || continue
@@ -302,11 +380,16 @@ cmd_status() {
 		json_add_string disk "$disk"
 		json_add_string label "$label"
 		json_add_string fs "$type"
-		json_add_string model "$(echo "$vendor $model" | trim)"
+		if [ "$dir" = "$cdir" ]; then
+			json_add_string model "microSD card"
+		else
+			json_add_string model "$(echo "$vendor $model" | trim)"
+		fi
 		json_add_int size $((sz * 1024))
 		json_add_int used $((used * 1024))
 		json_add_int free $((free * 1024))
 		json_add_boolean readonly "$ro"
+		json_add_boolean card "$([ "$dir" = "$cdir" ] && echo 1 || echo 0)"
 		json_close_object
 	done <<- EOF
 		$drives
@@ -329,6 +412,10 @@ cmd_list() {
 cmd_eject() {
 	local name="$1" dev disk dirs d
 	valid_drive "$name" || { err "no such drive"; return; }
+	if [ "$ROOT/$name" = "$(card_dir)" ]; then
+		err "the microSD card can't be ejected here: turn off sharing it instead"
+		return
+	fi
 	dev=$(awk -v d="$ROOT/$name" '$2 == d { print $1; exit }' "$MOUNTS")
 	disk=$(disk_of "${dev#/dev/}")
 	mkdir -p "$RUN"
@@ -359,16 +446,24 @@ cmd_eject() {
 	json_dump
 }
 
-cmd_set() {
-	local v
+# on_off <value>: 1 or 0; - for none (unchanged); fails for anything else
+on_off() {
 	case "$1" in
-	1 | true) v=1 ;;
-	0 | false) v=0 ;;
-	*) err "enabled: true or false"; return ;;
+	1 | true) echo 1 ;;
+	0 | false) echo 0 ;;
+	'') echo - ;;
+	*) return 1 ;;
 	esac
+}
+
+cmd_set() {
+	local e c
+	e=$(on_off "$1") || { err "enabled: true or false"; return; }
+	c=$(on_off "$2") || { err "card: true or false"; return; }
 	[ -f /etc/config/pirate-usb ] || : > /etc/config/pirate-usb
 	uci -q set pirate-usb.share=share
-	uci -q set pirate-usb.share.enabled="$v"
+	[ "$e" = - ] || uci -q set pirate-usb.share.enabled="$e"
+	[ "$c" = - ] || uci -q set pirate-usb.share.card="$c"
 	uci -q commit pirate-usb
 	"$INIT" reload > /dev/null 2>&1
 	cmd_status
@@ -413,11 +508,12 @@ unmount_all) cmd_unmount_all ;;
 status) cmd_status ;;
 list) cmd_list "$2" "$3" ;;
 eject) cmd_eject "$2" ;;
-set) cmd_set "$2" ;;
+set) cmd_set "$2" "$3" ;;
 set_password) cmd_set_password ;;
+card_in) cmd_card_in "$2" ;;
 *)
 	echo "usage: pirate-usb add|remove <dev> | scan | drives | share [force] | unshare | unmount_all |" \
-		"status | list <name> [path] | eject <name> | set <enabled> | set_password" >&2
+		"status | list <name> [path] | eject <name> | set <enabled> [card] | set_password | card_in <dev>" >&2
 	exit 1
 	;;
 esac

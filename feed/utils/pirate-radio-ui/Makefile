@@ -75,6 +75,7 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_DIR) $(1)/etc/hotplug.d/block $(1)/lib/upgrade/keep.d
 	$(INSTALL_BIN) ./root/etc/init.d/pirate-usb $(1)/etc/init.d/pirate-usb
 	$(INSTALL_DATA) ./root/etc/hotplug.d/block/05-pirate-usb $(1)/etc/hotplug.d/block/05-pirate-usb
+	$(INSTALL_DATA) ./root/etc/hotplug.d/block/20-pirate-usb-card $(1)/etc/hotplug.d/block/20-pirate-usb-card
 	$(INSTALL_BIN) ./root/etc/uci-defaults/96-pirate-usb $(1)/etc/uci-defaults/96-pirate-usb
 	$(INSTALL_DATA) ./root/lib/upgrade/keep.d/pirate-usb $(1)/lib/upgrade/keep.d/pirate-usb
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-usb $(1)/usr/sbin/pirate-usb

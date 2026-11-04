@@ -280,11 +280,19 @@ if a radio is in too) and within a few seconds it is mounted at
 Pull it out and it is unmounted and no longer shared; with no drive left,
 the SMB server and port 8082 stop. FAT32, exFAT, NTFS and ext4 drives work;
 one that won't mount for writing (NTFS that Windows didn't shut down
-cleanly) is shared read-only. The microSD card, and anything else
-`/etc/config/fstab` names, is left to block-mount and not shared. Turn
-sharing off on the tab to keep the drives to the Drives tab; the settings are
-in `/etc/config/pirate-usb`, and `logread -e pirate-usb` shows drives coming
-and going.
+cleanly) is shared read-only. Anything `/etc/config/fstab` names is left to
+block-mount. Turn sharing off on the tab to keep the drives to the Drives
+tab; the settings are in `/etc/config/pirate-usb`, and `logread -e
+pirate-usb` shows drives coming and going.
+
+**The microSD card** is shared too if you tick "Share the microSD card too"
+on the Drives tab (`pirate-usb.share.card`; off at first). It shows up as
+`microSD`, on the network (`\\pirateradio.local\microSD`) and on the tab,
+like a drive, but it can't be ejected there. It holds Pirate Radio's
+recordings and captures, Wi-Fi handshakes included, so share it with a share
+password set, or only on a network you trust. Take the card out and it stops
+being shared; put it back and it is shared again once it mounts. (Its files
+are also on port 8081, in the browser.)
 
 **On the card** (`pirate-radio/<job>/<date>/`):
 
@@ -335,10 +343,11 @@ Tested in this repository's tests and builds:
   the call script, NAT rules, Dreamcast Now with its name form and the
   port-1998 configure helper, init script, hotplug hook, DMZ and the UI's
   backend), USB drives (mounting by label and filesystem, the microSD card
-  and swap left alone, read-only fallback, the shares and share password,
+  and swap left alone unless the card is to be shared, read-only fallback,
+  the shares and share password, the card shared, taken out and put back,
   the folder listing and its limits, eject, and the block hotplug hook),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 365
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 382
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

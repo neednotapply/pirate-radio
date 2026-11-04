@@ -125,7 +125,7 @@
 		return s;
 	}
 
-	var DEMO_USB = { enabled: true, password: false, ejected: false };
+	var DEMO_USB = { enabled: true, card: false, password: false, ejected: false };
 	var DEMO_USB_FILES = {
 		"": [{ name: "Music", dir: true }, { name: "Photos", dir: true }, { name: "notes.txt", size: 2048 },
 			{ name: "pirate-radio-backup.tar.gz", size: 48213 }],
@@ -133,18 +133,24 @@
 		"Photos": [{ name: "2026", dir: true }, { name: "slate.jpg", size: 2516582 }],
 		"Photos/2026": [{ name: "dreamcast.jpg", size: 1887436 }]
 	};
+	var DEMO_CARD_FILES = {
+		"": [{ name: "pirate-radio", dir: true }, { name: "recon", dir: true }, { name: "survey", dir: true }]
+	};
 	function demoUsb() {
 		var drives = DEMO_USB.ejected ? [] : [{ name: "KINGSTON", device: "sdb1", disk: "sdb", label: "KINGSTON", fs: "exfat",
-			model: "Kingston DataTraveler 3.0", size: 30943995904, used: 13207024435, free: 17736971469, readonly: false }];
+			model: "Kingston DataTraveler 3.0", size: 30943995904, used: 13207024435, free: 17736971469, readonly: false, card: false }];
+		if (DEMO_USB.card) drives.push({ name: "microSD", device: "sda1", disk: "sda", label: "PIRATERADIO", fs: "exfat",
+			model: "microSD card", size: 61847109632, used: 40960000, free: 61806149632, readonly: false, card: true });
 		return { installed: true, enabled: DEMO_USB.enabled, sharing: DEMO_USB.enabled && drives.length > 0, user: "pirate",
-			password: DEMO_USB.password, host: "PirateRadio", http_port: 8082, drives: drives };
+			password: DEMO_USB.password, host: "PirateRadio", http_port: 8082, card: DEMO_USB.card, card_in: true, drives: drives };
 	}
 
 	var MOCK = {
 		"pirate.usb:status": demoUsb,
 		"pirate.usb:list": function (p) {
-			if (p.name !== "KINGSTON" || DEMO_USB.ejected) return { error: "no such drive" };
-			var list = DEMO_USB_FILES[p.path || ""];
+			var files = p.name === "KINGSTON" && !DEMO_USB.ejected ? DEMO_USB_FILES : p.name === "microSD" && DEMO_USB.card ? DEMO_CARD_FILES : null;
+			if (!files) return { error: "no such drive" };
+			var list = files[p.path || ""];
 			if (!list) return { error: "no such folder" };
 			var t = Math.round(Date.now() / 1000) - 86400;
 			return { path: p.path || "", total: list.length, truncated: false, entries: list.map(function (f, i) {
@@ -152,12 +158,17 @@
 			}) };
 		},
 		"pirate.usb:eject": function (p) {
+			if (p.name === "microSD" && DEMO_USB.card) return { error: "the microSD card can't be ejected here: turn off sharing it instead" };
 			if (p.name !== "KINGSTON" || DEMO_USB.ejected) return { error: "no such drive" };
 			DEMO_USB.ejected = true;
 			setTimeout(function () { DEMO_USB.ejected = false; }, 15000);   // "plugged in again"
 			return { ok: true, name: p.name };
 		},
-		"pirate.usb:set": function (p) { DEMO_USB.enabled = !!p.enabled; return demoUsb(); },
+		"pirate.usb:set": function (p) {
+			if ("enabled" in p) DEMO_USB.enabled = !!p.enabled;
+			if ("card" in p) DEMO_USB.card = !!p.card;
+			return demoUsb();
+		},
 		"pirate.usb:set_password": function (p) {
 			if (p.password && p.password.length < 5) return { error: "use at least 5 characters" };
 			DEMO_USB.password = !!p.password;
@@ -1786,7 +1797,7 @@
 
 	function renderDrives() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Drives", "USB flash drives and disks, shared while plugged in"));
+		VIEW.appendChild(viewHead("Drives", "USB flash drives and disks, shared while plugged in; the microSD card too, if you choose"));
 
 		var drPanel = panel("Plugged in");
 		var drWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
@@ -1806,15 +1817,20 @@
 		var shState = el("div", { class: "toolbar" });
 		var shAccess = el("p", { class: "descr" });
 		var enChk = el("input", { type: "checkbox" });
+		var cardChk = el("input", { type: "checkbox" });
 		var enStatus = el("span", { class: "status" });
+		var enLine = el("label", { class: "chkline" }, enChk, document.createTextNode(" Share the drives on the network (SMB)"));
+		var cardNote = el("p", { class: "descr" });
 		var pw1 = el("input", { class: "inp", type: "password", autocomplete: "new-password", placeholder: "at least 5 characters" });
 		var pw2 = el("input", { class: "inp", type: "password", autocomplete: "new-password", placeholder: "again" });
 		var pwStatus = el("span", { class: "status" });
 		var pwClear = btn("Remove the password", { cls: "reset", onclick: function () { setPassword(""); } });
+		var shOpts = el("div", {},
+			el("div", { class: "toolbar" }, enLine,
+				el("label", { class: "chkline" }, cardChk, document.createTextNode(" Share the microSD card too")),
+				btn("Save", { onclick: saveEnabled }), enStatus),
+			cardNote);
 		var shForm = el("div", { hidden: "" });
-		shForm.appendChild(el("div", { class: "toolbar" },
-			el("label", { class: "chkline" }, enChk, document.createTextNode(" Share the drives on the network (SMB)")),
-			btn("Save", { onclick: saveEnabled }), enStatus));
 		shForm.appendChild(el("h4", { class: "sub-h2", text: "Share password" }));
 		shForm.appendChild(shAccess);
 		shForm.appendChild(el("div", { class: "form" },
@@ -1824,7 +1840,7 @@
 			btn("Set password", { primary: true, onclick: function () { setPassword(null); } }), pwClear, pwStatus));
 		var shMissing = el("div", { class: "muted", hidden: "", text:
 			"This firmware has no SMB server (ksmbd): drives show here, but not on the network." });
-		shPanel.appendChild(shState); shPanel.appendChild(shForm); shPanel.appendChild(shMissing);
+		shPanel.appendChild(shState); shPanel.appendChild(shOpts); shPanel.appendChild(shForm); shPanel.appendChild(shMissing);
 
 		var howPanel = panel("Connecting");
 		howPanel.style.marginTop = "14px";
@@ -1860,6 +1876,7 @@
 			var card = el("div", { class: "drive" });
 			var head = el("div", { class: "drive-head" },
 				el("strong", { text: d.name }),
+				d.card ? badge("microSD", "sec-ok") : null,
 				badge(d.fs || "?", "sec-neutral"),
 				d.readonly ? badge("read-only", "sec-warn") : null,
 				el("span", { class: "muted", text: d.model || "" }));
@@ -1882,7 +1899,8 @@
 				btn("Browse", { primary: true, onclick: function () { browse(d.name, ""); } }),
 				el("a", { class: "btn", href: fileUrl(s.http_port || 8082, d.name, "") + "/", target: "_blank", rel: "noopener",
 					text: "Open in a new tab" }),
-				btn("Eject", { onclick: function () { eject(d, ejStatus); } }),
+				// The card stays in: "Share the microSD card too" takes it off the list
+				d.card ? null : btn("Eject", { onclick: function () { eject(d, ejStatus); } }),
 				ejStatus));
 			return card;
 		}
@@ -1903,7 +1921,8 @@
 			} else {
 				drives.forEach(function (d) { drWrap.appendChild(driveCard(d, s)); });
 				drWrap.appendChild(el("p", { class: "descr", text:
-					"Eject a drive before pulling it out: it is written to as you use it. FAT32, exFAT, NTFS and ext4 work." }));
+					"Eject a drive before pulling it out: it is written to as you use it. FAT32, exFAT, NTFS and ext4 work." +
+					(drives.some(function (d) { return d.card; }) ? " The microSD card can't be ejected here: turn off sharing it first." : "") }));
 			}
 			// The drive being browsed went away
 			if (browsing && !drives.some(function (d) { return d.name === browsing.name; })) {
@@ -1913,14 +1932,18 @@
 			clear(shState);
 			shMissing.hidden = !!s.installed;
 			shForm.hidden = !s.installed;
+			enLine.hidden = !s.installed;
+			// The checkboxes follow the saved settings until they are first shown
+			if (!formSet) { enChk.checked = !!s.enabled; cardChk.checked = !!s.card; formSet = true; }
+			cardNote.textContent = "The microSD card holds Pirate Radio's recordings and captures, Wi-Fi handshakes " +
+				"included: share it only with a password set, or on a network you trust. Shared, it shows here as " +
+				"microSD, alongside the drives." + (s.card && !s.card_in ? " No card is in the slot right now." : "");
 			if (s.installed) {
 				var st = !s.enabled ? ["off", "sec-neutral", "Sharing is turned off; the drives show only here."] :
 					s.sharing ? ["sharing", "sec-ok", "On the network as " + smbHost(s) + "."] :
 					["idle", "sec-neutral", "Starts when a drive is plugged in."];
 				shState.appendChild(badge(st[0], st[1]));
 				shState.appendChild(el("span", { class: "status", text: st[2] }));
-				// The checkbox follows the saved setting until it is first shown
-				if (!formSet) { enChk.checked = !!s.enabled; formSet = true; }
 				shAccess.textContent = s.password ?
 					"Password-protected: sign in as \"" + s.user + "\" with the share password. Set a new one below, " +
 					"or remove it to let anyone on the network in." :
@@ -2011,7 +2034,7 @@
 		}
 		function saveEnabled() {
 			enStatus.className = "status"; enStatus.textContent = "saving…";
-			call("pirate.usb", "set", { enabled: enChk.checked }).then(function (r) {
+			call("pirate.usb", "set", { enabled: enChk.checked, card: cardChk.checked }).then(function (r) {
 				if (r.error) { enStatus.className = "status err"; enStatus.textContent = r.error; return; }
 				enStatus.className = "status ok-text"; enStatus.textContent = "saved";
 				showStatus(r);
