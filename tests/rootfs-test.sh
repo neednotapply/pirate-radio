@@ -1365,8 +1365,10 @@ echo "# Flipper Zero (pirate-flipper; tests/fakeflipper plays the Flipper)"
 FZ="$T/flipper"
 mkdir -p "$FZ"
 check "flipper: ACL is valid JSON" sh -c 'jsonfilter -i /usr/share/rpcd/acl.d/pirate-flipper.json -e "@" > /dev/null'
-# The tests call it through ubusd, with the ubus CLI (its own package)
-check "flipper: ubusd and the ubus CLI are there" sh -c 'command -v ubusd && command -v ubus' > /dev/null
+# The tests call it through ubusd, with the real ubus CLI: the one on PATH
+# here is the mock for pirate-radio's tests
+FZ_UBUS=$(PATH=/usr/sbin:/usr/bin:/sbin:/bin command -v ubus)
+check "flipper: ubusd and the ubus CLI are there" sh -c "command -v ubusd > /dev/null && [ -x '$FZ_UBUS' ]"
 # A Flipper's CLI takes /dev/ttyACM0, as a GPS would: gpsd keeps off it
 mkusb 1-4 0483 5740 "" "Flipper Zero"
 mkdir -p "$T/sys/bus/usb/devices/1-4/1-4:1.0"
@@ -1381,7 +1383,7 @@ i=0
 while [ ! -e "$FZ/tty" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
 pirate-flipper -d "$FZ/tty" -u "$FZ/ubus.sock" > "$FZ/daemon.log" 2>&1 &
 FZ_DAEMON=$!
-fz() { ubus -s "$FZ/ubus.sock" -t 30 call pirate.flipper "$@" 2> /dev/null; }
+fz() { "$FZ_UBUS" -s "$FZ/ubus.sock" -t 30 call pirate.flipper "$@" 2> /dev/null; }
 fzs() { fz status | jsonfilter -e "$1"; }
 fze() { fz "$@" | jsonfilter -e '@.error'; }
 # Wait (up to 30 s) for the state to be $1
@@ -1499,7 +1501,7 @@ if [ "$FAIL" != 0 ]; then
 	tail -n 30 "$FZ/daemon.log" | sed 's/^/  pirate-flipper: /'
 	tail -n 30 "$FZ/fake.log" | sed 's/^/  fakeflipper: /'
 	tail -n 10 "$FZ/ubusd.log" | sed 's/^/  ubusd: /'
-	ubus -s "$FZ/ubus.sock" list 2>&1 | head -n 5 | sed 's/^/  ubus list: /'
+	"$FZ_UBUS" -s "$FZ/ubus.sock" list 2>&1 | head -n 5 | sed 's/^/  ubus list: /'
 fi
 kill "$FZ_DAEMON" "$FZ_FAKE" "$FZ_UBUSD" 2> /dev/null
 
