@@ -110,7 +110,7 @@ chmod 755 "$ov/usr/sbin/pirate-router" "$ov/usr/sbin/pirate-capture" "$ov/usr/sb
 docker run --rm -v "$ov:/ov:ro" -v "$here/tests:/tests:ro" "$ROOTFS_IMAGE" sh -c '
 	if apk update > /dev/null 2>&1; then
 		apk add rtl-sdr rtl_433 rtl-ais libstdcpp6 libusb-1.0-0 \
-			ucode ucode-mod-fs ucode-mod-uci > /tmp/apk.log 2>&1 ||
+			ucode ucode-mod-fs ucode-mod-uci ubus > /tmp/apk.log 2>&1 ||
 			{ echo "apk add failed:"; cat /tmp/apk.log; }
 	else
 		echo "(offline: testing with the given packages only)"

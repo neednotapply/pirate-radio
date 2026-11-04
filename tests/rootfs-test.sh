@@ -1364,7 +1364,9 @@ check "usb: first boot, without ksmbd installed" sh /etc/uci-defaults/96-pirate-
 echo "# Flipper Zero (pirate-flipper; tests/fakeflipper plays the Flipper)"
 FZ="$T/flipper"
 mkdir -p "$FZ"
-check "flipper: ACL is valid JSON" jsonfilter -i /usr/share/rpcd/acl.d/pirate-flipper.json -e '@' -q
+check "flipper: ACL is valid JSON" sh -c 'jsonfilter -i /usr/share/rpcd/acl.d/pirate-flipper.json -e "@" > /dev/null'
+# The tests call it through ubusd, with the ubus CLI (its own package)
+check "flipper: ubusd and the ubus CLI are there" sh -c 'command -v ubusd && command -v ubus' > /dev/null
 # A Flipper's CLI takes /dev/ttyACM0, as a GPS would: gpsd keeps off it
 mkusb 1-4 0483 5740 "" "Flipper Zero"
 mkdir -p "$T/sys/bus/usb/devices/1-4/1-4:1.0"
@@ -1496,6 +1498,8 @@ check "flipper: the daemon is still running" kill -0 "$FZ_DAEMON"
 if [ "$FAIL" != 0 ]; then
 	tail -n 30 "$FZ/daemon.log" | sed 's/^/  pirate-flipper: /'
 	tail -n 30 "$FZ/fake.log" | sed 's/^/  fakeflipper: /'
+	tail -n 10 "$FZ/ubusd.log" | sed 's/^/  ubusd: /'
+	ubus -s "$FZ/ubus.sock" list 2>&1 | head -n 5 | sed 's/^/  ubus list: /'
 fi
 kill "$FZ_DAEMON" "$FZ_FAKE" "$FZ_UBUSD" 2> /dev/null
 

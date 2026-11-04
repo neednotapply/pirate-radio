@@ -24,7 +24,7 @@
  *   info                    everything the Flipper reports about itself
  *   screen {seq}            the screen (128x64, a bit a pixel, a byte for 8
  *                           rows of a column, base64) once it is no longer
- *                           frame <seq>; waits up to 2 s for a new one
+ *                           frame <seq>; waits up to 1 s for a new one
  *   input {key, type}       a button: up, down, left, right, ok or back;
  *                           press, release, short, long or repeat, or a few
  *                           joined with "+" (click: press+short+release,
@@ -85,7 +85,7 @@
 #define MAX_INFO    128
 #define MAX_POWER   32
 
-#define SCREEN_WAIT_MS 2000
+#define SCREEN_WAIT_MS 1000
 #define STREAM_IDLE_MS 10000
 #define OP_TIMEOUT_MS  15000
 #define PIECE_WAIT_MS  30000
