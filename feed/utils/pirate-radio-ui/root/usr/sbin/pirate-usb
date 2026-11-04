@@ -4,7 +4,7 @@
 # it is plugged in: on the network over SMB (ksmbd, with wsdd2 so Windows'
 # Network view lists the router) and to the web UI's Drives tab (HTTP on port
 # 8082, behind the router's login). When the last drive goes, sharing stops.
-# The block hotplug hook (/etc/hotplug.d/block/30-pirate-usb) mounts and
+# The block hotplug hook (/etc/hotplug.d/block/05-pirate-usb) mounts and
 # unmounts; the pirate-usb init script shares what is mounted.
 #
 # Whatever fstab names (the microSD card, by its label) is block-mount's and

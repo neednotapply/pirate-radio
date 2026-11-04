@@ -1233,7 +1233,7 @@ check "usb list: a link out of the drive is refused" [ "$(pu list My_Stick etc-l
 check "usb list: only drives mounted here" [ "$(pu list .. | jsonfilter -e '@.error'), $(pu list nothere | jsonfilter -e '@.error')" = "no such drive, no such drive" ]
 
 # The block hotplug hook (hotplug-call sources it; here it runs under sh)
-UH=/etc/hotplug.d/block/30-pirate-usb
+UH=/etc/hotplug.d/block/05-pirate-usb
 uhp() { : > "$U/calls"; uenv PIRATE_USB_ACTIVE="$U/active" "$@" sh "$UH" > /dev/null 2>&1; cat "$U/calls"; }
 mkdisk sdg usb Lexar JumpDrive
 mkpart sdg sdg1 'UUID="C0DE-0001" LABEL="PHOTOS" TYPE="vfat"'
@@ -1248,7 +1248,19 @@ check "usb hotplug: other block devices are ignored" [ -z "$(uhp ACTION=add DEVN
 rm -rf "$U/sys/class/block/sdg1" "$U/sys/class/block/sdg" "$U/dev/sdg1" "$U/dev/sdg"
 o=$(uhp ACTION=remove DEVNAME=sdg1)
 check "usb hotplug: pulled out, it is detached at once and no longer shared" sh -c "echo '$o' | grep -qx 'umount -l $U/mnt/usb/PHOTOS' && echo '$o' | grep -qx 'init reload' && [ ! -e '$U/mnt/usb/PHOTOS' ] && ! grep -q \"name 'PHOTOS'\" '$U/run/config/ksmbd'"
-check "usb hotplug: its disk going away changes nothing" [ -z "$(uhp ACTION=remove DEVNAME=sdg)" ]
+check "usb hotplug: its disk going away: nothing to unmount, the shares checked again" [ "$(uhp ACTION=remove DEVNAME=sdg)" = "init reload" ]
+# block-mount's hook (10-mount) unmounts what is pulled out too: run first,
+# and if it got there first all the same, the drive still stops being shared
+check "usb hotplug: it runs before block-mount's hook" [ "$(ls /etc/hotplug.d/block | grep -v '^00-' | head -n 1)" = 05-pirate-usb ]
+mkdisk sdg usb Lexar JumpDrive
+mkpart sdg sdg1 'UUID="C0DE-0001" LABEL="PHOTOS" TYPE="vfat"'
+uhp ACTION=add DEVNAME=sdg1 > /dev/null
+check "usb hotplug: plugged in again, shared again" sh -c "grep -q '^/dev/sdg1 $U/mnt/usb/PHOTOS ' '$U/mounts' && grep -q \"name 'PHOTOS'\" '$U/run/config/ksmbd'"
+grep -v " $U/mnt/usb/PHOTOS " "$U/mounts" > "$U/mounts.new" && mv "$U/mounts.new" "$U/mounts"
+rmdir "$U/mnt/usb/PHOTOS"
+rm -rf "$U/sys/class/block/sdg1" "$U/sys/class/block/sdg" "$U/dev/sdg1" "$U/dev/sdg"
+o=$(uhp ACTION=remove DEVNAME=sdg1)
+check "usb hotplug: pulled out and unmounted by something else first, it is no longer shared" sh -c "echo '$o' | grep -qx 'init reload' && ! echo '$o' | grep -q umount && ! grep -q \"name 'PHOTOS'\" '$U/run/config/ksmbd'"
 
 : > "$U/busy"
 pu eject My_Stick > "$U/eject.json"

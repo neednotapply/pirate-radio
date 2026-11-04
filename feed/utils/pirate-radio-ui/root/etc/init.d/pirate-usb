@@ -4,7 +4,7 @@
 # network over SMB (ksmbd, and wsdd2 so Windows lists the router) and to the
 # web UI's Drives tab over HTTP on port 8082. At boot this mounts and shares
 # whatever is plugged in already; after that the block hotplug hook
-# (/etc/hotplug.d/block/30-pirate-usb) keeps it in step. ksmbd and wsdd2 are
+# (/etc/hotplug.d/block/05-pirate-usb) keeps it in step. ksmbd and wsdd2 are
 # not started at boot (96-pirate-usb disables them). Stop this to unmount the
 # drives and stop sharing.
 

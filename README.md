@@ -338,7 +338,7 @@ Tested in this repository's tests and builds:
   and swap left alone, read-only fallback, the shares and share password,
   the folder listing and its limits, eject, and the block hotplug hook),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 362
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 365
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

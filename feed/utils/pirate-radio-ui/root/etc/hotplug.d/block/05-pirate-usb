@@ -1,0 +1,21 @@
+#!/bin/sh
+# Plug and play for USB drives (/etc/hotplug.d/block/05-pirate-usb): mount a
+# drive that is plugged in, unmount one that is pulled out (pirate-usb), then
+# share what is mounted (the pirate-usb init script).
+#
+# It runs before block-mount's own hook (10-mount). That one mounts what
+# fstab names, which pirate-usb leaves be, and unmounts whatever is pulled
+# out, ours included: run after it, a drive pulled out was found unmounted
+# already, and was left shared.
+
+case "$ACTION" in add | remove) ;; *) exit 0 ;; esac
+case "$DEVNAME" in sd*) ;; *) exit 0 ;; esac
+
+# Only once pirate-usb has started since boot, and not been stopped since.
+[ -e "${PIRATE_USB_ACTIVE:-/var/run/pirate-usb.active}" ] || exit 0
+
+# PIRATE_USB, PIRATE_USB_INIT: others to run (tests). Reload when a drive
+# was mounted, and whenever one goes: if something else unmounted it first,
+# the shares still have to drop it.
+"${PIRATE_USB:-/usr/sbin/pirate-usb}" "$ACTION" "$DEVNAME" || [ "$ACTION" = remove ] || exit 0
+exec "${PIRATE_USB_INIT:-/etc/init.d/pirate-usb}" reload
