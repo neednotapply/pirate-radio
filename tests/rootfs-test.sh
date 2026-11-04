@@ -1361,6 +1361,144 @@ check "usb: unmount_all unmounts every drive" sh -c "[ -z \"\$(env PIRATE_USB_RO
 check "usb: unmount_all lets the card go too, from its share only" sh -c "[ ! -e '$U/mnt/usb/microSD' ] && [ ! -e '$U/run/card' ] && grep -q '^/dev/sda1 $U/sdcard ' '$U/mounts'"
 check "usb: first boot, without ksmbd installed" sh /etc/uci-defaults/96-pirate-usb
 
+echo "# Flipper Zero (pirate-flipper; tests/fakeflipper plays the Flipper)"
+FZ="$T/flipper"
+mkdir -p "$FZ"
+check "flipper: ACL is valid JSON" jsonfilter -i /usr/share/rpcd/acl.d/pirate-flipper.json -e '@' -q
+# A Flipper's CLI takes /dev/ttyACM0, as a GPS would: gpsd keeps off it
+mkusb 1-4 0483 5740 "" "Flipper Zero"
+mkdir -p "$T/sys/bus/usb/devices/1-4/1-4:1.0"
+rm -f "$T/sys/class/tty/ttyACM0/device"
+ln -s "$T/sys/bus/usb/devices/1-4/1-4:1.0" "$T/sys/class/tty/ttyACM0/device"
+check "gps pnp: a Flipper Zero's CLI is not a GPS" [ "$(gsync)" = stop ]
+ubusd -s "$FZ/ubus.sock" > "$FZ/ubusd.log" 2>&1 &
+FZ_UBUSD=$!
+fakeflipper -l "$FZ/tty" > "$FZ/fake.log" 2>&1 &
+FZ_FAKE=$!
+i=0
+while [ ! -e "$FZ/tty" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
+pirate-flipper -d "$FZ/tty" -u "$FZ/ubus.sock" > "$FZ/daemon.log" 2>&1 &
+FZ_DAEMON=$!
+fz() { ubus -s "$FZ/ubus.sock" -t 30 call pirate.flipper "$@" 2> /dev/null; }
+fzs() { fz status | jsonfilter -e "$1"; }
+fze() { fz "$@" | jsonfilter -e '@.error'; }
+# Wait (up to 30 s) for the state to be $1
+fz_state() {
+	i=0
+	while [ $i -lt 30 ]; do
+		[ "$(fzs '@.state')" = "$1" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+# Read a file into memory: busy, then ready (or an error)
+fz_read() {
+	i=0
+	while [ $i -lt 30 ]; do
+		r=$(fz read "{\"path\":\"$1\"}")
+		[ "$(echo "$r" | jsonfilter -e '@.busy')" = true ] || break
+		sleep 1
+		i=$((i + 1))
+	done
+	echo "$r"
+}
+# Base64 for 3 * $1 bytes of "A"
+fz_b64() {
+	s=
+	i=0
+	while [ $i -lt "$1" ]; do s="${s}QUFB"; i=$((i + 1)); done
+	echo "$s"
+}
+# fz_ok <method> [json]: the call answers {"ok": true}
+fz_ok() { [ "$(fz "$@" | jsonfilter -e '@.ok')" = true ]; }
+check "flipper: connects and starts an RPC session" fz_state ready
+check "flipper: start_rpc_session typed at its CLI" grep -q '^cli start_rpc_session$' "$FZ/fake.log"
+check "flipper: status: name, model, firmware" [ "$(fzs '@.name') / $(fzs '@.model') / $(fzs '@.firmware') / $(fzs '@.branch')" = "Pirate / Flipper Zero / 1.3.4 / release" ]
+check "flipper: status: battery" [ "$(fzs '@.battery') $(fzs '@.charging')" = "87 charging" ]
+check "flipper: status: SD card, protobuf version" [ "$(fzs '@.sd') $(fzs '@.sd_total') $(fzs '@.sd_free') $(fzs '@.protobuf')" = "true 31914983424 30000000000 0.25" ]
+fz info > "$FZ/info.json"
+check "flipper: info: all of it, dots made underscores" [ "$(jsonfilter -i "$FZ/info.json" -e '@.info.firmware_commit') $(jsonfilter -i "$FZ/info.json" -e '@.info.radio_alive') $(jsonfilter -i "$FZ/info.json" -e '@.power.battery_voltage')" = "a1b2c3d4 true 4.05" ]
+check "flipper: list /: its storages" [ "$(fz list '{"path":"/"}' | jsonfilter -e '@.files[*].name' | tr '\n' ' ')" = "int ext " ]
+fz list '{"path":"/ext"}' > "$FZ/list.json"
+fl() { jsonfilter -i "$FZ/list.json" -e "$1"; }
+check "flipper: list /ext" [ "$(fl '@.files[*].name' | tr '\n' ' ')" = "subghz infrared notes.txt many " ]
+check "flipper: list: folders, sizes" [ "$(fl '@.files[0].dir') $(fl '@.files[2].dir') $(fl '@.files[2].size') $(fl '@.path')" = "true false 14 /ext" ]
+check "flipper: list: a folder over two messages" [ "$(fz list '{"path":"/ext/many"}' | jsonfilter -e '@.files[*].name' | wc -l)" = 10 ]
+check "flipper: list: no such folder" [ "$(fze list '{"path":"/ext/nope"}')" = "no such file or folder" ]
+check "flipper: paths: whole ones only" [ "$(fze list '{"path":"ext"}')" = "path: give a full path, such as /ext/subghz" ]
+check "flipper: paths: no .." [ "$(fze list '{"path":"/ext/../int"}')" = "path: no . or .. parts" ]
+check "flipper: paths: no / at the end" [ "$(fze delete '{"path":"/ext/many/"}')" = "path: no / at the end" ]
+check "flipper: mkdir" fz_ok mkdir '{"path":"/ext/new"}'
+check "flipper: mkdir: there already" [ "$(fze mkdir '{"path":"/ext/new"}')" = "already exists" ]
+check "flipper: mkdir, delete, rename: never a whole storage" [ "$(fze mkdir '{"path":"/ext"}')" = "path: not a whole storage, such as /ext" ]
+p1=$(fz_b64 200)
+p2=$(fz_b64 300)
+check "flipper: write: the first piece" [ "$(fz write "{\"path\":\"/ext/new/a.txt\",\"offset\":0,\"data\":\"$p1\",\"more\":true}" | jsonfilter -e '@.received')" = 600 ]
+check "flipper: write: a piece out of place" [ "$(fze write "{\"path\":\"/ext/new/a.txt\",\"offset\":10,\"data\":\"$p2\"}")" = "offset: the next piece goes at 600" ]
+check "flipper: write: one file at a time" [ "$(fze write '{"path":"/ext/new/b.txt","offset":0,"data":"QUFB"}')" = "a file is being sent to the Flipper already: wait for it to finish" ]
+check "flipper: write: the last piece" [ "$(fz write "{\"path\":\"/ext/new/a.txt\",\"offset\":600,\"data\":\"$p2\",\"more\":false}" | jsonfilter -e '@.size')" = 1500 ]
+check "flipper: write: 1500 bytes, 512 a message" grep -q '^write /ext/new/a.txt 1500 3$' "$FZ/fake.log"
+check "flipper: write: an empty file" [ "$(fz write '{"path":"/ext/new/empty","offset":0,"data":""}' | jsonfilter -e '@.size')" = 0 ]
+check "flipper: write: an empty file, one message" grep -q '^write /ext/new/empty 0 1$' "$FZ/fake.log"
+check "flipper: write: not base64" [ "$(fze write '{"path":"/ext/new/c","offset":0,"data":"*"}')" = "data: not base64" ]
+r=$(fz_read /ext/new/a.txt)
+check "flipper: read: into memory" [ "$(echo "$r" | jsonfilter -e '@.ready') $(echo "$r" | jsonfilter -e '@.size')" = "true 1500" ]
+r=$(fz read '{"path":"/ext/new/a.txt","offset":1200}')
+check "flipper: read: from an offset" [ "$(echo "$r" | jsonfilter -e '@.data') $(echo "$r" | jsonfilter -e '@.more')" = "$(fz_b64 100) false" ]
+check "flipper: read: done once the end is read" [ "$(fze read '{"path":"/ext/new/a.txt","offset":0}')" = "read the file first (without an offset)" ]
+fz_read /ext/new/a.txt > /dev/null
+check "flipper: read: the whole file" [ "$(fz read '{"path":"/ext/new/a.txt","offset":0}' | jsonfilter -e '@.data')" = "$(fz_b64 500)" ]
+check "flipper: read: no such file" [ "$(fz_read /ext/new/nope | jsonfilter -e '@.error')" = "no such file or folder" ]
+check "flipper: rename" fz_ok rename '{"path":"/ext/new/a.txt","to":"/ext/new/b.txt"}'
+check "flipper: renamed" [ "$(fz list '{"path":"/ext/new"}' | jsonfilter -e '@.files[*].name' | tr '\n' ' ')" = "b.txt empty " ]
+check "flipper: delete: a folder with files in it" [ "$(fze delete '{"path":"/ext/new"}')" = "the folder isn't empty" ]
+check "flipper: delete: and all in it" fz_ok delete '{"path":"/ext/new","recursive":true}'
+check "flipper: delete: gone" [ "$(fze list '{"path":"/ext/new"}')" = "no such file or folder" ]
+check "flipper: storage" [ "$(fz storage '{"path":"/int"}' | jsonfilter -e '@.total') $(fz storage '{"path":"/int"}' | jsonfilter -e '@.free')" = "262144 131072" ]
+r=$(fz screen '{"seq":0}')
+s1=$(echo "$r" | jsonfilter -e '@.seq')
+f1=$(echo "$r" | jsonfilter -e '@.frame')
+check "flipper: screen: streamed, a frame" [ "$s1" -ge 1 ] 2> /dev/null
+check "flipper: screen: 1024 bytes, base64" [ "${#f1}" = 1368 ]
+check "flipper: screen: the stream asked for" grep -q '^stream on$' "$FZ/fake.log"
+check "flipper: screen: its orientation" [ "$(echo "$r" | jsonfilter -e '@.orientation')" = horizontal ]
+check "flipper: input: a click" fz_ok input '{"key":"ok","type":"click"}'
+check "flipper: input: press, short, release" [ "$(grep '^input ' "$FZ/fake.log" | tr '\n' ' ')" = "input ok press input ok short input ok release " ]
+r=$(fz screen "{\"seq\":$s1}")
+s2=$(echo "$r" | jsonfilter -e '@.seq')
+f2=$(echo "$r" | jsonfilter -e '@.frame')
+check "flipper: screen: a new frame, for the click" [ "$s2" -gt "$s1" ] 2> /dev/null
+check "flipper: screen: the click shows" [ -n "$f2" -a "$f2" != "$f1" ]
+r=$(fz screen "{\"seq\":$s2}")
+check "flipper: screen: nothing new: no frame, after a wait" [ "$(echo "$r" | jsonfilter -e '@.seq')/$(echo "$r" | jsonfilter -e '@.frame')" = "$s2/" ]
+fz input '{"key":"back","type":"hold"}' > /dev/null
+fz input '{"key":"up","type":"press+repeat+release"}' > /dev/null
+check "flipper: input: hold, and events one by one" [ "$(grep '^input ' "$FZ/fake.log" | tail -n 6 | tr '\n' ' ')" = "input back press input back long input back release input up press input up repeat input up release " ]
+check "flipper: input: a bad key" [ "$(fze input '{"key":"middle"}')" = "key: up, down, left, right, ok or back" ]
+check "flipper: input: a bad type" [ "$(fze input '{"key":"ok","type":"tap"}')" = "type: press, release, short, long or repeat (or click, hold)" ]
+check "flipper: alert" fz_ok alert
+check "flipper: alert: asked for" grep -q '^alert$' "$FZ/fake.log"
+check "flipper: time" fz_ok time '{"year":2026,"month":11,"day":4,"hour":7,"minute":30,"second":5,"weekday":3}'
+check "flipper: time: set" grep -q '^time 2026-11-04 07:30:05 3$' "$FZ/fake.log"
+check "flipper: time: out of range" [ "$(fze time '{"year":2026,"month":13,"day":4,"hour":7,"minute":30,"second":5,"weekday":3}')" = "month: 1 to 12" ]
+check "flipper: time: the router's clock, by default" fz_ok time
+check "flipper: time: set twice" [ "$(grep -c '^time ' "$FZ/fake.log")" = 2 ]
+# The screen stream stops 10 s after the screen was last asked for
+sleep 13
+check "flipper: screen: the stream stops when no one looks" grep -q '^stream off$' "$FZ/fake.log"
+check "flipper: reboot: a bad mode" [ "$(fze reboot '{"mode":"bios"}')" = "mode: os, dfu or update" ]
+check "flipper: reboot" fz_ok reboot
+check "flipper: reboot: asked for" grep -q '^reboot os$' "$FZ/fake.log"
+check "flipper: unplugged (restarting): absent" fz_state absent
+check "flipper: unplugged: nothing to list" [ "$(fze list '{"path":"/ext"}')" = "no Flipper is plugged in" ]
+check "flipper: the daemon is still running" kill -0 "$FZ_DAEMON"
+if [ "$FAIL" != 0 ]; then
+	tail -n 30 "$FZ/daemon.log" | sed 's/^/  pirate-flipper: /'
+	tail -n 30 "$FZ/fake.log" | sed 's/^/  fakeflipper: /'
+fi
+kill "$FZ_DAEMON" "$FZ_FAKE" "$FZ_UBUSD" 2> /dev/null
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

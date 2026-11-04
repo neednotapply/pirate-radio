@@ -153,8 +153,8 @@ same status with every address the receivers serve, the aircraft map, the ISM
 devices rtl_433 has decoded (one row per device, with its latest readings) and
 the recorded files; using a radio hands the RTL-SDR to that job. The Dashboard,
 Hosts, Wi-Fi Survey, Threats, Router, Capture, Handshake and Firmware tabs cover
-the network, the router and firmware, the DreamPi tab the Dreamcast and the
-Drives tab USB drives (below).
+the network, the router and firmware, the DreamPi tab the Dreamcast, the
+Drives tab USB drives and the Flipper tab a Flipper Zero (below).
 
 **Over SSH:**
 
@@ -294,6 +294,28 @@ password set, or only on a network you trust. Take the card out and it stops
 being shared; put it back and it is shared again once it mounts. (Its files
 are also on port 8081, in the browser.)
 
+**A Flipper Zero:** plug one into the USB port with a data cable (through the
+hub if a drive is in too) and the **Flipper** tab shows it, as qFlipper would
+on a computer:
+
+- **Its screen**, live, with its buttons beside it to press (hold one for a
+  long press); or click the screen and use the arrow keys, Enter and
+  Backspace. *Save a screenshot* keeps a PNG.
+- **Its files**, on the SD card (`ext`) and inside (`int`): browse, download
+  (8 MB at most a file), upload, rename, delete, make folders.
+- **Its details**: name, firmware, battery, SD card space, and everything else
+  it reports; it can beep and blink (to find it), take this computer's time
+  for its clock, and restart.
+
+`pirate-flipper` (its own package) holds the Flipper's RPC session, as
+qFlipper does: `start_rpc_session` at the Flipper's CLI, then its protobuf
+messages ([flipperzero-protobuf](https://github.com/flipperdevices/flipperzero-protobuf)
+has their definitions; the code here is Pirate Radio's own). It waits while no
+Flipper is plugged in, and gpsd leaves the Flipper's serial port alone. A
+Flipper locked with a PIN gives no answer until it is unlocked; one in DFU
+(recovery) mode is shown as such, for qFlipper to repair. Firmware updates
+aren't done here yet. `logread -e pirate-flipper` shows it connecting.
+
 **On the card** (`pirate-radio/<job>/<date>/`):
 
 | Files | Open with |
@@ -345,7 +367,12 @@ Tested in this repository's tests and builds:
   backend), USB drives (mounting by label and filesystem, the microSD card
   and swap left alone unless the card is to be shared, read-only fallback,
   the shares and share password, the card shared, taken out and put back,
-  the folder listing and its limits, eject, and the block hotplug hook),
+  the folder listing and its limits, eject, and the block hotplug hook), a
+  Flipper Zero (pirate-flipper against `tests/fakeflipper`, a Flipper's CLI
+  and RPC session on a pseudo-terminal: connecting, its details, folders over
+  several messages, uploads in pieces and downloads in slices, renaming and
+  deleting, the screen stream and its stop, buttons, the clock, restarting,
+  and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
   slate-sdr (settings, card mount, card folder) and pirateradio.local: 382
   checks.
@@ -394,9 +421,10 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper` |
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
+| `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
 | `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics, firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |

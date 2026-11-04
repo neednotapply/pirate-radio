@@ -27,13 +27,14 @@ usb_id() {
 }
 
 # is_gps <device>: not a serial device known to be something else, such as
-# a PortaPack's USB console under Mayhem firmware (1d50:6018) or a USB modem
-# DreamPi answers with, which take /dev/ttyACM0 like a GPS would.
+# a PortaPack's USB console under Mayhem firmware (1d50:6018), a Flipper
+# Zero's CLI (0483:5740, pirate-flipper's) or a USB modem DreamPi answers
+# with, which take /dev/ttyACM0 like a GPS would.
 is_gps() {
 	local id
 	id=$(usb_id "$1")
 	case "$id" in
-	1d50:6018) return 1 ;;
+	1d50:6018 | 0483:5740) return 1 ;;
 	esac
 	if [ -n "$id" ] && [ -r "$DREAMPI_LIB" ]; then
 		# shellcheck disable=SC1090

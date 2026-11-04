@@ -1,0 +1,15 @@
+{
+	"pirate-flipper": {
+		"description": "Grant access to a Flipper Zero on the USB port: its screen and buttons, its files and its details",
+		"read": {
+			"ubus": {
+				"pirate.flipper": [ "status", "info", "screen", "list", "read", "storage" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.flipper": [ "input", "write", "mkdir", "delete", "rename", "alert", "time", "reboot" ]
+			}
+		}
+	}
+}

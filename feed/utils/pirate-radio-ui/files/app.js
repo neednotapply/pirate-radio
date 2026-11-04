@@ -145,7 +145,115 @@
 			password: DEMO_USB.password, host: "PirateRadio", http_port: 8082, card: DEMO_USB.card, card_in: true, drives: drives };
 	}
 
+	/* The Flipper page's demo: a few files, and a menu on its screen */
+	var DEMO_FZ = { seq: 1, item: 0 };
+	var DEMO_FZ_FILES = {
+		"/": [{ name: "int", dir: true }, { name: "ext", dir: true }],
+		"/int": [{ name: ".bt.settings", size: 52 }],
+		"/ext": [{ name: "badusb", dir: true }, { name: "infrared", dir: true }, { name: "nfc", dir: true },
+			{ name: "subghz", dir: true }, { name: "notes.txt", size: 14 }],
+		"/ext/badusb": [{ name: "hello.txt", size: 88 }],
+		"/ext/infrared": [{ name: "TV.ir", size: 1204 }],
+		"/ext/nfc": [],
+		"/ext/subghz": [{ name: "garage.sub", size: 412 }]
+	};
+	var DEMO_FZ_MENU = ["Sub-GHz", "RFID", "NFC", "Infrared", "GPIO", "iButton", "Bad USB"];
+	// The screen as the Flipper sends it: 128x64, a byte for 8 rows of a column
+	function demoFlipperFrame() {
+		var c = document.createElement("canvas"), g, px, bytes = new Uint8Array(1024), x, y, i, top;
+		c.width = 128; c.height = 64;
+		g = c.getContext("2d");
+		g.fillStyle = "#fff"; g.fillRect(0, 0, 128, 64);
+		g.fillStyle = "#000"; g.font = "bold 10px monospace"; g.textBaseline = "top";
+		top = Math.max(0, Math.min(DEMO_FZ.item - 1, DEMO_FZ_MENU.length - 4));
+		for (i = 0; i < 4; i++) {
+			var n = top + i;
+			if (n === DEMO_FZ.item) { g.fillRect(2, 2 + i * 15, 118, 14); g.fillStyle = "#fff"; }
+			g.fillText(DEMO_FZ_MENU[n], 8, 4 + i * 15);
+			g.fillStyle = "#000";
+		}
+		g.fillRect(124, 2 + Math.round(DEMO_FZ.item * 58 / DEMO_FZ_MENU.length), 3, 8);
+		px = g.getImageData(0, 0, 128, 64).data;
+		for (y = 0; y < 64; y++)
+			for (x = 0; x < 128; x++)
+				if (px[(y * 128 + x) * 4] < 128) bytes[(y >> 3) * 128 + x] |= 1 << (y & 7);
+		var s = "";
+		for (i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+		return btoa(s);
+	}
+	function demoFzEntry(path) {
+		var dir = path.replace(/\/[^/]*$/, "") || "/", name = path.replace(/^.*\//, "");
+		var list = DEMO_FZ_FILES[dir];
+		return { list: list, dir: dir, name: name, i: list ? list.map(function (f) { return f.name; }).indexOf(name) : -1 };
+	}
+
 	var MOCK = {
+		"pirate.flipper:status": { state: "ready", device: "/dev/ttyACM0", name: "Pirate", model: "Flipper Zero",
+			firmware: "1.3.4", branch: "release", build_date: "04-11-2026", commit: "a1b2c3d4", battery: 87,
+			charging: "charging", protobuf: "0.25", sd: true, sd_total: 31914983424, sd_free: 30120000000 },
+		"pirate.flipper:info": {
+			info: { hardware_model: "Flipper Zero", hardware_name: "Pirate", hardware_region: "1",
+				hardware_otp_ver: "2", firmware_version: "1.3.4", firmware_branch: "release",
+				firmware_commit: "a1b2c3d4", firmware_build_date: "04-11-2026", radio_alive: "true",
+				radio_stack_major: "1", radio_stack_minor: "20" },
+			power: { charge_level: "87", charge_state: "charging", battery_voltage: "4.05", battery_health: "100" }
+		},
+		"pirate.flipper:screen": function (p) {
+			if (p.seq === DEMO_FZ.seq) return { state: "ready", seq: DEMO_FZ.seq };
+			return { state: "ready", seq: DEMO_FZ.seq, frame: demoFlipperFrame(), orientation: "horizontal" };
+		},
+		"pirate.flipper:input": function (p) {
+			if (/short|repeat/.test(p.type || "click") || p.type === "click") {
+				if (p.key === "up") DEMO_FZ.item = (DEMO_FZ.item + DEMO_FZ_MENU.length - 1) % DEMO_FZ_MENU.length;
+				if (p.key === "down") DEMO_FZ.item = (DEMO_FZ.item + 1) % DEMO_FZ_MENU.length;
+				DEMO_FZ.seq++;
+			}
+			return { ok: true };
+		},
+		"pirate.flipper:list": function (p) {
+			var list = DEMO_FZ_FILES[p.path];
+			if (!list) return { error: "no such file or folder" };
+			return { path: p.path, files: list.map(function (f) { return { name: f.name, dir: !!f.dir, size: f.size || 0 }; }) };
+		},
+		"pirate.flipper:read": function (p) {
+			var e = demoFzEntry(p.path), f = e.i >= 0 ? e.list[e.i] : null, text;
+			if (!f || f.dir) return { error: "no such file or folder" };
+			text = "Pirate Radio demo: " + p.path + "\n";
+			if (p.offset == null) return { ready: true, size: text.length };
+			return { size: text.length, offset: 0, data: btoa(text), more: false };
+		},
+		"pirate.flipper:write": function (p) {
+			var e = demoFzEntry(p.path), n = Math.floor((p.data || "").length * 3 / 4);
+			if (!p.more && e.list && e.i < 0) e.list.push({ name: e.name, size: (p.offset || 0) + n });
+			return p.more ? { ok: true, received: (p.offset || 0) + n } : { ok: true, size: (p.offset || 0) + n };
+		},
+		"pirate.flipper:mkdir": function (p) {
+			var e = demoFzEntry(p.path);
+			if (!e.list) return { error: "no such file or folder" };
+			if (e.i >= 0) return { error: "already exists" };
+			e.list.push({ name: e.name, dir: true });
+			DEMO_FZ_FILES[p.path] = [];
+			return { ok: true };
+		},
+		"pirate.flipper:delete": function (p) {
+			var e = demoFzEntry(p.path);
+			if (e.i < 0) return { error: "no such file or folder" };
+			if (e.list[e.i].dir && (DEMO_FZ_FILES[p.path] || []).length && !p.recursive) return { error: "the folder isn't empty" };
+			e.list.splice(e.i, 1);
+			delete DEMO_FZ_FILES[p.path];
+			return { ok: true };
+		},
+		"pirate.flipper:rename": function (p) {
+			var e = demoFzEntry(p.path), t = demoFzEntry(p.to);
+			if (e.i < 0) return { error: "no such file or folder" };
+			if (t.i >= 0) return { error: "already exists" };
+			e.list[e.i].name = t.name;
+			if (DEMO_FZ_FILES[p.path]) { DEMO_FZ_FILES[p.to] = DEMO_FZ_FILES[p.path]; delete DEMO_FZ_FILES[p.path]; }
+			return { ok: true };
+		},
+		"pirate.flipper:alert": { ok: true },
+		"pirate.flipper:time": { ok: true },
+		"pirate.flipper:reboot": { ok: true },
 		"pirate.usb:status": demoUsb,
 		"pirate.usb:list": function (p) {
 			var files = p.name === "KINGSTON" && !DEMO_USB.ejected ? DEMO_USB_FILES : p.name === "microSD" && DEMO_USB.card ? DEMO_CARD_FILES : null;
@@ -2082,6 +2190,495 @@
 		status();
 	}
 
+	/* ---------- Flipper (a Flipper Zero on the USB port; pirate-flipper) ---------- */
+
+	var FZ_TIMER = null, FZ_RUN = 0;
+	var FZ_KEYBOARD = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+		Enter: "ok", " ": "ok", Backspace: "back", Escape: "back" };
+	// The screen's backlight and its pixels
+	var FZ_BG = [254, 138, 44], FZ_FG = [24, 14, 4];
+
+	function renderFlipper() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Flipper", "a Flipper Zero on the USB port: its screen and buttons, its files"));
+		var run = ++FZ_RUN;   // this page's loops stop once it is left, or drawn again
+		function alive() { return run === FZ_RUN && current === "flipper"; }
+		function failed(e) {
+			if (String(e.message || e) === "unauthorized") { onError(e); return true; }
+			return false;
+		}
+		function say(line, text, kind) {
+			line.className = "status" + (kind === "err" ? " err" : kind === "ok" ? " ok-text" : "");
+			line.textContent = text;
+		}
+
+		/* The Flipper itself */
+		var devPanel = panel("Flipper Zero");
+		var devWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		var actStatus = el("span", { class: "status" });
+		var devActs = el("div", { class: "toolbar", hidden: "" },
+			btn("Beep and blink", { onclick: findIt }),
+			btn("Set its clock to this computer's", { onclick: setClock }),
+			btn("Restart it", { onclick: restart }),
+			btn("All details", { onclick: details }),
+			actStatus);
+		var detWrap = el("div", { hidden: "" });
+		devPanel.appendChild(devWrap); devPanel.appendChild(devActs); devPanel.appendChild(detWrap);
+
+		/* Its screen and buttons */
+		var scrPanel = panel("Screen");
+		scrPanel.style.marginTop = "14px";
+		scrPanel.hidden = true;
+		var canvas = el("canvas", { class: "fz-screen", width: "128", height: "64", tabindex: "0",
+			"aria-label": "The Flipper's screen. With it selected, the arrow keys, Enter and Backspace press its buttons." });
+		var g = canvas.getContext("2d");
+		var img = g.createImageData(128, 64);
+		var scrStatus = el("span", { class: "status", text: "waiting for the screen…" });
+		var pad = el("div", { class: "fz-pad" });
+		scrPanel.appendChild(el("div", { class: "fz-wrap" }, el("div", { class: "fz-lcd" }, canvas), pad));
+		scrPanel.appendChild(el("div", { class: "toolbar" }, btn("Save a screenshot", { onclick: screenshot }), scrStatus));
+		scrPanel.appendChild(el("p", { class: "descr", text:
+			"Press the buttons here, or click the screen and use the arrow keys, Enter (OK) and Backspace or Esc (Back). " +
+			"Hold a button for a long press." }));
+
+		/* Its files */
+		var fPanel = panel("Files");
+		fPanel.style.marginTop = "14px";
+		fPanel.hidden = true;
+		var fStatus = el("span", { class: "status" });
+		var upInput = el("input", { type: "file", multiple: "", hidden: "" });
+		var upBtn = btn("Upload files", { primary: true, onclick: function () { upInput.click(); } });
+		var mkBtn = btn("New folder", { onclick: newFolder });
+		var fCrumbs = el("div", { class: "crumbs" });
+		var fWrap = el("div");
+		upInput.addEventListener("change", function () {
+			var files = Array.prototype.slice.call(upInput.files || []);
+			upInput.value = "";
+			if (files.length) uploadAll(files);
+		});
+		fPanel.appendChild(el("div", { class: "toolbar" }, upBtn, mkBtn,
+			btn("Refresh", { onclick: function () { browse(path); } }), fStatus, upInput));
+		fPanel.appendChild(fCrumbs);
+		fPanel.appendChild(fWrap);
+		fPanel.appendChild(el("p", { class: "descr", text:
+			"ext is the Flipper's SD card, int its own storage. File names are plain ASCII; downloads are 8 MB at most." }));
+
+		VIEW.appendChild(devPanel); VIEW.appendChild(scrPanel); VIEW.appendChild(fPanel);
+
+		var ready = false, shown = "", path = "/ext", listing = [];
+
+		/* ---- status ---- */
+
+		function showDevice(s) {
+			var key = JSON.stringify(s);
+			if (key === shown) return;
+			shown = key;
+			var was = ready;
+			ready = s.state === "ready";
+			scrPanel.hidden = fPanel.hidden = devActs.hidden = !ready;
+			if (!ready) { detWrap.hidden = true; scrSeq = 0; }
+			clear(devWrap);
+			if (s.state === "missing") {
+				devWrap.appendChild(alertEl("warn", s.error));
+			} else if (s.state === "absent") {
+				devWrap.appendChild(el("div", { class: "placeholder" },
+					el("b", { text: "No Flipper plugged in" }),
+					el("div", { class: "muted", text: "Plug a Flipper Zero into the router's USB port with a data cable " +
+						"(through a hub if a drive is plugged in too). It shows up here within a few seconds. If it is " +
+						"locked with a PIN, unlock it." })));
+				if (s.error) devWrap.appendChild(alertEl("warn", s.error));
+			} else if (s.state === "dfu") {
+				devWrap.appendChild(alertEl("warn", "The Flipper is in DFU (recovery) mode: it has no screen or files to " +
+					"show. Repair or update its firmware with qFlipper on a computer."));
+			} else if (s.state === "connecting") {
+				devWrap.appendChild(el("div", { class: "muted", text: "Connecting to the Flipper on " + (s.device || "USB") + "…" }));
+				if (s.error) devWrap.appendChild(alertEl("warn", s.error));
+			} else {
+				var head = el("div", { class: "drive-head" },
+					el("strong", { text: s.name || "Flipper" }),
+					badge(s.model || "Flipper Zero", "sec-neutral"),
+					s.firmware ? badge("firmware " + s.firmware, "sec-ok") : null,
+					s.branch ? el("span", { class: "muted", text: s.branch }) : null);
+				devWrap.appendChild(head);
+				if (s.battery != null) {
+					var m = el("div", { class: "meter" + (s.battery <= 15 ? " full" : "") }), fill = el("span");
+					fill.style.width = Math.max(0, Math.min(100, s.battery)) + "%";
+					m.appendChild(fill);
+					devWrap.appendChild(m);
+				}
+				devWrap.appendChild(el("div", { class: "status", text:
+					(s.battery != null ? "battery " + s.battery + "%" + (s.charging ? " · " + s.charging : "") : "battery unknown") +
+					" · " + (s.sd ? "SD card: " + gb(s.sd_free) + " free of " + gb(s.sd_total) : "no SD card") }));
+				var dl = el("dl", { class: "kv" });
+				[["Port", s.device], ["Firmware built", s.build_date], ["Commit", s.commit], ["RPC protocol", s.protobuf]].forEach(function (p) {
+					if (!p[1]) return;
+					dl.appendChild(el("dt", { text: p[0] }));
+					dl.appendChild(el("dd", { text: p[1] }));
+				});
+				devWrap.appendChild(dl);
+			}
+			// Plugged in: show its files
+			if (ready && !was) browse(path);
+		}
+		function status() {
+			return call("pirate.flipper", "status").then(showDevice).catch(function (e) {
+				if (failed(e)) return;
+				var msg = String(e.message || e);
+				if (msg === "ubus status 4")
+					msg = "The Flipper service (pirate-flipper) isn't running on this router: its firmware may predate the Flipper page.";
+				showDevice({ state: "missing", error: msg });
+			});
+		}
+
+		/* ---- actions ---- */
+
+		function act(method, params, doing, done) {
+			say(actStatus, doing);
+			return call("pirate.flipper", method, params).then(function (r) {
+				if (r.error) return say(actStatus, r.error, "err");
+				say(actStatus, done, "ok");
+			}).catch(function (e) { if (!failed(e)) say(actStatus, String(e.message || e), "err"); });
+		}
+		function findIt() { act("alert", {}, "beeping…", "it beeped and blinked"); }
+		function setClock() {
+			var d = new Date();
+			act("time", { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), hour: d.getHours(),
+				minute: d.getMinutes(), second: d.getSeconds(), weekday: d.getDay() || 7 },
+				"setting its clock…", "clock set to " + d.toLocaleString());
+		}
+		function restart() {
+			if (!window.confirm("Restart the Flipper? It is back here in a few seconds.")) return;
+			act("reboot", { mode: "os" }, "restarting…", "restarting: back in a few seconds");
+		}
+		function details() {
+			if (!detWrap.hidden) { detWrap.hidden = true; return; }
+			call("pirate.flipper", "info").then(function (r) {
+				if (r.error) return say(actStatus, r.error, "err");
+				var rows = [];
+				[r.info || {}, r.power || {}].forEach(function (t) {
+					Object.keys(t).sort().forEach(function (k) { rows.push([k.replace(/_/g, " "), String(t[k])]); });
+				});
+				clear(detWrap).appendChild(tableEl(["", ""], rows));
+				detWrap.hidden = false;
+			}).catch(function (e) { if (!failed(e)) say(actStatus, String(e.message || e), "err"); });
+		}
+
+		/* ---- the screen ---- */
+
+		var scrSeq = 0, vertical = false;
+		function draw(b64, orient) {
+			var bin = atob(b64), vert = /^vertical/.test(orient || ""), cw = vert ? 64 : 128, x, y;
+			if (vert !== vertical) {
+				vertical = vert;
+				canvas.width = cw; canvas.height = vert ? 128 : 64;
+				canvas.classList.toggle("vert", vert);
+				img = g.createImageData(canvas.width, canvas.height);
+			}
+			var d = img.data;
+			for (y = 0; y < 64; y++) {
+				for (x = 0; x < 128; x++) {
+					var on = (bin.charCodeAt((y >> 3) * 128 + x) >> (y & 7)) & 1, nx = x, ny = y;
+					if (orient === "horizontal_flip") { nx = 127 - x; ny = 63 - y; }
+					else if (orient === "vertical") { nx = 63 - y; ny = x; }
+					else if (orient === "vertical_flip") { nx = y; ny = 127 - x; }
+					var i = (ny * cw + nx) * 4, c = on ? FZ_FG : FZ_BG;
+					d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = 255;
+				}
+			}
+			g.putImageData(img, 0, 0);
+		}
+		// One request out at a time: the router answers once the screen changes
+		function screenLoop() {
+			if (!alive()) return;
+			if (!ready || document.hidden) { setTimeout(screenLoop, 1000); return; }
+			call("pirate.flipper", "screen", { seq: scrSeq }).then(function (r) {
+				if (!alive()) return;
+				if (r.frame) {
+					draw(r.frame, r.orientation);
+					if (!scrSeq) say(scrStatus, "live", "ok");
+					scrSeq = r.seq;
+				}
+				setTimeout(screenLoop, r.state !== "ready" ? 1500 : r.frame ? 0 : 150);
+			}, function (e) {
+				if (failed(e)) return;
+				say(scrStatus, String(e.message || e), "err");
+				setTimeout(screenLoop, 2000);
+			});
+		}
+		function screenshot() {
+			var s = el("canvas"), k = 4, t = new Date();
+			s.width = canvas.width * k; s.height = canvas.height * k;
+			var sg = s.getContext("2d");
+			sg.imageSmoothingEnabled = false;
+			sg.drawImage(canvas, 0, 0, s.width, s.height);
+			function two(n) { return (n < 10 ? "0" : "") + n; }
+			var name = "flipper-" + t.getFullYear() + two(t.getMonth() + 1) + two(t.getDate()) + "-" +
+				two(t.getHours()) + two(t.getMinutes()) + two(t.getSeconds()) + ".png";
+			s.toBlob(function (b) { if (b) saveBlob(b, name); });
+		}
+
+		/* ---- its buttons ---- */
+
+		var queue = Promise.resolve(), pending = 0;
+		// In order, one after another, as the Flipper would have them
+		function send(key, type) {
+			pending++;
+			queue = queue.then(function () {
+				return call("pirate.flipper", "input", { key: key, type: type });
+			}).then(function (r) {
+				if (r && r.error) say(scrStatus, r.error, "err");
+			}, function (e) {
+				if (!failed(e)) say(scrStatus, String(e.message || e), "err");
+			}).then(function () { pending--; });
+		}
+		// A button held down: press; after half a second, long, then repeats;
+		// let go: short (if it wasn't long) and release
+		function holder(key, b) {
+			var down = false, long = false, t = null, rep = null;
+			return {
+				down: function () {
+					if (down) return;
+					down = true; long = false;
+					if (b) b.classList.add("down");
+					send(key, "press");
+					t = setTimeout(function () {
+						long = true;
+						send(key, "long");
+						rep = setInterval(function () { if (pending < 2) send(key, "repeat"); }, 200);
+					}, 500);
+				},
+				up: function () {
+					if (!down) return;
+					down = false;
+					if (b) b.classList.remove("down");
+					clearTimeout(t); clearInterval(rep);
+					send(key, long ? "release" : "short+release");
+				}
+			};
+		}
+		var holds = {};
+		[["up", "▲", "Up"], ["left", "◀", "Left"], ["ok", "OK", "OK"], ["right", "▶", "Right"],
+			["down", "▼", "Down"], ["back", "↩", "Back"]].forEach(function (k) {
+			var b = el("button", { type: "button", class: "fz-key fz-" + k[0], "aria-label": k[2], title: k[2], text: k[1] });
+			var h = holds[k[0]] = holder(k[0], b);
+			b.addEventListener("pointerdown", function (ev) {
+				ev.preventDefault();
+				if (b.setPointerCapture) try { b.setPointerCapture(ev.pointerId); } catch (e2) {}
+				h.down();
+			});
+			["pointerup", "pointercancel", "lostpointercapture"].forEach(function (t) { b.addEventListener(t, h.up); });
+			b.addEventListener("contextmenu", function (ev) { ev.preventDefault(); });
+			// The keyboard on a focused button: Enter and Space press it
+			b.addEventListener("keydown", function (ev) {
+				if ((ev.key === "Enter" || ev.key === " ") && !ev.repeat) { ev.preventDefault(); h.down(); }
+			});
+			b.addEventListener("keyup", function (ev) {
+				if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); h.up(); }
+			});
+			pad.appendChild(b);
+		});
+		canvas.addEventListener("keydown", function (ev) {
+			var k = FZ_KEYBOARD[ev.key];
+			if (!k) return;
+			ev.preventDefault();
+			if (!ev.repeat) holds[k].down();
+		});
+		canvas.addEventListener("keyup", function (ev) {
+			var k = FZ_KEYBOARD[ev.key];
+			if (!k) return;
+			ev.preventDefault();
+			holds[k].up();
+		});
+		canvas.addEventListener("blur", function () { Object.keys(holds).forEach(function (k) { holds[k].up(); }); });
+		canvas.addEventListener("pointerdown", function () { canvas.focus(); });
+
+		/* ---- files ---- */
+
+		function join(dir, name) { return (dir === "/" ? "" : dir) + "/" + name; }
+		function parentOf(p) { return p.replace(/\/[^/]*$/, "") || "/"; }
+		function badName(n) {
+			if (!n || n === "." || n === "..") return "give a name";
+			if (!/^[\x20-\x7e]+$/.test(n)) return "the Flipper takes plain ASCII names only";
+			if (/[\/\\:*?"<>|]/.test(n)) return "no / \\ : * ? \" < > | in names";
+			return null;
+		}
+		function crumbs(p) {
+			clear(fCrumbs);
+			var link = function (label, to) {
+				return el("button", { type: "button", class: "linkbtn", text: label, onclick: function () { browse(to); } });
+			};
+			var parts = p === "/" ? [] : p.slice(1).split("/");
+			fCrumbs.appendChild(parts.length ? link("Flipper", "/") : el("span", { text: "Flipper" }));
+			parts.forEach(function (seg, i) {
+				fCrumbs.appendChild(el("span", { class: "muted", text: " / " }));
+				var to = "/" + parts.slice(0, i + 1).join("/");
+				fCrumbs.appendChild(i === parts.length - 1 ? el("span", { text: seg }) : link(seg, to));
+			});
+		}
+		function browse(p) {
+			path = p;
+			crumbs(p);
+			upBtn.disabled = mkBtn.disabled = p === "/";
+			clear(fWrap).appendChild(el("div", { class: "muted", text: "Loading…" }));
+			call("pirate.flipper", "list", { path: p }).then(function (r) {
+				if (!alive() || path !== p) return;
+				if (r.error) { clear(fWrap).appendChild(alertEl("warn", r.error)); return; }
+				listing = (r.files || []).slice().sort(function (a, b) {
+					return (b.dir - a.dir) || a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+				});
+				clear(fWrap);
+				var rows = [];
+				if (p !== "/") rows.push([el("button", { type: "button", class: "linkbtn", text: "↑ up",
+					onclick: function () { browse(parentOf(p)); } }), "", ""]);
+				listing.forEach(function (f) {
+					var fp = join(p, f.name);
+					var label = p !== "/" ? f.name + (f.dir ? "/" : "") :
+						f.name === "ext" ? "ext/ (SD card)" : f.name === "int" ? "int/ (internal)" : f.name + "/";
+					var line = el("span", { class: "status" });
+					rows.push([
+						f.dir ? el("button", { type: "button", class: "linkbtn", text: label, onclick: function () { browse(fp); } })
+							: el("span", { text: f.name }),
+						f.dir ? "" : size(f.size),
+						p === "/" ? "" : el("span", { class: "fz-acts" },
+							f.dir ? null : btn("Download", { cls: "small", onclick: function () { download(fp, f.name, line); } }),
+							btn("Rename", { cls: "small", onclick: function () { rename(fp, f.name); } }),
+							btn("Delete", { cls: "small reset", onclick: function () { remove(fp, f); } }),
+							line)
+					]);
+				});
+				if (listing.length) fWrap.appendChild(tableEl(["Name", "Size", ""], rows));
+				else {
+					if (rows.length) fWrap.appendChild(tableEl(["Name", "Size", ""], rows));
+					fWrap.appendChild(el("div", { class: "placeholder", text: "This folder is empty." }));
+				}
+				if (r.total) fWrap.appendChild(el("p", { class: "descr", text:
+					"Showing the first " + listing.length + " of " + r.total + " entries." }));
+			}).catch(function (e) {
+				if (failed(e)) return;
+				clear(fWrap).appendChild(alertEl("warn", String(e.message || e)));
+			});
+		}
+		function fileOp(method, params, doing, done) {
+			say(fStatus, doing);
+			return call("pirate.flipper", method, params).then(function (r) {
+				if (r.error) return say(fStatus, r.error, "err");
+				say(fStatus, done, "ok");
+				browse(path);
+			}).catch(function (e) { if (!failed(e)) say(fStatus, String(e.message || e), "err"); });
+		}
+		function newFolder() {
+			var n = window.prompt("New folder in " + path + ":", "");
+			if (n == null) return;
+			var bad = badName(n.trim());
+			if (bad) return say(fStatus, bad, "err");
+			fileOp("mkdir", { path: join(path, n.trim()) }, "making " + n.trim() + "…", "made " + n.trim());
+		}
+		function rename(fp, name) {
+			var n = window.prompt("Rename " + name + " to:", name);
+			if (n == null || n.trim() === name) return;
+			var bad = badName(n.trim());
+			if (bad) return say(fStatus, bad, "err");
+			fileOp("rename", { path: fp, to: join(parentOf(fp), n.trim()) }, "renaming…", "renamed to " + n.trim());
+		}
+		function remove(fp, f) {
+			if (!window.confirm("Delete " + f.name + (f.dir ? " and everything in it" : "") + " from the Flipper?")) return;
+			fileOp("delete", { path: fp, recursive: !!f.dir }, "deleting " + f.name + "…", "deleted " + f.name);
+		}
+
+		function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+		function download(fp, name, line) {
+			say(line, "reading…");
+			function poll() {
+				return call("pirate.flipper", "read", { path: fp }).then(function (r) {
+					if (r.error) throw new Error(r.error);
+					if (r.busy) { say(line, "reading… " + size(r.got)); return wait(400).then(poll); }
+					return slices();
+				});
+			}
+			function slices() {
+				var parts = [], off = 0;
+				function next() {
+					return call("pirate.flipper", "read", { path: fp, offset: off }).then(function (r) {
+						if (r.error) throw new Error(r.error);
+						var bin = atob(r.data || ""), u = new Uint8Array(bin.length), i;
+						for (i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+						parts.push(u);
+						off += u.length;
+						if (r.more) { say(line, "downloading… " + Math.round(off * 100 / r.size) + "%"); return next(); }
+						saveBlob(new Blob(parts, { type: "application/octet-stream" }), name);
+						say(line, "downloaded", "ok");
+					});
+				}
+				return next();
+			}
+			poll().catch(function (e) { if (!failed(e)) say(line, String(e.message || e), "err"); });
+		}
+
+		function b64(u8) {
+			var s = "", i;
+			for (i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+			return btoa(s);
+		}
+		function readFile(file) {
+			if (file.arrayBuffer) return file.arrayBuffer();
+			return new Promise(function (res, rej) {
+				var fr = new FileReader();
+				fr.onload = function () { res(fr.result); };
+				fr.onerror = function () { rej(fr.error); };
+				fr.readAsArrayBuffer(file);
+			});
+		}
+		// Pieces of 32 KiB: a ubus request through uhttpd is 64 KB at most
+		function uploadOne(dir, file) {
+			var bad = badName(file.name);
+			if (bad) return Promise.reject(new Error(file.name + ": " + bad));
+			if (dir === path && listing.some(function (f) { return f.name === file.name; }) &&
+				!window.confirm(file.name + " is on the Flipper already. Replace it?")) return Promise.resolve();
+			var fp = join(dir, file.name);
+			return readFile(file).then(function (buf) {
+				var u8 = new Uint8Array(buf), off = 0;
+				function next() {
+					var piece = u8.subarray(off, off + 32768), more = off + piece.length < u8.length;
+					say(fStatus, "uploading " + file.name + "… " + (u8.length ? Math.round(off * 100 / u8.length) : 0) + "%");
+					return call("pirate.flipper", "write", { path: fp, offset: off, data: b64(piece), more: more }).then(function (r) {
+						if (r.error) throw new Error(file.name + ": " + r.error);
+						off += piece.length;
+						if (more) return next();
+						say(fStatus, "uploaded " + file.name + " (" + size(u8.length) + ")", "ok");
+					});
+				}
+				return next();
+			});
+		}
+		function uploadAll(files) {
+			var dir = path, chain = Promise.resolve();
+			if (dir === "/") return say(fStatus, "open ext (the SD card) or int first", "err");
+			files.forEach(function (f) { chain = chain.then(function () { return uploadOne(dir, f); }); });
+			chain.then(function () { if (path === dir) browse(dir); }, function (e) {
+				if (failed(e)) return;
+				say(fStatus, String(e.message || e), "err");
+				if (path === dir) browse(dir);
+			});
+		}
+
+		// Plugged in and pulled out as it likes: keep the page current while it is open
+		if (FZ_TIMER) clearInterval(FZ_TIMER);
+		FZ_TIMER = setInterval(function () {
+			if (!alive()) { clearInterval(FZ_TIMER); FZ_TIMER = null; return; }
+			status();
+		}, 4000);
+		status();
+		screenLoop();
+	}
+
+	function saveBlob(blob, name) {
+		var a = el("a", { href: URL.createObjectURL(blob), download: name });
+		document.body.appendChild(a);
+		a.click();
+		a.remove();
+		setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+	}
+
 	/* ---------- fallback for an unknown route ---------- */
 
 	function renderPlaceholder(name) {
@@ -2101,6 +2698,7 @@
 		["router", "Router"],
 		["dreampi", "DreamPi"],
 		["drives", "Drives"],
+		["flipper", "Flipper"],
 		["capture", "Capture"],
 		["handshake", "Handshake"],
 		["firmware", "Firmware"]
@@ -2130,6 +2728,7 @@
 		if (id === "router") return renderRouter();
 		if (id === "dreampi") return renderDreampi();
 		if (id === "drives") return renderDrives();
+		if (id === "flipper") return renderFlipper();
 		if (id === "capture") return renderCapture();
 		if (id === "handshake") return renderHandshake();
 		if (id === "firmware") return renderFirmware();

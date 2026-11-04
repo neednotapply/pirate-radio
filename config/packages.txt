@@ -48,6 +48,12 @@ kmod-usb-serial-ch341
 # ppp, which the image already has.
 dreampi
 
+# A Flipper Zero on the USB port: the Pirate Radio UI's Flipper tab shows its
+# screen and buttons, its files and its details, as qFlipper does on a
+# computer (pirate-flipper holds its RPC session). Idle until one is plugged
+# in; its serial port is CDC-ACM, above.
+pirate-flipper
+
 # WireGuard, to tunnel back home over an untrusted uplink. The kernel module
 # must be built into the full image (its kernel is its own). Configure the
 # tunnel over SSH with uci/wg; the Pirate Radio UI has no WireGuard page yet.
