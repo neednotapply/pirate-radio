@@ -1292,7 +1292,9 @@ check "usb rpcd: list" [ "$(echo '{"name":"My_Stick","path":"Photos"}' | uenv /u
 check "usb rpcd: the password goes through on stdin" [ "$(echo '{"password":"abc"}' | uenv /usr/libexec/rpcd/pirate.usb call set_password | jsonfilter -e '@.error')" = "use at least 5 characters" ]
 
 pu unmount_all
-check "usb: unmount_all unmounts every drive" sh -c "[ -z \"\$(env PIRATE_USB_ROOT='$U/mnt/usb' PIRATE_MOUNTS='$U/mounts' pirate-usb drives)\" ] && [ ! -e '$U/mnt/usb/My_Stick' ]"
+# (My_Stick's folder keeps the files put in it above: here it was never
+# really a mount point)
+check "usb: unmount_all unmounts every drive" sh -c "[ -z \"\$(env PIRATE_USB_ROOT='$U/mnt/usb' PIRATE_MOUNTS='$U/mounts' pirate-usb drives)\" ] && [ ! -e '$U/mnt/usb/sdf' ] && [ ! -e '$U/mnt/usb/GLOBAL_sde1' ]"
 check "usb: first boot, without ksmbd installed" sh /etc/uci-defaults/96-pirate-usb
 
 echo
