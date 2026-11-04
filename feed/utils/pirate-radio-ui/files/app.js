@@ -148,7 +148,7 @@
 	/* The Flipper page's demo: a few files, and a menu on its screen */
 	var DEMO_FZ = { seq: 1, item: 0 };
 	var DEMO_FZ_FILES = {
-		"/": [{ name: "int", dir: true }, { name: "ext", dir: true }],
+		"/": [{ name: "any", dir: true }, { name: "int", dir: true }, { name: "ext", dir: true }],
 		"/int": [{ name: ".bt.settings", size: 52 }],
 		"/ext": [{ name: "badusb", dir: true }, { name: "infrared", dir: true }, { name: "nfc", dir: true },
 			{ name: "subghz", dir: true }, { name: "notes.txt", size: 14 }],
@@ -2523,7 +2523,8 @@
 			call("pirate.flipper", "list", { path: p }).then(function (r) {
 				if (!alive() || path !== p) return;
 				if (r.error) { clear(fWrap).appendChild(alertEl("warn", r.error)); return; }
-				listing = (r.files || []).slice().sort(function (a, b) {
+				// "any" is the Flipper's alias for one of the others
+				listing = (r.files || []).filter(function (f) { return p !== "/" || f.name !== "any"; }).sort(function (a, b) {
 					return (b.dir - a.dir) || a.name.toLowerCase().localeCompare(b.name.toLowerCase());
 				});
 				clear(fWrap);
