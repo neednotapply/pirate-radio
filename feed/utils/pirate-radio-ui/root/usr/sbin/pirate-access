@@ -223,7 +223,9 @@ cmd_ssh_status() {
 	json_add_array recent
 	tmp=$(mktemp)
 	log_lines | awk '
-	function emit(ev, from, how, extra) { print $1 "\t" ev "\t" from "\t" how "\t" extra }
+	# "-" for an empty field: read would run empty tab-separated fields together
+	function d(s) { return s == "" ? "-" : s }
+	function emit(ev, from, how, extra) { print $1 "\t" ev "\t" d(from) "\t" d(how) "\t" d(extra) }
 	$2 ~ /^dropbear\[/ {
 		m = $0; sub(/^[^ ]+ [^ ]+ /, "", m)
 		if (m ~ /^Pubkey auth succeeded for /) { k = m; sub(/.* key /, "", k); sub(/ .*/, "", k); f = m; sub(/.* from /, "", f); emit("in", f, "key", k) }
@@ -242,9 +244,9 @@ cmd_ssh_status() {
 		json_add_object ""
 		json_add_int time "$t"
 		json_add_string event "$ev"
-		[ -n "$from" ] && json_add_string from "${from%:*}"
-		[ -n "$how" ] && json_add_string how "$how"
-		[ -n "$extra" ] && json_add_string key "$extra"
+		[ "$from" = - ] || json_add_string from "${from%:*}"
+		[ "$how" = - ] || json_add_string how "$how"
+		[ "$extra" = - ] || json_add_string key "$extra"
 		json_close_object
 	done < "$tmp"
 	rm -f "$tmp"

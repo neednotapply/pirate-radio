@@ -106,7 +106,8 @@ ath10k-ct. The radios, decoders and logging are the same in both.
    Open the Pirate Radio UI at `http://pirateradio.local/` (or
    `http://192.168.1.1/`): on a fresh flash it asks you to set a root password
    before anything else. That password is then the UI and SSH login
-   (`ssh root@pirateradio.local`); change it later on the Router tab, or with `passwd` over
+   (`ssh root@pirateradio.local`); change it later on the Access page (it asks
+   for the current one first), or with `passwd` over
    SSH. A password kept from earlier settings can't be reset from the UI: if
    it's forgotten, SSH in with a key and run `passwd`, or flash without keeping
    settings.
@@ -148,15 +149,40 @@ take that console for a GPS.
 card and jobs, with links to the aircraft map, the ISM live view and the
 recorded files (`http://192.168.1.1:8081/pirate-radio/`).
 
-**In the Pirate Radio UI** (`http://192.168.1.1/`): its tabs are grouped down the
-left (on a phone, the menu button at the top opens them): *Overview* (the
-Dashboard), *Radio* (Radios & SDR), *Wi-Fi* (Survey, Threats, Handshake),
-*Network* (Hosts, Capture), *USB devices* (Drives, Flipper, DreamPi) and
-*System* (Router, Firmware). The *Radios & SDR* tab has the same status with
-every address the receivers serve, the aircraft map, the ISM devices rtl_433
-has decoded (one row per device, with its latest readings) and the recorded
-files; using a radio hands the RTL-SDR to that job. The DreamPi tab is for the
-Dreamcast, Drives for USB drives and Flipper for a Flipper Zero (below).
+**In the Pirate Radio UI** (`http://192.168.1.1/`): its pages are grouped down
+the left (on a phone, the menu button at the top opens them):
+
+| Group | Pages |
+|---|---|
+| Overview | Dashboard |
+| Radio | Receivers (the SDR jobs and their addresses), Sensors (what rtl_433 has decoded) |
+| Wi-Fi | Survey, Threats, Handshakes |
+| Network | Uplink (the network it joins), Clients (its own network's, and ad blocking), Hosts, Capture |
+| USB devices | Drives, Flipper, DreamPi |
+| System | Status (its system, jacks, radios and slots), Access, Terminal, Firmware |
+
+*Receivers* has the same status as the status page, with every address the
+receivers serve, the aircraft map and the recorded files; using a radio hands
+the RTL-SDR to that job. *Sensors* has one row per device rtl_433 has decoded,
+with its latest readings. Ports and radios go by what they are on the
+GL-AR750S: the WAN jack and LAN 1 and 2, the 5 GHz radio (QCA9887: the
+access point and the uplink) and the 2.4 GHz one (QCA9563: monitor mode),
+the USB port and the microSD slot, with the system's own names (`phy0-sta0`,
+`eth0.2`) beside them, small.
+
+**Access:** the root password (changing it needs the current one: the page
+signs in with it again, and the router takes that fresh sign-in as proof
+before it changes anything); SSH's port and whether it takes passwords; the
+keys it takes (paste a public key's line), with their fingerprints and the
+router's own; who is signed in now over SSH or the terminal, each with an
+*End* button; and recent sign-ins from the log, with the key or password
+each used. Passwords can't go off while there is no key, nor the last key go
+while they are off.
+
+**Terminal:** a shell on the router in the page (ttyd). It asks for root's
+password, as SSH does; only the router's own network (its LAN jacks and the
+Pirate Radio access point) reaches it, on port 7681, and only its own page
+can open it, two at a time. *Turn it off* stops it, and it stays off.
 
 **Over SSH:**
 
@@ -188,7 +214,7 @@ for example, to use the RTL-SDR for ISM, disable `adsb` and enable `ism`.
 
 **Also in the image:**
 
-- **Ad blocking** for the router's clients (on/off on the Pirate Radio UI's *Router*
+- **Ad blocking** for the router's clients (on/off on the Pirate Radio UI's *Clients*
   tab). On a router with 128 MB of RAM, start with one list such as OISD small.
 - **MQTT broker** (mosquitto, set up over SSH) — in the **complete**
   build only (`PIRATE_EXTRAS=1`, see *Build*). rtl_433 publishes what it decodes
@@ -359,7 +385,12 @@ Tested in this repository's tests and builds:
   (pirate-router, pirate-capture, pirate-handshake and pirate-firmware: their rpcd
   plugins, input validation and JSON shapes, including the set-password, Wi-Fi
   join/scan/status and firmware verify/apply/upload methods — the flasher runs
-  against a mock sysupgrade, so no real flash is ever attempted), and plug and
+  against a mock sysupgrade, so no real flash is ever attempted), the router's
+  jacks, radios and slots on a faked GL-AR750S, the password change and its
+  proof (old, foreign and forged sessions refused), Access (pirate-access:
+  SSH's settings and keys, with fingerprints as ssh-keygen and dropbearkey
+  print them, the lockout guards, sessions and their ending, sign-ins from the
+  log, and the terminal's setup), and plug and
   play (jobs held back while their radio is unplugged, the USB and tty hotplug
   hooks, gpsd started and stopped with the GPS, the map server living and
   dying with the ADS-B job), and DreamPi (the modem daemon against
@@ -376,7 +407,7 @@ Tested in this repository's tests and builds:
   deleting, the screen stream and its stop, buttons, the clock, restarting,
   and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 452
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 527
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
@@ -428,7 +459,7 @@ Not yet run:
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
-| `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics, firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
+| `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics and its ports (`pirate-router`), access (`pirate-access`: SSH, sign-ins, the terminal), firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
 | `config/full.config` | full-build options (spectral scan, ath10k) |
 | `build.sh`, `scripts/` | the Docker build (SDK, then ImageBuilder) |

@@ -465,6 +465,24 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .status.ok-text { color: var(--ok); }
 .status.err { color: var(--bad); }
 
+/* A port's or radio's name, and the system's own beside it, small */
+.ifname { font-family: var(--mono); font-size: 11px; color: var(--faint); white-space: nowrap; }
+.row .row-if { font-family: var(--sans); font-size: 12px; }
+.form.form-wide { grid-template-columns: 1fr; }
+.tbl .plain { font-family: var(--sans); }
+
+/* Terminal: ttyd's page, in a frame dark as it is */
+.term {
+	display: block;
+	width: 100%;
+	height: min(70vh, 640px);
+	min-height: 320px;
+	border: 1px solid var(--line-2);
+	border-radius: var(--r);
+	background: #0e1012;
+}
+.term-demo { margin: 0; padding: 10px 12px; color: var(--txt); font-family: var(--mono); font-size: 14px; white-space: pre-wrap; }
+
 /* Drives: one block per USB drive, its usage, and the file browser */
 .drive { border-top: 1px solid var(--line); padding: 14px 0 4px; }
 .drive:first-child { border-top: 0; padding-top: 2px; }

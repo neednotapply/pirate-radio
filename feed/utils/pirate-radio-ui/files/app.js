@@ -101,6 +101,34 @@
 	}
 
 	var DEMO_ADB = { on: true };
+	var DEMO_ACCESS = {
+		port: 22, passwords: true, term: true,
+		keys: [
+			{ type: "ssh-ed25519", comment: "pirate-radio@NV-FRACTAL", fingerprint: "SHA256:iAz+d0Ubhxwu5AWxrSZcHcuftUXHrXB5uRb9s8fnSO0" },
+			{ type: "ssh-rsa", comment: "laptop key", fingerprint: "SHA256:sNIAzx6YYwB8XVn4c9avCjnUWWgXtXTT3ki7q9gzo/s" }
+		],
+		sessions: [
+			{ kind: "ssh", pid: 6042, from: "192.168.1.23", age: 1260, how: "key", key: "SHA256:iAz+d0Ubhxwu5AWxrSZcHcuftUXHrXB5uRb9s8fnSO0" },
+			{ kind: "terminal", pid: 7120, from: "192.168.1.23", age: 95, how: "password" }
+		]
+	};
+	function demoAccess() {
+		var now = Math.floor(Date.now() / 1000);
+		return { running: true, port: DEMO_ACCESS.port, passwords: DEMO_ACCESS.passwords,
+			keys: DEMO_ACCESS.keys.slice(),
+			host_keys: [
+				{ type: "ssh-ed25519", fingerprint: "SHA256:fWwYR2TCym4ZOauPytQjwxHNhyadH+lGpEXmecFzits" },
+				{ type: "ssh-rsa", fingerprint: "SHA256:IAuM2rOta+8o07whdCPUIWWkPKKAi82FYtp3/y5Y3/k" }
+			],
+			sessions: DEMO_ACCESS.sessions.slice(),
+			recent: [
+				{ time: now - 95, event: "in", how: "terminal" },
+				{ time: now - 600, event: "refused", from: "192.168.1.99", how: "password" },
+				{ time: now - 1260, event: "in", from: "192.168.1.23", how: "key", key: "SHA256:iAz+d0Ubhxwu5AWxrSZcHcuftUXHrXB5uRb9s8fnSO0" },
+				{ time: now - 7200, event: "out", from: "192.168.1.23" },
+				{ time: now - 9000, event: "in", from: "192.168.1.23", how: "password" }
+			] };
+	}
 	var DEMO_CAP = {
 		running: false, iface: "", filter: "", file: "", start: 0,
 		files: [
@@ -283,20 +311,20 @@
 			return demoUsb();
 		},
 		"pirate.recon:dashboard": {
-			uplink: { ssid: "NoInternetHere-5", iface: "phy1-sta0",
+			uplink: { ssid: "NoInternetHere-5", iface: "phy0-sta0",
 				subnet: "192.168.1.0/24", gateway: "192.168.1.1", online: true },
 			hosts: { count: 5, scanned: "2026-10-29 14:02" },
 			survey: { count: 38 },
 			threats: { count: 1, high: 1 },
 			gps: { installed: true, running: true },
 			radios: [
-				{ iface: "wlan0", mode: "Master", ssid: "Pirate Radio", channel: 36 },
-				{ iface: "wlan1", mode: "Client", ssid: "NoInternetHere-5", channel: 6 },
-				{ iface: "wlan2", mode: "Monitor", ssid: "", channel: 6 }
+				{ iface: "mon0", mode: "Monitor", ssid: "", channel: 10 },
+				{ iface: "phy0-ap0", mode: "Master", ssid: "Pirate Radio", channel: 36 },
+				{ iface: "phy0-sta0", mode: "Client", ssid: "NoInternetHere-5", channel: 36 }
 			],
 			sdr: { present: true, running: 3 }
 		},
-		"pirate.recon:uplink": { ssid: "NoInternetHere-5", iface: "phy1-sta0",
+		"pirate.recon:uplink": { ssid: "NoInternetHere-5", iface: "phy0-sta0", self: "192.168.1.185",
 			subnet: "192.168.1.0/24", gateway: "192.168.1.1", gateway_mac: "a4:2b:b0:11:22:33" },
 		"pirate.recon:hosts": {
 			scanned: "2026-10-29T14:02:11Z",
@@ -416,14 +444,63 @@
 		"pirate.router:set_password": function (p) {
 			if (!p.password) return { error: "empty password" };
 			if (p.password.length < 5) return { error: "use at least 5 characters" };
+			if (!p.proof) return { error: "enter the current password to change it" };
 			return { ok: true };
 		},
+		"pirate.router:ports": {
+			ethernet: [
+				{ port: 1, name: "WAN", iface: "eth0.2", link: false },
+				{ port: 2, name: "LAN 1", iface: "eth0.1", link: true, speed: 1000, full_duplex: true },
+				{ port: 3, name: "LAN 2", iface: "eth0.1", link: false }
+			],
+			radios: [
+				{ phy: "phy0", band: "5 GHz", chip: "QCA9887", driver: "ath10k_pci", usb: false, interfaces: [
+					{ name: "phy0-sta0", type: "managed", channel: 36, ssid: "NoInternetHere-5" },
+					{ name: "phy0-ap0", type: "AP", channel: 36, ssid: "Pirate Radio" }
+				] },
+				{ phy: "phy1", band: "2.4 GHz", chip: "QCA9563", driver: "ath9k", usb: false, interfaces: [
+					{ name: "mon0", type: "monitor", channel: 10 }
+				] }
+			],
+			usb: [ { id: "0483:5740", name: "Flipper Devices Inc. Pirate" } ],
+			card: { present: true, device: "sda" }
+		},
+		"pirate.access:ssh_status": function () { return demoAccess(); },
+		"pirate.access:ssh_set": function (p) {
+			var port = Number(p.port);
+			if (!port || port < 1 || port > 65535) return { error: "port: a number, 1 to 65535" };
+			if (!p.passwords && !DEMO_ACCESS.keys.length) return { error: "add a key first: with passwords off and no key, nobody could sign in over SSH" };
+			DEMO_ACCESS.port = port; DEMO_ACCESS.passwords = !!p.passwords;
+			return { ok: true, port: port, passwords: !!p.passwords };
+		},
+		"pirate.access:ssh_key_add": function (p) {
+			var f = String(p.key || "").trim().split(/\s+/);
+			if (!/^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp\d+)$/.test(f[0])) return { error: "key: paste a public key's line, such as ssh-ed25519 AAAA… you@computer" };
+			if (!f[1] || f[1].length < 60) return { error: "key: that isn't a whole public key" };
+			var fp = "SHA256:" + f[1].slice(-43);
+			DEMO_ACCESS.keys.push({ type: f[0], comment: f.slice(2).join(" ") || undefined, fingerprint: fp });
+			return { ok: true, fingerprint: fp };
+		},
+		"pirate.access:ssh_key_remove": function (p) {
+			if (DEMO_ACCESS.keys.length === 1 && !DEMO_ACCESS.passwords) return { error: "that's the last key, and SSH takes no passwords: turn passwords on first" };
+			DEMO_ACCESS.keys = DEMO_ACCESS.keys.filter(function (k) { return k.fingerprint !== p.fingerprint; });
+			return { ok: true };
+		},
+		"pirate.access:session_end": function (p) {
+			DEMO_ACCESS.sessions = DEMO_ACCESS.sessions.filter(function (s) { return s.pid !== p.pid; });
+			return { ok: true };
+		},
+		"pirate.access:term_status": function () { return { installed: true, enabled: DEMO_ACCESS.term, running: DEMO_ACCESS.term, port: 7681, sessions: [] }; },
+		"pirate.access:term_set": function (p) { DEMO_ACCESS.term = !!p.enabled; return MOCK["pirate.access:term_status"](); },
 		"pirate.capture:interfaces": {
 			interfaces: [
 				{ name: "br-lan", state: "up" },
-				{ name: "phy1-sta0", state: "up" },
+				{ name: "eth0", state: "up" },
+				{ name: "eth0.1", state: "up" },
+				{ name: "eth0.2", state: "up" },
+				{ name: "mon0", state: "unknown" },
 				{ name: "phy0-ap0", state: "up" },
-				{ name: "eth0", state: "down" }
+				{ name: "phy0-sta0", state: "up" }
 			]
 		},
 		"pirate.capture:status": function () {
@@ -618,6 +695,64 @@
 		return sev === "high" ? "sev-high" : (sev === "medium" ? "sev-warn" : "sev-neutral");
 	}
 
+	/* ---------- the Slate's hardware: its ports and radios, by name ---------- */
+
+	// A GL.iNet GL-AR750S: phy0 is its 5 GHz radio (QCA9887), phy1 its 2.4 GHz
+	// one (the SoC's own); eth0.2 is the WAN jack and eth0.1 the two LAN jacks,
+	// and br-lan those jacks with the Pirate Radio access point. pirate.router
+	// "ports" says which interface is on which radio (a monitor's, a USB
+	// adapter's); until it has answered, names go by those rules alone.
+	var HW = { ifaces: {}, phys: {}, ports: null };
+	var hwLoad = null;
+	function hw() {
+		if (!hwLoad) hwLoad = call("pirate.router", "ports").then(function (p) {
+			HW.ports = p;
+			(p.radios || []).forEach(function (r) {
+				HW.phys[r.phy] = r;
+				(r.interfaces || []).forEach(function (i) {
+					HW.ifaces[i.name] = { band: r.band, type: i.type, usb: r.usb };
+				});
+			});
+			return p;
+		}).catch(function () { hwLoad = null; return null; });
+		return hwLoad;
+	}
+	function bandOf(phy) {
+		if (HW.phys[phy]) return HW.phys[phy].band;
+		return phy === "phy0" ? "5 GHz" : phy === "phy1" ? "2.4 GHz" : "";
+	}
+	function phyLabel(phy) {
+		var r = HW.phys[phy], b = bandOf(phy);
+		if (r && r.usb) return "USB Wi-Fi adapter" + (b ? " (" + b + ")" : "");
+		return b ? b + " radio" : phy;
+	}
+	var IF_FIXED = {
+		"eth0.2": "WAN port", wan: "WAN port", "eth0.1": "LAN ports", eth0: "Ethernet switch",
+		"br-lan": "Whole LAN", lan: "Whole LAN",
+		lo: "loopback", any: "every interface"
+	};
+	function ifLabel(name) {
+		if (!name) return "";
+		if (IF_FIXED[name]) return IF_FIXED[name];
+		if (/^ppp/.test(name)) return "Dreamcast call (PPP)";
+		if (/^wg/.test(name)) return "WireGuard tunnel";
+		var i = HW.ifaces[name], m = /^(phy\d+)-(ap|sta|mesh)\d+$/.exec(name);
+		var type = i ? i.type : m ? { ap: "AP", sta: "managed", mesh: "mesh point" }[m[2]] : /^mon\d+$/.test(name) ? "monitor" : "";
+		var band = i ? i.band : m ? bandOf(m[1]) : "";
+		var role = { AP: "access point", managed: "uplink", monitor: "monitor", "mesh point": "mesh" }[type];
+		if (!role) return name;
+		return (i && i.usb ? "USB Wi-Fi" + (band ? " (" + band + ")" : "") : band || "Wi-Fi") + " " + role;
+	}
+	// The label, with the system's own name beside it, small
+	function ifEl(name) {
+		var l = ifLabel(name);
+		return l === name ? el("span", { text: name }) : el("span", { title: name }, l + " ", el("span", { class: "ifname", text: name }));
+	}
+	// Serial devices (a GPS, a modem, a Flipper) are on the USB port here
+	function devLabel(path) {
+		return /^\/dev\/tty(ACM|USB)/.test(path || "") ? "the USB port (" + path + ")" : (path || "");
+	}
+
 	/* ---------- SDR helpers (status text, rtl_433 readings) ---------- */
 
 	// rtl_433 key suffix -> unit shown after the value (from the LuCI ISM page).
@@ -698,10 +833,14 @@
 
 	function loadDashboard() {
 		loading();
-		return call("pirate.recon", "dashboard").then(renderDashboard).catch(onError);
+		return Promise.all([
+			call("pirate.recon", "dashboard"),
+			call("pirate.router", "status").catch(function () { return null; }),
+			hw()
+		]).then(function (r) { renderDashboard(r[0], r[1]); }).catch(onError);
 	}
 
-	function renderDashboard(d) {
+	function renderDashboard(d, sys) {
 		clear(VIEW);
 		VIEW.appendChild(viewHead("Dashboard", "where the Slate is and what it sees"));
 		var up = d.uplink || {}, online = !!up.online;
@@ -709,7 +848,7 @@
 
 		var grid = el("div", { class: "grid" });
 		grid.appendChild(tile({ k: "Uplink", v: up.ssid || "—", tone: online ? "accent" : "bad", wide: true,
-			s: online ? "online · " + (up.subnet || "") : "no internet route", tab: "survey" }));
+			s: online ? "online · " + (up.subnet || "") + (up.iface ? " · " + ifLabel(up.iface) : "") : "no internet route", tab: "uplink" }));
 		grid.appendChild(tile({ k: "Hosts", v: d.hosts ? d.hosts.count : 0, tab: "hosts",
 			s: d.hosts && d.hosts.scanned ? "last scan " + d.hosts.scanned : "on the joined network" }));
 		grid.appendChild(tile({ k: "Wi-Fi survey", v: d.survey ? d.survey.count : 0, tab: "survey",
@@ -722,23 +861,33 @@
 			tone: gps.running ? "ok" : "neutral",
 			s: gps.installed ? (gps.running ? "gpsd running" : "plug in a receiver") : "not installed", tab: "survey" }));
 		var sdr = d.sdr;
-		grid.appendChild(tile({ k: "SDR jobs", v: sdr && sdr.present ? (sdr.running || 0) : "—", tab: "sdr",
+		grid.appendChild(tile({ k: "SDR jobs", v: sdr && sdr.present ? (sdr.running || 0) : "—", tab: "receivers",
 			tone: sdr && sdr.present && sdr.running ? "accent" : "neutral",
 			s: sdr && sdr.present ? "receivers running" : "not installed" }));
+		if (sys) {
+			var m = sys.memory || {};
+			grid.appendChild(tile({ k: "System", v: dur(sys.uptime), tab: "status",
+				s: "up · load " + (sys.load || "?") + (m.total ? " · " + mb(m.available != null ? m.available : m.free) + " MB RAM free" : "") }));
+		}
 		VIEW.appendChild(grid);
 
-		var radios = d.radios || [];
-		var p = panel("Radios");
+		// The Wi-Fi interfaces: access point first, then the uplink, then monitors
+		var ORDER = { master: 0, client: 1, monitor: 2 }, ROLE = { master: "Access point", client: "Uplink", monitor: "Monitor" };
+		var radios = (d.radios || []).slice().sort(function (a, b) {
+			function o(r) { var k = (r.mode || "").toLowerCase(); return k in ORDER ? ORDER[k] : 3; }
+			return o(a) - o(b);
+		});
+		var p = panel("Wi-Fi");
 		p.style.marginTop = "14px";
 		var rows = el("div", { class: "rows" });
 		if (!radios.length) rows.appendChild(el("div", { class: "row muted" }, "no radios reported"));
 		radios.forEach(function (r) {
 			var cls = (r.mode || "").toLowerCase();
 			rows.appendChild(el("div", { class: "row" },
-				el("span", { class: "tag " + cls, text: r.mode || "?" }),
-				el("span", { class: "grow", text: r.ssid || (cls === "monitor" ? "(monitor)" : "(no SSID)") }),
+				el("span", { class: "tag " + cls, text: ROLE[cls] || r.mode || "?" }),
+				el("span", { class: "grow", text: r.ssid || (cls === "monitor" ? "listening on every network" : "(no SSID)") }),
 				el("span", { class: "muted", text: "ch " + (r.channel || "—") }),
-				el("span", { class: "muted", text: r.iface || "" })));
+				el("span", { class: "muted row-if" }, ifEl(r.iface || ""))));
 		});
 		p.appendChild(rows);
 		VIEW.appendChild(p);
@@ -748,14 +897,11 @@
 
 	function renderHosts() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Hosts", "what is on the network this router has joined"));
+		VIEW.appendChild(viewHead("Hosts", "what else is on the network the router joined (its uplink)"));
 
-		var secUp = panel("Joined network");
-		var uplinkLine = el("div", { class: "muted", text: "Loading…" });
-		secUp.appendChild(uplinkLine);
-
-		var secScan = panel();
-		secScan.style.marginTop = "14px";
+		var secScan = panel("On the uplink's network");
+		var uplinkLine = el("p", { class: "descr", text: "Loading…" });
+		secScan.appendChild(uplinkLine);
 		var scanInfo = el("span", { class: "status" });
 		var scanBtn = btn("Scan network", { primary: true, onclick: doDiscover });
 		secScan.appendChild(el("div", { class: "toolbar" }, scanBtn, scanInfo));
@@ -764,15 +910,16 @@
 		secScan.appendChild(tableWrap);
 
 		var portWrap = el("div");
-		VIEW.appendChild(secUp); VIEW.appendChild(secScan); VIEW.appendChild(portWrap);
+		VIEW.appendChild(secScan); VIEW.appendChild(portWrap);
 
 		function showUplink(u) {
-			if (!u || u.error) { clear(uplinkLine).appendChild(el("em", { text: "Not joined to a network." })); return; }
+			if (!u || u.error) { clear(uplinkLine).appendChild(el("em", { text: "Not joined to a network: see the Uplink page." })); return; }
 			clear(uplinkLine);
 			uplinkLine.appendChild(el("strong", { text: u.ssid || "wired" }));
 			uplinkLine.appendChild(document.createTextNode(
-				"  ·  " + (u.iface || "") + "  ·  " + (u.subnet || "") +
-				"  ·  gw " + (u.gateway || "-") + (u.gateway_mac ? " (" + u.gateway_mac + ")" : "")));
+				" (" + (u.subnet || "?") + "), through the " + (ifLabel(u.iface) || "uplink") +
+				"; its gateway " + (u.gateway || "-") + (u.gateway_mac ? " (" + u.gateway_mac + ")" : "") +
+				". This router is " + (u.self || "on it") + " there."));
 			setNetPill(true, u.ssid);
 			if (u.subnet && profTarget && !profTarget.value) profTarget.value = u.subnet;
 		}
@@ -866,7 +1013,7 @@
 			});
 		}
 
-		call("pirate.recon", "uplink").then(showUplink).catch(function () { showUplink(null); });
+		hw().then(function () { return call("pirate.recon", "uplink"); }).then(showUplink).catch(function () { showUplink(null); });
 		call("pirate.recon", "hosts").then(fillTable).catch(function (e) {
 			if (String(e.message || e) === "unauthorized") return onError(e);
 			clear(tableWrap).appendChild(alertEl("warn", String(e.message || e)));
@@ -878,7 +1025,7 @@
 	function gpsText(g) {
 		if (!g || g.installed === false) return "No GPS tools installed. Add a USB GPS and gpsd to tag sightings.";
 		if (!g.running) return "No GPS plugged in. Plug in a USB GPS and gpsd starts by itself.";
-		var where = g.device ? " on " + g.device : "";
+		var where = g.device ? " on " + devLabel(g.device) : "";
 		if (g.fix === "2D" || g.fix === "3D")
 			return "GPS fix (" + g.fix + ")" + where + ": " + g.lat.toFixed(6) + ", " + g.lon.toFixed(6) +
 				(g.sats_used != null ? " — " + g.sats_used + " of " + (g.sats || 0) + " satellites" : "");
@@ -887,7 +1034,7 @@
 
 	function renderSurvey() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Wi-Fi Survey", "a wardriving-style log of the access points heard"));
+		VIEW.appendChild(viewHead("Survey", "a wardriving-style log of the access points heard"));
 
 		var sec = panel();
 		var status = el("span", { class: "status" });
@@ -1049,11 +1196,11 @@
 		});
 	}
 
-	/* ---------- Radios & SDR ---------- */
+	/* ---------- Receivers: the SDR jobs and where to reach them ---------- */
 
-	function renderSdr() {
+	function renderReceivers() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Radios & SDR", "receivers running on this router"));
+		VIEW.appendChild(viewHead("Receivers", "the SDR jobs running on this router, and where to reach them"));
 		var host = location.hostname || "192.168.1.1";
 
 		var jobsPanel = panel("Jobs");
@@ -1066,18 +1213,12 @@
 		raw.appendChild(rawPre);
 		jobsPanel.appendChild(raw);
 
-		var ismPanel = panel("ISM sensors");
-		ismPanel.style.marginTop = "14px";
-		var ismStatus = el("p", { class: "descr" });
-		var ismWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
-		ismPanel.appendChild(ismStatus); ismPanel.appendChild(ismWrap);
-
 		var addrPanel = panel("Addresses");
 		addrPanel.style.marginTop = "14px";
 		var addrWrap = el("div");
 		addrPanel.appendChild(addrWrap);
 
-		VIEW.appendChild(jobsPanel); VIEW.appendChild(ismPanel); VIEW.appendChild(addrPanel);
+		VIEW.appendChild(jobsPanel); VIEW.appendChild(addrPanel);
 
 		var jobsMap = {};
 		function stateCls(s) { return s === "running" ? "sec-ok" : (s === "stopped" ? "sec-warn" : "sec-neutral"); }
@@ -1140,6 +1281,23 @@
 			});
 		}
 
+		fetchSdrStatus().then(fillJobs);
+	}
+
+	/* ---------- Sensors: what the ISM job has decoded ---------- */
+
+	function renderSensors() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Sensors", "weather stations, tyre gauges, door sensors: what rtl_433 has decoded"));
+
+		var ismPanel = panel("ISM sensors");
+		var ismStatus = el("p", { class: "descr" });
+		var ismWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		ismPanel.appendChild(el("div", { class: "toolbar" }, btn("Refresh", { onclick: load }),
+			btn("Receivers", { onclick: function () { setTab("receivers"); } })));
+		ismPanel.appendChild(ismStatus); ismPanel.appendChild(ismWrap);
+		VIEW.appendChild(ismPanel);
+
 		function fillIsm(data) {
 			if (data.error) { ismStatus.textContent = String(data.error); clear(ismWrap); return; }
 			ismStatus.textContent = data.frequencies
@@ -1149,7 +1307,7 @@
 			if (!devs.length) {
 				clear(ismWrap).appendChild(el("div", { class: "placeholder", text: data.enabled
 					? "Nothing decoded yet — rtl_433 hops bands, so give it a few minutes."
-					: "Nothing decoded yet, and the ISM job is not running." }));
+					: "Nothing decoded yet, and the ISM job is not running: hand it the RTL-SDR on the Receivers page." }));
 				return;
 			}
 			clear(ismWrap).appendChild(tableEl(["Device", "ID", "Latest readings", "Band", "Heard", "Last"], devs.map(function (d) {
@@ -1158,107 +1316,104 @@
 				return [el("strong", { text: String(d.model) }), idch, rd, (d.freq != null ? mhz(d.freq) : "-"), String(d.count), agoIsm(d.last)];
 			})));
 		}
-
-		fetchSdrStatus().then(fillJobs);
-		call("pirate.sdr", "devices").then(fillIsm).catch(function (e) {
-			if (String(e.message || e) === "unauthorized") return onError(e);
-			ismStatus.textContent = String(e.message || e);
-		});
+		function load() {
+			call("pirate.sdr", "devices").then(fillIsm).catch(function (e) {
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				ismStatus.textContent = String(e.message || e);
+			});
+		}
+		load();
 	}
 
-	/* ---------- Router ---------- */
+	/* ---------- Status: the router itself, its jacks, radios and slots ---------- */
 
-	function renderRouter() {
+	function kvEl(pairs) {
+		var dl = el("dl", { class: "kv" });
+		pairs.forEach(function (p) {
+			if (p[1] == null || p[1] === "") return;
+			dl.appendChild(el("dt", { text: p[0] }));
+			dl.appendChild(typeof p[1] === "object" ? el("dd", {}, p[1]) : el("dd", { text: String(p[1]) }));
+		});
+		return dl;
+	}
+	function loadingEl() { return el("div", { class: "muted", text: "Loading…" }); }
+	function warnEl(e) { return alertEl("warn", String((e && e.message) || e)); }
+
+	function renderStatus() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Router", "the device itself and its network"));
+		VIEW.appendChild(viewHead("Status", "the router itself: its system, jacks, radios and slots"));
 
 		var sysPanel = panel("System");
-		var sysWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		var sysWrap = el("div", {}, loadingEl());
 		sysPanel.appendChild(sysWrap);
+		var portsPanel = panel("Ports and radios");
+		portsPanel.style.marginTop = "14px";
+		var portsWrap = el("div", {}, loadingEl());
+		portsPanel.appendChild(portsWrap);
+		VIEW.appendChild(sysPanel); VIEW.appendChild(portsPanel);
 
-		var netPanel = panel("Internet");
-		netPanel.style.marginTop = "14px";
-		var netWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
-		netPanel.appendChild(netWrap);
-
-		var cliPanel = panel("Clients");
-		cliPanel.style.marginTop = "14px";
-		var cliWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
-		cliPanel.appendChild(cliWrap);
-
-		var adbPanel = panel("Ad blocking");
-		adbPanel.style.marginTop = "14px";
-		var adbWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
-		adbPanel.appendChild(adbWrap);
-
-		VIEW.appendChild(sysPanel); VIEW.appendChild(netPanel);
-		VIEW.appendChild(cliPanel); VIEW.appendChild(adbPanel);
-
-		function kv(pairs) {
-			var dl = el("dl", { class: "kv" });
-			pairs.forEach(function (p) {
-				if (p[1] == null || p[1] === "") return;
-				dl.appendChild(el("dt", { text: p[0] }));
-				dl.appendChild(el("dd", { text: String(p[1]) }));
-			});
-			return dl;
-		}
-
-		function fillSys(s) {
+		call("pirate.router", "status").then(function (s) {
 			var m = s.memory || {}, f = s.flash || {};
-			clear(sysWrap).appendChild(kv([
+			clear(sysWrap).appendChild(kvEl([
 				["Model", s.model],
 				["Firmware", s.firmware],
 				["Hostname", s.hostname],
-				["Uptime", dur(s.uptime)],
+				["Up for", dur(s.uptime)],
 				["Load", s.load],
 				["RAM", m.total ? (mb(m.available != null ? m.available : m.free) + " MB free of " + mb(m.total) + " MB") : null],
 				["Flash", f.total ? (mb(f.free) + " MB free of " + mb(f.total) + " MB") : null]
 			]));
 			setNetPill(!!s.online);
-		}
+		}).catch(function (e) {
+			if (String(e.message || e) === "unauthorized") return onError(e);
+			clear(sysWrap).appendChild(warnEl(e));
+		});
 
-		function fillNet(u, online) {
-			if (!u || u.error) { clear(netWrap).appendChild(el("div", { class: "muted", text: "Not joined to a network." })); return; }
-			clear(netWrap).appendChild(kv([
-				["Network", u.ssid || "wired"],
-				["Interface", u.iface],
-				["Subnet", u.subnet],
-				["Gateway", u.gateway ? (u.gateway + (u.gateway_mac ? " (" + u.gateway_mac + ")" : "")) : null],
-				["Internet", online ? "reachable" : "no default route"]
-			]));
-		}
-
-		function fillClients(data) {
-			var list = (data && data.clients) || [];
-			if (data && data.error) { clear(cliWrap).appendChild(alertEl("warn", data.error)); return; }
-			if (!list.length) { clear(cliWrap).appendChild(el("div", { class: "placeholder", text: "No DHCP leases yet." })); return; }
-			clear(cliWrap).appendChild(tableEl(["Host", "IP", "MAC"], list.map(function (c) {
-				return [
-					(c.host && c.host !== "-") ? el("strong", { text: c.host }) : el("em", { class: "muted", text: "(unknown)" }),
-					el("code", { text: c.ip }), el("code", { text: c.mac })
-				];
+		hw().then(function (p) {
+			if (!p) { clear(portsWrap).appendChild(el("div", { class: "muted", text: "The router didn't say." })); return; }
+			clear(portsWrap);
+			portsWrap.appendChild(el("h4", { class: "sub-h2", text: "Ethernet" }));
+			portsWrap.appendChild(tableEl(["Jack", "Link", "Carries"], (p.ethernet || []).map(function (j) {
+				var link = j.link
+					? badge((j.speed ? j.speed + " Mb/s" : "up") + (j.full_duplex === false ? ", half duplex" : ""), "sec-ok")
+					: badge("unplugged", "sec-neutral");
+				return [el("strong", { text: j.name }), link,
+					el("span", { class: "muted plain", text: j.name === "WAN" ? "the internet, over a cable" : "the router's own network, with its access point" })];
 			})));
-		}
+			portsWrap.appendChild(el("h4", { class: "sub-h2", text: "Wi-Fi radios" }));
+			portsWrap.appendChild(tableEl(["Radio", "Chip", "Doing"], (p.radios || []).map(function (r) {
+				var doing = el("div");
+				(r.interfaces || []).forEach(function (i) {
+					var role = ifLabel(i.name).replace(/^.*?(access point|uplink|monitor|mesh)$/, "$1");
+					doing.appendChild(el("div", {},
+						role + (i.ssid ? " · " + i.ssid : "") + (i.channel ? " · ch " + i.channel : "") + " ",
+						el("span", { class: "ifname", text: i.name })));
+				});
+				if (!(r.interfaces || []).length) doing.appendChild(el("span", { class: "muted", text: "idle" }));
+				return [el("strong", { text: phyLabel(r.phy) }),
+					el("span", { class: "muted", text: (r.chip || "?") + (r.usb ? ", on USB" : ", built in") + " · " + r.phy }), doing];
+			})));
+			portsWrap.appendChild(el("h4", { class: "sub-h2", text: "USB and microSD" }));
+			var usb = (p.usb || []).map(function (u) { return (u.name || "a device") + " (" + u.id + ")"; });
+			portsWrap.appendChild(kvEl([
+				["USB port", usb.length ? usb.join(", ") : "nothing plugged in"],
+				["microSD slot", p.card && p.card.present ? "a card (" + p.card.device + ")" : "empty"]
+			]));
+			portsWrap.appendChild(el("p", { class: "descr", text:
+				"A hub on the USB port shows what is plugged into it. The Drives, Flipper and DreamPi pages cover what they find there; the microSD card holds Pirate Radio's recordings." }));
+		});
+	}
 
-		function fillAdb(a) {
-			clear(adbWrap);
-			if (a.error) { adbWrap.appendChild(alertEl("warn", a.error)); return; }
-			if (!a.installed) { adbWrap.appendChild(el("div", { class: "muted", text: "Adblock is not installed in this image." })); return; }
-			var on = !!a.enabled;
-			adbWrap.appendChild(el("div", { class: "toolbar" },
-				badge(on ? "on" : "off", on ? "sec-ok" : "sec-neutral"),
-				el("span", { class: "status", text: a.domains ? a.domains.toLocaleString() + " domains blocked" : (on ? "enabled" : "disabled") }),
-				btn(on ? "Disable" : "Enable", { cls: on ? "reset" : "", primary: !on, onclick: function () { toggleAdb(!on); } })));
-		}
-		function toggleAdb(to) {
-			clear(adbWrap).appendChild(el("div", { class: "muted", text: to ? "Enabling…" : "Disabling…" }));
-			call("pirate.router", "adblock", { enabled: to }).then(fillAdb).catch(function (e) {
-				clear(adbWrap).appendChild(alertEl("warn", String(e.message || e)));
-			});
-		}
+	/* ---------- Uplink: the network the router joins for its internet ---------- */
 
-		// Wi-Fi uplink
+	function renderUplink() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Uplink", "the network the router joins for its internet"));
+
+		var netPanel = panel("Internet");
+		var netWrap = el("div", {}, loadingEl());
+		netPanel.appendChild(netWrap);
+
 		var wifiPanel = panel("Wi-Fi uplink");
 		wifiPanel.style.marginTop = "14px";
 		var wifiStatus = el("div", { class: "muted", text: "Loading…" });
@@ -1276,21 +1431,9 @@
 		wifiPanel.appendChild(el("div", { class: "toolbar" },
 			btn("Join", { primary: true, onclick: function () { doJoin(joinSsid.value, "", joinKey.value); } }), joinStatus));
 		wifiPanel.appendChild(el("p", { class: "descr", text:
-			"Changing the uplink reloads Wi-Fi — the Pirate Radio AP drops briefly and comes back, so you stay reachable on it even if the new network is wrong." }));
+			"The 5 GHz radio joins it, beside the Pirate Radio access point. Changing it reloads Wi-Fi: the access point drops briefly and comes back, so you stay reachable on it even if the new network is wrong." }));
 
-		// Set root password
-		var pwPanel = panel("Set root password");
-		pwPanel.style.marginTop = "14px";
-		var pw1 = el("input", { class: "inp", type: "password", placeholder: "new password" });
-		var pw2 = el("input", { class: "inp", type: "password", placeholder: "confirm" });
-		var pwStatus = el("span", { class: "status" });
-		pwPanel.appendChild(el("div", { class: "form" },
-			el("label", {}, el("span", { class: "lbl", text: "New password" }), pw1),
-			el("label", {}, el("span", { class: "lbl", text: "Confirm" }), pw2)));
-		pwPanel.appendChild(el("div", { class: "toolbar" }, btn("Set password", { primary: true, onclick: setPassword }), pwStatus));
-		pwPanel.appendChild(el("p", { class: "descr", text: "Sets the root password used for SSH and this UI's sign-in." }));
-
-		VIEW.appendChild(wifiPanel); VIEW.appendChild(pwPanel);
+		VIEW.appendChild(netPanel); VIEW.appendChild(wifiPanel);
 
 		function showWifi(s) {
 			clear(wifiStatus);
@@ -1320,7 +1463,7 @@
 						} }) : ""
 					];
 				})));
-			}).catch(function (e) { clear(wifiScanWrap).appendChild(alertEl("warn", String(e.message || e))); });
+			}).catch(function (e) { clear(wifiScanWrap).appendChild(warnEl(e)); });
 		}
 		function doJoin(ssid, enc, key) {
 			if (!ssid) { joinStatus.className = "status"; joinStatus.textContent = "enter an SSID"; return; }
@@ -1336,37 +1479,324 @@
 				joinStatus.textContent = String(e.message || e); joinStatus.className = "status err";
 			});
 		}
+
+		call("pirate.router", "wifi_status").then(showWifi).catch(function () { clear(wifiStatus); });
+		Promise.all([
+			call("pirate.router", "status"),
+			call("pirate.recon", "uplink").catch(function () { return null; }),
+			hw()
+		]).then(function (r) {
+			var s = r[0], u = r[1];
+			setNetPill(!!s.online, u && u.ssid);
+			if (!u || u.error) { clear(netWrap).appendChild(el("div", { class: "muted", text: "Not joined to a network." })); return; }
+			clear(netWrap).appendChild(kvEl([
+				["Network", u.ssid || "wired"],
+				["Through", u.iface ? ifEl(u.iface) : null],
+				["Its address there", u.self],
+				["Subnet", u.subnet],
+				["Gateway", u.gateway ? (u.gateway + (u.gateway_mac ? " (" + u.gateway_mac + ")" : "")) : null],
+				["Internet", s.online ? "reachable" : "no default route"]
+			]));
+		}).catch(function (e) {
+			if (String(e.message || e) === "unauthorized") return onError(e);
+			clear(netWrap).appendChild(warnEl(e));
+		});
+	}
+
+	/* ---------- Clients: what is on the router's own network ---------- */
+
+	function renderClients() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Clients", "what is on the router's own network: its LAN jacks and access point"));
+
+		var cliPanel = panel("Clients");
+		var cliWrap = el("div", {}, loadingEl());
+		cliPanel.appendChild(cliWrap);
+		var adbPanel = panel("Ad blocking");
+		adbPanel.style.marginTop = "14px";
+		var adbWrap = el("div", {}, loadingEl());
+		adbPanel.appendChild(adbWrap);
+		adbPanel.appendChild(el("p", { class: "descr", text:
+			"Through the router's DNS, for every client: lists of ad and tracking domains go unanswered." }));
+		VIEW.appendChild(cliPanel); VIEW.appendChild(adbPanel);
+
+		function fillClients(data) {
+			var list = (data && data.clients) || [];
+			if (data && data.error) { clear(cliWrap).appendChild(alertEl("warn", data.error)); return; }
+			if (!list.length) { clear(cliWrap).appendChild(el("div", { class: "placeholder", text: "No DHCP leases yet." })); return; }
+			clear(cliWrap).appendChild(tableEl(["Host", "IP", "MAC"], list.map(function (c) {
+				return [
+					(c.host && c.host !== "-") ? el("strong", { text: c.host }) : el("em", { class: "muted", text: "(unknown)" }),
+					el("code", { text: c.ip }), el("code", { text: c.mac })
+				];
+			})));
+		}
+		function fillAdb(a) {
+			clear(adbWrap);
+			if (a.error) { adbWrap.appendChild(alertEl("warn", a.error)); return; }
+			if (!a.installed) { adbWrap.appendChild(el("div", { class: "muted", text: "Adblock is not installed in this image." })); return; }
+			var on = !!a.enabled;
+			adbWrap.appendChild(el("div", { class: "toolbar" },
+				badge(on ? "on" : "off", on ? "sec-ok" : "sec-neutral"),
+				el("span", { class: "status", text: a.domains ? a.domains.toLocaleString() + " domains blocked" : (on ? "enabled" : "disabled") }),
+				btn(on ? "Disable" : "Enable", { cls: on ? "reset" : "", primary: !on, onclick: function () { toggleAdb(!on); } })));
+		}
+		function toggleAdb(to) {
+			clear(adbWrap).appendChild(el("div", { class: "muted", text: to ? "Enabling…" : "Disabling…" }));
+			call("pirate.router", "adblock", { enabled: to }).then(fillAdb).catch(function (e) { clear(adbWrap).appendChild(warnEl(e)); });
+		}
+		call("pirate.router", "clients").then(fillClients).catch(function (e) {
+			if (String(e.message || e) === "unauthorized") return onError(e);
+			clear(cliWrap).appendChild(warnEl(e));
+		});
+		call("pirate.router", "adblock").then(fillAdb).catch(function (e) { clear(adbWrap).appendChild(warnEl(e)); });
+	}
+
+	/* ---------- Access: the root password, SSH, who is signed in ---------- */
+
+	// Sign in again with the root password, apart from this page's own session:
+	// rpcd checks it, and the backend takes the fresh session as proof
+	function proveRoot(pass) {
+		if (DEMO) return pass === "wrong" ? Promise.reject(new Error("login failed")) : Promise.resolve("0123456789abcdef0123456789abcdef");
+		return rpc("call", [NULL_SID, "session", "login", { username: "root", password: pass, timeout: 60 }]).then(function (r) {
+			if (!Array.isArray(r) || r[0] !== 0 || !r[1] || !r[1].ubus_rpc_session) throw new Error("login failed");
+			return r[1].ubus_rpc_session;
+		});
+	}
+
+	function renderAccess() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Access", "the root password, SSH, and who is signed in"));
+		var host = location.hostname || "pirateradio.local";
+		var keyNames = {};
+
+		function line(node, text, kind) { node.textContent = text; node.className = "status" + (kind ? " " + kind : ""); }
+
+		// The root password
+		var pwPanel = panel("Root password");
+		var pw0 = el("input", { class: "inp", type: "password", autocomplete: "current-password", placeholder: "current password" });
+		var pw1 = el("input", { class: "inp", type: "password", autocomplete: "new-password", placeholder: "at least 5 characters" });
+		var pw2 = el("input", { class: "inp", type: "password", autocomplete: "new-password", placeholder: "again" });
+		var pwStatus = el("span", { class: "status" });
+		pwPanel.appendChild(el("div", { class: "form" },
+			el("label", {}, el("span", { class: "lbl", text: "Current password" }), pw0),
+			el("label", {}, el("span", { class: "lbl", text: "New password" }), pw1),
+			el("label", {}, el("span", { class: "lbl", text: "New, again" }), pw2)));
+		pwPanel.appendChild(el("div", { class: "toolbar" }, btn("Change password", { primary: true, onclick: setPassword }), pwStatus));
+		pwPanel.appendChild(el("p", { class: "descr", text:
+			"Root's password signs in to this page, to SSH and to the terminal. Changing it needs the current one: the router checks it before anything changes." }));
+
 		function setPassword() {
-			pwStatus.className = "status";
-			if (pw1.value.length < 5) { pwStatus.textContent = "use at least 5 characters"; return; }
-			if (pw1.value !== pw2.value) { pwStatus.textContent = "the two entries differ"; return; }
-			pwStatus.textContent = "setting…";
-			call("pirate.router", "set_password", { password: pw1.value }).then(function (r) {
-				if (r.error) { pwStatus.textContent = r.error; pwStatus.className = "status err"; return; }
-				pwStatus.className = "status ok-text"; pwStatus.textContent = "password set";
-				pw1.value = ""; pw2.value = "";
+			if (!pw0.value) return line(pwStatus, "enter the current password", "err");
+			if (pw1.value.length < 5) return line(pwStatus, "use at least 5 characters", "err");
+			if (pw1.value !== pw2.value) return line(pwStatus, "the two new entries differ", "err");
+			if (/[\r\n]/.test(pw1.value)) return line(pwStatus, "a password can't have line breaks", "err");
+			line(pwStatus, "checking the current password…");
+			proveRoot(pw0.value).then(function (proof) {
+				line(pwStatus, "changing it…");
+				return call("pirate.router", "set_password", { password: pw1.value, proof: proof }).then(function (r) {
+					if (r.error) return line(pwStatus, r.error, "err");
+					pw0.value = pw1.value = pw2.value = "";
+					line(pwStatus, "password changed", "ok-text");
+				});
+			}, function (e) {
+				line(pwStatus, String(e.message || e) === "login failed" ? "the current password is wrong" : String(e.message || e), "err");
 			}).catch(function (e) {
 				if (String(e.message || e) === "unauthorized") return onError(e);
-				pwStatus.textContent = String(e.message || e); pwStatus.className = "status err";
+				line(pwStatus, String(e.message || e), "err");
 			});
 		}
 
-		call("pirate.router", "wifi_status").then(showWifi).catch(function () { clear(wifiStatus); });
+		// SSH: its port, passwords, and the router's own keys
+		var sshPanel = panel("SSH");
+		sshPanel.style.marginTop = "14px";
+		var sshHead = el("div", {}, loadingEl());
+		var portIn = el("input", { class: "inp", type: "number", min: "1", max: "65535" });
+		var pwChk = el("input", { type: "checkbox" });
+		var sshStatus = el("span", { class: "status" });
+		var hostKeys = el("div");
+		sshPanel.appendChild(sshHead);
+		sshPanel.appendChild(el("div", { class: "form" }, el("label", {}, el("span", { class: "lbl", text: "Port" }), portIn)));
+		sshPanel.appendChild(el("div", { class: "toolbar" },
+			el("label", { class: "chkline" }, pwChk, "Take passwords (keys are always taken)"),
+			btn("Save", { onclick: saveSsh }), sshStatus));
+		sshPanel.appendChild(hostKeys);
 
-		call("pirate.router", "status").then(function (s) {
-			fillSys(s);
-			return call("pirate.recon", "uplink").then(function (u) { fillNet(u, s.online); })
-				.catch(function () { fillNet(null, s.online); });
-		}).catch(function (e) {
+		// The keys it takes
+		var keysPanel = panel("SSH keys");
+		keysPanel.style.marginTop = "14px";
+		var keysWrap = el("div", {}, loadingEl());
+		var keyIn = el("input", { class: "inp", type: "text", spellcheck: "false", autocapitalize: "off",
+			placeholder: "ssh-ed25519 AAAA… you@computer" });
+		var keyStatus = el("span", { class: "status" });
+		keysPanel.appendChild(keysWrap);
+		keysPanel.appendChild(el("h4", { class: "sub-h2", text: "Add a key" }));
+		keysPanel.appendChild(el("div", { class: "form form-wide" },
+			el("label", {}, el("span", { class: "lbl", text: "Public key" }), keyIn)));
+		keysPanel.appendChild(el("div", { class: "toolbar" }, btn("Add key", { primary: true, onclick: addKey }), keyStatus));
+		keysPanel.appendChild(el("p", { class: "descr", text:
+			"A key signs in without a password. Paste the one line of your public key: the .pub file beside your private key (ssh-keygen -t ed25519 makes a pair). With a key here, passwords can go off." }));
+
+		// Who is in now, and recent sign-ins
+		var sesPanel = panel("Signed in now");
+		sesPanel.style.marginTop = "14px";
+		var sesWrap = el("div", {}, loadingEl());
+		sesPanel.appendChild(sesWrap);
+		sesPanel.appendChild(el("p", { class: "descr", text:
+			"SSH and terminal sessions. Ending one closes it at once. This page's own sign-in isn't one of them." }));
+		var recPanel = panel("Recent sign-ins");
+		recPanel.style.marginTop = "14px";
+		var recWrap = el("div", {}, loadingEl());
+		recPanel.appendChild(recWrap);
+
+		VIEW.appendChild(pwPanel); VIEW.appendChild(sshPanel); VIEW.appendChild(keysPanel);
+		VIEW.appendChild(sesPanel); VIEW.appendChild(recPanel);
+
+		function keyName(fp) { return keyNames[fp] || "a key"; }
+		function show(s) {
+			keyNames = {};
+			(s.keys || []).forEach(function (k) { keyNames[k.fingerprint] = k.comment || (k.type + " key"); });
+
+			clear(sshHead).appendChild(el("div", { class: "toolbar" },
+				badge(s.running ? "running" : "stopped", s.running ? "sec-ok" : "sec-warn"),
+				el("span", { class: "status", text: "port " + s.port + " · " + (s.passwords ? "passwords and keys" : "keys only") }),
+				el("code", { text: "ssh root@" + host + (s.port !== 22 ? " -p " + s.port : "") })));
+			portIn.value = s.port;
+			pwChk.checked = !!s.passwords;
+			clear(hostKeys);
+			if ((s.host_keys || []).length) {
+				hostKeys.appendChild(el("h4", { class: "sub-h2", text: "This router's keys" }));
+				hostKeys.appendChild(kvEl(s.host_keys.map(function (k) { return [k.type, el("code", { text: k.fingerprint })]; })));
+				hostKeys.appendChild(el("p", { class: "descr", text:
+					"What SSH shows the first time it connects, to check it reached this router." }));
+			}
+
+			var keys = s.keys || [];
+			clear(keysWrap).appendChild(keys.length ? tableEl(["Name", "Type", "Fingerprint", ""], keys.map(function (k) {
+				return [el("strong", { text: k.comment || "(no name)" }), k.type, el("code", { text: k.fingerprint }),
+					btn("Remove", { cls: "small reset", onclick: function () { removeKey(k); } })];
+			})) : el("div", { class: "placeholder", text: "No keys yet: SSH takes root's password only." }));
+
+			var ses = s.sessions || [];
+			clear(sesWrap).appendChild(ses.length ? tableEl(["Session", "From", "Signed in with", "For", ""], ses.map(function (x) {
+				var how = x.kind === "terminal"
+					? (x.how === "waiting" ? "at the password prompt" : "password")
+					: (x.how === "key" ? keyName(x.key) : x.how === "password" ? "password" : "—");
+				return [el("strong", { text: x.kind === "terminal" ? "Terminal" : "SSH" }), x.from || "—", how,
+					dur(x.age), btn("End", { cls: "small reset", onclick: function () { endSession(x); } })];
+			})) : el("div", { class: "placeholder", text: "No one is signed in over SSH or the terminal." }));
+
+			var rec = s.recent || [];
+			clear(recWrap).appendChild(rec.length ? tableEl(["When", "", "What", "From"], rec.map(function (r) {
+				var via = r.how === "terminal" ? "terminal: " : "SSH: ";
+				var what = r.event === "out" ? "signed out"
+					: r.event === "refused" ? (r.how === "user" ? "no such user" : "wrong password")
+					: r.how === "key" ? "signed in with " + keyName(r.key)
+					: r.how === "terminal" ? "signed in" : "signed in with the password";
+				return [new Date(r.time * 1000).toLocaleString(),
+					badge(r.event === "in" ? "in" : r.event === "out" ? "out" : "refused",
+						r.event === "in" ? "sec-ok" : r.event === "out" ? "sec-neutral" : "sec-warn"),
+					via + what, r.from || "—"];
+			})) : el("div", { class: "placeholder", text: "No sign-ins in the log." }));
+		}
+		function load() {
+			return call("pirate.access", "ssh_status").then(show).catch(function (e) {
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				var msg = String(e.message || e) === "ubus status 4" ? "The access service isn't installed on this router yet." : String(e.message || e);
+				clear(sshHead).appendChild(alertEl("warn", msg));
+				clear(keysWrap); clear(sesWrap); clear(recWrap);
+			});
+		}
+		function saveSsh() {
+			var port = parseInt(portIn.value, 10);
+			line(sshStatus, "saving…");
+			call("pirate.access", "ssh_set", { port: isNaN(port) ? 0 : port, passwords: pwChk.checked }).then(function (r) {
+				if (r.error) return line(sshStatus, r.error, "err");
+				line(sshStatus, "saved: SSH restarts with it (sessions open now stay)", "ok-text");
+				setTimeout(load, 2500);
+			}).catch(function (e) { line(sshStatus, String(e.message || e), "err"); });
+		}
+		function addKey() {
+			var k = keyIn.value.trim();
+			if (!k) return line(keyStatus, "paste a public key first", "err");
+			call("pirate.access", "ssh_key_add", { key: k }).then(function (r) {
+				if (r.error) return line(keyStatus, r.error, "err");
+				keyIn.value = "";
+				line(keyStatus, "added: " + r.fingerprint, "ok-text");
+				load();
+			}).catch(function (e) { line(keyStatus, String(e.message || e), "err"); });
+		}
+		function removeKey(k) {
+			if (!window.confirm("Remove the key " + (k.comment || k.fingerprint) + "? It won't sign in any more.")) return;
+			call("pirate.access", "ssh_key_remove", { fingerprint: k.fingerprint }).then(function (r) {
+				if (r.error) return line(keyStatus, r.error, "err");
+				line(keyStatus, "removed", "ok-text");
+				load();
+			}).catch(function (e) { line(keyStatus, String(e.message || e), "err"); });
+		}
+		function endSession(x) {
+			if (!window.confirm("End this " + (x.kind === "terminal" ? "terminal" : "SSH") + " session" + (x.from ? " from " + x.from : "") + "?")) return;
+			call("pirate.access", "session_end", { pid: x.pid }).then(function (r) {
+				if (r.error) window.alert(r.error);
+				setTimeout(load, 500);
+			}).catch(function (e) { window.alert(String(e.message || e)); });
+		}
+		load();
+	}
+
+	/* ---------- Terminal: a shell on the router, in the page ---------- */
+
+	function renderTerminal() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Terminal", "a shell on the router, in this page"));
+		var p = panel();
+		var wrap = el("div", {}, loadingEl());
+		p.appendChild(wrap);
+		p.appendChild(el("p", { class: "descr", text:
+			"Root's shell, as over SSH: it asks for root's password. Only the router's own network (its LAN jacks and the Pirate Radio access point) reaches it, and only its own page can open it; two at a time. Who is in: the Access page." }));
+		VIEW.appendChild(p);
+
+		function show(t) {
+			clear(wrap);
+			if (!t.installed) {
+				wrap.appendChild(el("div", { class: "placeholder" },
+					el("b", { text: "The terminal (ttyd) isn't installed on this router." }),
+					el("div", { text: "apk add ttyd, then reload this page. Images built from now on bring it." })));
+				return;
+			}
+			if (!t.enabled || !t.running) {
+				wrap.appendChild(el("div", { class: "toolbar" },
+					badge("off", "sec-neutral"),
+					el("span", { class: "status", text: "The terminal is off: nothing listens for it." }),
+					btn("Turn it on", { primary: true, onclick: function () { set(true); } })));
+				return;
+			}
+			var url = "http://" + location.hostname + ":" + t.port + "/";
+			var frame = DEMO
+				? el("pre", { class: "term term-demo", text: "\nPirateRadio login: root\nPassword: " })
+				: el("iframe", { class: "term", src: url, title: "Terminal" });
+			wrap.appendChild(el("div", { class: "toolbar" },
+				btn("New session", { onclick: function () { if (!DEMO) frame.src = url; } }),
+				el("a", { class: "btn", href: url, target: "_blank", rel: "noopener", text: "Open in a new tab" }),
+				btn("Turn it off", { cls: "reset", onclick: function () {
+					if (window.confirm("Turn the terminal off? Open terminals end.")) set(false);
+				} })));
+			if (location.protocol === "https:")
+				wrap.appendChild(alertEl("warn", "This page came over HTTPS and the terminal is plain HTTP: browsers won't show it here. Open it in a new tab."));
+			wrap.appendChild(frame);
+		}
+		function set(on) {
+			clear(wrap).appendChild(el("div", { class: "muted", text: on ? "Turning it on…" : "Turning it off…" }));
+			call("pirate.access", "term_set", { enabled: on }).then(function (t) {
+				if (t.error) { clear(wrap).appendChild(alertEl("warn", t.error)); return; }
+				// ttyd takes a moment to listen
+				setTimeout(function () { show(t); }, on ? 800 : 0);
+			}).catch(function (e) { clear(wrap).appendChild(warnEl(e)); });
+		}
+		call("pirate.access", "term_status").then(show).catch(function (e) {
 			if (String(e.message || e) === "unauthorized") return onError(e);
-			clear(sysWrap).appendChild(alertEl("warn", String(e.message || e)));
-			clear(netWrap);
-		});
-		call("pirate.router", "clients").then(fillClients).catch(function (e) {
-			clear(cliWrap).appendChild(alertEl("warn", String(e.message || e)));
-		});
-		call("pirate.router", "adblock").then(fillAdb).catch(function (e) {
-			clear(adbWrap).appendChild(alertEl("warn", String(e.message || e)));
+			clear(wrap).appendChild(alertEl("warn", String(e.message || e) === "ubus status 4"
+				? "The access service isn't installed on this router yet." : String(e.message || e)));
 		});
 	}
 
@@ -1402,8 +1832,9 @@
 		function fillIfaces(d) {
 			clear(ifaceSel);
 			((d && d.interfaces) || []).forEach(function (i) {
+				var l = ifLabel(i.name);
 				ifaceSel.appendChild(el("option", { value: i.name,
-					text: i.name + (i.state && i.state !== "up" ? " (" + i.state + ")" : "") }));
+					text: (l === i.name ? i.name : l + " — " + i.name) + (i.state && i.state !== "up" && i.state !== "unknown" ? " (" + i.state + ")" : "") }));
 			});
 		}
 		function showStatus(s) {
@@ -1411,7 +1842,7 @@
 			startBtn.disabled = !!running;
 			stopBtn.disabled = !running;
 			if (running) {
-				statusLine.textContent = "capturing on " + s.iface + (s.filter ? " [" + s.filter + "]" : "") +
+				statusLine.textContent = "capturing on " + ifLabel(s.iface) + (s.filter ? " [" + s.filter + "]" : "") +
 					" — " + size(s.size) + ", " + dur(s.elapsed) + (s.file ? " — " + s.file : "");
 				statusLine.className = "status ok-text";
 			} else {
@@ -1460,7 +1891,7 @@
 
 	function renderHandshake() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Handshake", "passive WPA handshake capture (monitor mode)"));
+		VIEW.appendChild(viewHead("Handshakes", "passive WPA handshake capture (monitor mode)"));
 		VIEW.appendChild(alertEl("info",
 			"Listen-only: a radio in monitor mode records the WPA 4-way handshake when a device reconnects on its own. It never transmits, deauthenticates, or forces a reconnection. For networks you own or are authorized to test — cracking happens offline on your computer."));
 
@@ -1490,7 +1921,7 @@
 			clear(radioSel);
 			var any = false;
 			((d && d.radios) || []).forEach(function (r) {
-				var o = el("option", { value: r.phy, text: r.phy + (r.monitor ? "" : " (no monitor)") });
+				var o = el("option", { value: r.phy, text: phyLabel(r.phy) + " — " + r.phy + (r.monitor ? "" : " (no monitor)") });
 				if (!r.monitor) o.disabled = true; else any = true;
 				radioSel.appendChild(o);
 			});
@@ -1503,7 +1934,7 @@
 			if (running) {
 				var hs = s.eapol >= 4 ? " — handshake likely (" + s.eapol + " EAPOL)"
 					: (s.eapol ? " — " + s.eapol + " EAPOL frames" : " — waiting for a handshake…");
-				statusLine.textContent = "listening on " + s.phy + " ch " + s.channel + " — " + size(s.size) + ", " + dur(s.elapsed) + hs;
+				statusLine.textContent = "listening on the " + phyLabel(s.phy) + ", ch " + s.channel + " — " + size(s.size) + ", " + dur(s.elapsed) + hs;
 				statusLine.className = "status " + (s.eapol >= 4 ? "ok-text" : "");
 			} else {
 				statusLine.textContent = "idle";
@@ -1799,7 +2230,7 @@
 			var inCall = s.state === "answering" || s.state === "connected";
 			stWrap.appendChild(el("div", { class: "toolbar" }, badge(st[0], st[1]), el("span", { class: "status", text: st[2] })));
 			stWrap.appendChild(kv([
-				["Modem", m ? m.name + " — " + m.device + " (" + m.id + ")" : "none plugged in"],
+				["Modem", m ? m.name + " — on " + devLabel(m.device) + " (" + m.id + ")" : "none plugged in"],
 				["Call", inCall ? (s.number || "?") + " · " + (DP_SERVICES[s.call_service] || s.call_service) +
 					(s.since ? " · " + dur(Date.now() / 1000 - s.since) : "") : null],
 				// rx on the router's end of the link is what the Dreamcast sent
@@ -1994,7 +2425,7 @@
 			card.appendChild(head);
 			card.appendChild(meter(d.used, d.size));
 			card.appendChild(el("div", { class: "status", text:
-				gb(d.free) + " free of " + gb(d.size) + " · " + d.device }));
+				gb(d.free) + " free of " + gb(d.size) + " · " + (d.card ? "the microSD slot" : "the USB port") + " (" + d.device + ")" }));
 			var pairs = [];
 			if (s.installed && s.enabled) {
 				pairs.push(["Windows", "\\\\" + smbHost(s) + "\\" + d.name]);
@@ -2294,7 +2725,7 @@
 				devWrap.appendChild(alertEl("warn", "The Flipper is in DFU (recovery) mode: it has no screen or files to " +
 					"show. Repair or update its firmware with qFlipper on a computer."));
 			} else if (s.state === "connecting") {
-				devWrap.appendChild(el("div", { class: "muted", text: "Connecting to the Flipper on " + (s.device || "USB") + "…" }));
+				devWrap.appendChild(el("div", { class: "muted", text: "Connecting to the Flipper on " + (devLabel(s.device) || "the USB port") + "…" }));
 				if (s.error) devWrap.appendChild(alertEl("warn", s.error));
 			} else {
 				var head = el("div", { class: "drive-head" },
@@ -2313,7 +2744,7 @@
 					(s.battery != null ? "battery " + s.battery + "%" + (s.charging ? " · " + s.charging : "") : "battery unknown") +
 					" · " + (s.sd ? "SD card: " + gb(s.sd_free) + " free of " + gb(s.sd_total) : "no SD card") }));
 				var dl = el("dl", { class: "kv" });
-				[["Port", s.device], ["Firmware built", s.build_date], ["Commit", s.commit], ["RPC protocol", s.protobuf]].forEach(function (p) {
+				[["Port", devLabel(s.device)], ["Firmware built", s.build_date], ["Commit", s.commit], ["RPC protocol", s.protobuf]].forEach(function (p) {
 					if (!p[1]) return;
 					dl.appendChild(el("dt", { text: p[0] }));
 					dl.appendChild(el("dd", { text: p[1] }));
@@ -2695,12 +3126,14 @@
 
 	var GROUPS = [
 		["Overview", [["dashboard", "Dashboard"]]],
-		["Radio", [["sdr", "Radios & SDR"]]],
-		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshake"]]],
-		["Network", [["hosts", "Hosts"], ["capture", "Capture"]]],
+		["Radio", [["receivers", "Receivers"], ["sensors", "Sensors"]]],
+		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshakes"]]],
+		["Network", [["uplink", "Uplink"], ["clients", "Clients"], ["hosts", "Hosts"], ["capture", "Capture"]]],
 		["USB devices", [["drives", "Drives"], ["flipper", "Flipper"], ["dreampi", "DreamPi"]]],
-		["System", [["router", "Router"], ["firmware", "Firmware"]]]
+		["System", [["status", "Status"], ["access", "Access"], ["terminal", "Terminal"], ["firmware", "Firmware"]]]
 	];
+	// Pages that were renamed, for old links
+	var ALIASES = { sdr: "receivers", router: "status" };
 	var TABS = [];
 	GROUPS.forEach(function (g) { TABS = TABS.concat(g[1]); });
 	var current = "dashboard";
@@ -2746,15 +3179,21 @@
 	});
 
 	function setTab(id) {
+		id = ALIASES[id] || id;
 		current = id;
 		renderTabs();
 		try { location.hash = id; } catch (e) {}
 		if (id === "dashboard") return loadDashboard();
-		if (id === "sdr") return renderSdr();
+		if (id === "receivers") return renderReceivers();
+		if (id === "sensors") return renderSensors();
 		if (id === "hosts") return renderHosts();
 		if (id === "survey") return renderSurvey();
 		if (id === "threats") return renderThreats();
-		if (id === "router") return renderRouter();
+		if (id === "uplink") return renderUplink();
+		if (id === "clients") return renderClients();
+		if (id === "status") return renderStatus();
+		if (id === "access") return renderAccess();
+		if (id === "terminal") return renderTerminal();
 		if (id === "dreampi") return renderDreampi();
 		if (id === "drives") return renderDrives();
 		if (id === "flipper") return renderFlipper();
@@ -2829,6 +3268,7 @@
 
 	function startTab() {
 		var h = (location.hash || "").replace("#", "");
+		h = ALIASES[h] || h;
 		return TABS.some(function (t) { return t[0] === h; }) ? h : "dashboard";
 	}
 
