@@ -54,6 +54,13 @@ dreampi
 # in; its serial port is CDC-ACM, above.
 pirate-flipper
 
+# A MeshCore radio on the USB port (one running a companion build for USB,
+# such as LilyGo's T-Echo): the Pirate Radio UI's Messenger tab, with its
+# contacts, channels and messages, as MeshCore's app has them on a phone.
+# With its GPS on, its position tags the Wi-Fi survey. Idle until one is
+# plugged in.
+pirate-meshcore
+
 # WireGuard, to tunnel back home over an untrusted uplink. The kernel module
 # must be built into the full image (its kernel is its own). Configure the
 # tunnel over SSH with uci/wg; the Pirate Radio UI has no WireGuard page yet.

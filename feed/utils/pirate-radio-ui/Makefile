@@ -107,6 +107,8 @@ define Package/pirate-radio-ui/install
 	# Flipper page (the pirate-flipper package's daemon does the work; without
 	# it the page says so, rather than being refused)
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-flipper.json $(1)/usr/share/rpcd/acl.d/pirate-flipper.json
+	# Messenger page (the pirate-meshcore package's daemon does the work)
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-meshcore.json $(1)/usr/share/rpcd/acl.d/pirate-meshcore.json
 	# Firmware flasher
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-firmware $(1)/usr/sbin/pirate-firmware
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.firmware $(1)/usr/libexec/rpcd/pirate.firmware

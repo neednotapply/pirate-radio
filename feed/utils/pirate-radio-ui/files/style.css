@@ -483,6 +483,39 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 }
 .term-demo { margin: 0; padding: 10px 12px; color: var(--txt); font-family: var(--mono); font-size: 14px; white-space: pre-wrap; }
 
+/* Messenger: conversations beside the open one; on a phone, one or the other */
+.mc-chat { display: grid; grid-template-columns: 250px minmax(0, 1fr); border: 1px solid var(--line); border-radius: var(--r); min-height: 420px; }
+.mc-list { border-right: 1px solid var(--line); overflow-y: auto; max-height: 64vh; padding-bottom: 8px; background: var(--side); }
+.mc-grp { padding: 12px 12px 4px; }
+.mc-none { padding: 6px 12px; font-size: 12px; }
+.mc-item {
+	appearance: none; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px;
+	width: 100%; text-align: left; background: transparent; border: 0; color: var(--txt);
+	font: inherit; padding: 7px 12px; cursor: pointer;
+}
+.mc-item:hover { background: #16191c; }
+.mc-item.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
+.mc-name { color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-sub { grid-column: 1 / -1; font-size: 11px; color: var(--faint); }
+.mc-unread { background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: var(--r); align-self: center; }
+.mc-thread { display: flex; flex-direction: column; min-width: 0; }
+.mc-thead { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.mc-thead strong { color: var(--hi); }
+.mc-back { display: none; }
+.mc-msgs { flex: 1; overflow-y: auto; height: 46vh; min-height: 260px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.mc-msg { max-width: 78%; align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r); padding: 6px 10px; }
+.mc-msg.out { align-self: flex-end; background: var(--accent-soft); border-color: rgba(224, 160, 64, .35); }
+.mc-text { color: var(--hi); white-space: pre-wrap; overflow-wrap: anywhere; }
+.mc-meta { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.mc-st.mc-delivered { color: var(--ok); }
+.mc-st.mc-unconfirmed, .mc-st.mc-failed { color: var(--warn); }
+.mc-retry { font-size: 11px; }
+.mc-compose { border-top: 1px solid var(--line); padding: 10px 14px 0; }
+.mc-input { width: 100%; resize: vertical; min-height: 44px; font-family: var(--sans); }
+.mc-compose .toolbar { margin: 8px 0 10px; }
+.mc-count { margin-left: auto; font-family: var(--mono); font-size: 12px; }
+.mc-key { font-size: 12px; }
+
 /* Drives: one block per USB drive, its usage, and the file browser */
 .drive { border-top: 1px solid var(--line); padding: 14px 0 4px; }
 .drive:first-child { border-top: 0; padding-top: 2px; }
@@ -556,6 +589,13 @@ a { color: var(--link); }
 	.top-right .pill { max-width: 46vw; }
 	.view { padding: 16px 16px 48px; }
 	.view-head h2 { font-size: 20px; }
+	.mc-chat { grid-template-columns: 1fr; }
+	.mc-list { border-right: 0; max-height: none; }
+	.mc-chat .mc-thread { display: none; }
+	.mc-chat.mc-open .mc-list { display: none; }
+	.mc-chat.mc-open .mc-thread { display: flex; }
+	.mc-back { display: inline; }
+	.mc-msg { max-width: 90%; }
 }
 @media (max-width: 520px) {
 	.grid { grid-template-columns: 1fr 1fr; gap: 8px; }

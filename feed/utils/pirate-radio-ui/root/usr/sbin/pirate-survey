@@ -4,15 +4,17 @@
 #   pirate-survey scan [phy]     scan with a free radio, merge into the log
 #   pirate-survey networks       every access point seen so far, as JSON
 #   pirate-survey clear          forget the logged networks
-#   pirate-survey gps            GPS status from a running gpsd, as JSON
+#   pirate-survey gps            GPS status from a running gpsd (or a MeshCore
+#                                radio's GPS), as JSON
 #
 # A scan is an ordinary Wi-Fi scan (what a phone's network list does) on a
 # radio that is not serving the uplink or an access point — by default the
 # USB adapter. Each access point found is merged into a database on the
 # microSD card under survey/ (first/last seen, times seen, strongest signal,
 # channel, security), and every sighting is also appended to a wardrive log
-# with a GPS position when a gpsd is running. Nothing is transmitted beyond
-# the scan's own probe requests.
+# with a GPS position when a gpsd is running, or when a MeshCore radio on the
+# USB port (pirate-meshcore) has its GPS on and a fix. Nothing is transmitted
+# beyond the scan's own probe requests.
 
 MERGE=${PIRATE_SURVEY_MERGE:-/usr/libexec/pirate-survey-merge}
 SCAN_IFACE=piratesurvey
@@ -29,14 +31,37 @@ gps_stream() {
 	gpspipe -w -x 3 2>/dev/null
 }
 
-# "lat lon" from a running gpsd with a fix, or empty.
+# A MeshCore radio's position (pirate-meshcore), as JSON, if its GPS is on.
+# PIRATE_MESHCORE_POSITION names a file to read it from instead (tests).
+mc_position() {
+	if [ -n "$PIRATE_MESHCORE_POSITION" ]; then
+		cat "$PIRATE_MESHCORE_POSITION" 2>/dev/null
+	else
+		ubus -t 2 call pirate.meshcore position 2>/dev/null
+	fi
+}
+
+# "lat lon" from the MeshCore radio's GPS while it has a fix, or empty
+mc_fix() {
+	local j lat lon
+	j=$(mc_position)
+	[ "$(printf '%s' "$j" | jsonfilter -e '@.live' 2>/dev/null)" = true ] || return 0
+	lat=$(printf '%s' "$j" | jsonfilter -e '@.lat' 2>/dev/null)
+	lon=$(printf '%s' "$j" | jsonfilter -e '@.lon' 2>/dev/null)
+	[ -n "$lat" ] && [ -n "$lon" ] && echo "$lat $lon"
+}
+
+# "lat lon" from a running gpsd with a fix, else the MeshCore radio's, or
+# empty.
 gps_fix() {
 	local tpv lat lon
 	tpv=$(gps_stream | grep '"class":"TPV"' | grep '"lat":' | tail -n 1)
-	[ -n "$tpv" ] || return 0
-	lat=$(field "$tpv" lat)
-	lon=$(field "$tpv" lon)
-	[ -n "$lat" ] && [ -n "$lon" ] && echo "$lat $lon"
+	if [ -n "$tpv" ]; then
+		lat=$(field "$tpv" lat)
+		lon=$(field "$tpv" lon)
+		[ -n "$lat" ] && [ -n "$lon" ] && { echo "$lat $lon"; return; }
+	fi
+	mc_fix
 }
 
 # The phy to scan on: the USB adapter if present, else a phy with no access
@@ -115,14 +140,28 @@ cmd_scan() {
 	iw dev "$SCAN_IFACE" del 2>/dev/null
 }
 
+# The MeshCore radio's GPS, as cmd_gps reports a gpsd's, if it has a fix:
+# MeshCore says no more than its position, so a fix is a 2D one
+mc_gps() {
+	local j lat lon src
+	j=$(mc_position)
+	[ "$(printf '%s' "$j" | jsonfilter -e '@.live' 2>/dev/null)" = true ] || return 1
+	lat=$(printf '%s' "$j" | jsonfilter -e '@.lat' 2>/dev/null)
+	lon=$(printf '%s' "$j" | jsonfilter -e '@.lon' 2>/dev/null)
+	src=$(printf '%s' "$j" | jsonfilter -e '@.source' 2>/dev/null)
+	[ -n "$lat" ] && [ -n "$lon" ] || return 1
+	echo "{ \"installed\": true, \"running\": true, \"fix\": \"2D\", \"mode\": 2, \"source\": \"meshcore\", \"device\": \"$(esc "${src:-a MeshCore radio}")'s GPS\", \"lat\": $lat, \"lon\": $lon }"
+}
+
 # GPS status: whether gpsd is installed and reachable, its device, and any
-# fix. Positions are only reported with a 2D/3D fix.
+# fix; or, while gpsd has none, the MeshCore radio's. Positions are only
+# reported with a 2D/3D fix.
 cmd_gps() {
 	local out tpv sky mode dev nsat usat fix lat lon alt res
 
-	command -v gpspipe >/dev/null 2>&1 || { echo '{ "installed": false }'; return; }
+	command -v gpspipe >/dev/null 2>&1 || { mc_gps || echo '{ "installed": false }'; return; }
 	out=$(gps_stream)
-	printf '%s' "$out" | grep -q '"class":"VERSION"' || { echo '{ "installed": true, "running": false }'; return; }
+	printf '%s' "$out" | grep -q '"class":"VERSION"' || { mc_gps || echo '{ "installed": true, "running": false }'; return; }
 
 	tpv=$(printf '%s\n' "$out" | grep '"class":"TPV"' | tail -n 1)
 	sky=$(printf '%s\n' "$out" | grep '"class":"SKY"' | tail -n 1)
@@ -141,6 +180,8 @@ cmd_gps() {
 		lat=$(field "$tpv" lat); lon=$(field "$tpv" lon); alt=$(field "$tpv" alt)
 		[ -n "$lat" ] && [ -n "$lon" ] && res="$res, \"lat\": $lat, \"lon\": $lon"
 		[ -n "$alt" ] && res="$res, \"alt\": $alt"
+	elif mc_gps; then
+		return
 	fi
 	echo "$res }"
 }

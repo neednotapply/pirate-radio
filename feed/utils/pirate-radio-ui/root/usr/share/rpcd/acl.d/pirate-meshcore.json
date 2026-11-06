@@ -1,0 +1,15 @@
+{
+	"pirate-meshcore": {
+		"description": "Grant access to the MeshCore radio: its contacts, channels and messages, sending, its adverts, name and GPS",
+		"read": {
+			"ubus": {
+				"pirate.meshcore": [ "status", "position", "contacts", "channels", "messages", "poll" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.meshcore": [ "send", "resend", "read", "advert", "set_name", "gps", "channel_set", "contact_remove", "contact_reset_path", "refresh" ]
+			}
+		}
+	}
+}

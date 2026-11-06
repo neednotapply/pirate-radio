@@ -100,6 +100,51 @@
 		}).join("\n");
 	}
 
+	// A MeshCore radio, for the Messenger page
+	var DEMO_MC = (function () {
+		var now = Math.floor(Date.now() / 1000), seq = 20, id = 0;
+		function key(b) { var s = ""; for (var i = 0; i < 32; i++) s += b; return s; }
+		var mc = {
+			seq: seq, name: "Pirate Radio", gps: false, read: {},
+			contacts: [
+				{ key: key("a1"), conv: "ca1a1a1a1a1a1", name: "Alice", type: "chat", hops: 1, last_advert: now - 900, lat: 37.422, lon: -122.084 },
+				{ key: key("b0"), conv: "cb0b0b0b0b0b0", name: "Bob", type: "chat", flood: true, last_advert: now - 7200 },
+				{ key: key("c2"), conv: "cc2c2c2c2c2c2", name: "Hilltop Repeater", type: "repeater", hops: 0, last_advert: now - 300 }
+			],
+			channels: [
+				{ index: 0, conv: "#0", name: "Public", secret: "8b3387e9c5cdea6ac9e5edbaa115cd72" },
+				{ index: 1, conv: "#1", name: "#test", secret: "9cd8fcf22a47333b591d96a2b848b73f" }
+			],
+			msgs: []
+		};
+		function add(m) { m.id = ++id; m.seq = ++mc.seq; mc.msgs.push(m); return m; }
+		add({ conv: "#0", out: false, from: "Bob", text: "anyone on tonight?", ts: now - 5400, rx: now - 5400, snr: -5.5, hops: 2 });
+		add({ conv: "#0", out: true, from: "Pirate Radio", text: "here, from the van", ts: now - 5300, rx: now - 5300, status: "sent" });
+		add({ conv: "ca1a1a1a1a1a1", out: false, from: "Alice", text: "the repeater on the hill is back up", ts: now - 1800, rx: now - 1800, snr: 10, hops: 1 });
+		add({ conv: "ca1a1a1a1a1a1", out: true, from: "Pirate Radio", text: "great, hearing it at -92", ts: now - 1700, rx: now - 1700, status: "delivered", trip_ms: 850 });
+		add({ conv: "cb0b0b0b0b0b0", out: true, from: "Pirate Radio", text: "still on for saturday?", ts: now - 3600, rx: now - 3600, status: "unconfirmed", flood: true });
+		add({ conv: "#1", out: false, from: "Carol", text: "test from the bridge", ts: now - 120, rx: now - 120, snr: 4.25, hops: 3 });
+		mc.read["#0"] = 1;
+		mc.read["ca1a1a1a1a1a1"] = 3;
+		mc.add = add;
+		return mc;
+	})();
+	function demoMcConv(c) {
+		var unread = 0, last = 0, upto = DEMO_MC.read[c.conv] || 0;
+		DEMO_MC.msgs.forEach(function (m) {
+			if (m.conv !== c.conv) return;
+			last = m.rx || m.ts;
+			if (!m.out && m.id > upto) unread++;
+		});
+		var o = JSON.parse(JSON.stringify(c));
+		o.unread = unread;
+		if (last) o.last_message = last;
+		return o;
+	}
+	function demoMcPos() {
+		var t = Date.now() / 1000;
+		return { lat: 37.421925 + Math.sin(t / 7) * 0.000004, lon: -122.084102 + Math.cos(t / 9) * 0.000004 };
+	}
 	var DEMO_ADB = { on: true };
 	var DEMO_ACCESS = {
 		port: 22, passwords: true, term: true,
@@ -492,6 +537,81 @@
 		},
 		"pirate.access:term_status": function () { return { installed: true, enabled: DEMO_ACCESS.term, running: DEMO_ACCESS.term, port: 7681, sessions: [] }; },
 		"pirate.access:term_set": function (p) { DEMO_ACCESS.term = !!p.enabled; return MOCK["pirate.access:term_status"](); },
+		"pirate.meshcore:status": function () {
+			var unread = 0, p = demoMcPos();
+			DEMO_MC.channels.concat(DEMO_MC.contacts).forEach(function (c) { unread += demoMcConv(c).unread; });
+			return { state: "ready", seq: DEMO_MC.seq, meta: 1, device: "/dev/ttyACM0", model: "LilyGo T-Echo",
+				firmware: "v1.18.0", build: "15-Oct-2026", protocol: 9, max_contacts: 350, max_channels: 40,
+				name: DEMO_MC.name, key: "e7f3a91c0d5b2846" + "aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55",
+				share_location: false, radio: { freq_khz: 910525, bw_hz: 62500, sf: 7, cr: 5, tx_power: 22, max_tx_power: 22 },
+				battery_mv: 4012, storage_used_kb: 128, storage_total_kb: 4096,
+				contacts: DEMO_MC.contacts.length, channels: DEMO_MC.channels.length, unread: unread,
+				gps: { available: true, enabled: DEMO_MC.gps, live: DEMO_MC.gps, lat: p.lat, lon: p.lon, age: 3 } };
+		},
+		"pirate.meshcore:position": function () {
+			var p = demoMcPos();
+			return DEMO_MC.gps ? { state: "ready", available: true, enabled: true, live: true, lat: p.lat, lon: p.lon, source: "LilyGo T-Echo" }
+				: { state: "ready", available: true, enabled: false, live: false, source: "LilyGo T-Echo" };
+		},
+		"pirate.meshcore:contacts": function () { return { loaded: true, contacts: DEMO_MC.contacts.map(demoMcConv) }; },
+		"pirate.meshcore:channels": function () {
+			var used = DEMO_MC.channels.map(function (c) { return c.index; }), free = 0;
+			while (used.indexOf(free) >= 0) free++;
+			return { channels: DEMO_MC.channels.map(demoMcConv), free: free };
+		},
+		"pirate.meshcore:messages": function (p) {
+			return { seq: DEMO_MC.seq, more: false, messages: DEMO_MC.msgs.filter(function (m) { return m.conv === p.conv; }) };
+		},
+		"pirate.meshcore:poll": function (p) {
+			return { state: "ready", seq: DEMO_MC.seq, meta: false,
+				messages: DEMO_MC.msgs.filter(function (m) { return m.seq > (p.since || 0); }) };
+		},
+		"pirate.meshcore:read": function (p) {
+			var last = 0;
+			DEMO_MC.msgs.forEach(function (m) { if (m.conv === p.conv) last = m.id; });
+			DEMO_MC.read[p.conv] = last;
+			return { ok: true };
+		},
+		"pirate.meshcore:send": function (p) {
+			var now = Math.floor(Date.now() / 1000), m = DEMO_MC.add({ conv: p.to.charAt(0) === "#" ? p.to : "c" + p.to.replace(/^c/, "").slice(0, 12),
+				out: true, from: DEMO_MC.name, text: p.text, ts: now, rx: now, status: "queued" });
+			DEMO_MC.read[m.conv] = m.id;
+			setTimeout(function () { m.status = "sent"; m.seq = ++DEMO_MC.seq; }, 600);
+			if (m.conv.charAt(0) === "c") setTimeout(function () {
+				m.status = m.conv === "ca1a1a1a1a1a1" ? "delivered" : "unconfirmed"; m.trip_ms = 910; m.seq = ++DEMO_MC.seq;
+				if (m.conv === "ca1a1a1a1a1a1") setTimeout(function () {
+					var t = Math.floor(Date.now() / 1000);
+					DEMO_MC.add({ conv: m.conv, out: false, from: "Alice", text: "got it 👍", ts: t, rx: t, snr: 9.5, hops: 1 });
+				}, 2500);
+			}, 2200);
+			return { ok: true, id: m.id, seq: DEMO_MC.seq };
+		},
+		"pirate.meshcore:resend": function (p) {
+			var m = DEMO_MC.msgs.filter(function (x) { return x.id === p.id; })[0];
+			if (!m) return { error: "id: a message you sent" };
+			m.attempt = (m.attempt || 0) + 1; m.status = "sent"; m.seq = ++DEMO_MC.seq;
+			setTimeout(function () { m.status = "unconfirmed"; m.seq = ++DEMO_MC.seq; }, 2500);
+			return { ok: true };
+		},
+		"pirate.meshcore:advert": { ok: true },
+		"pirate.meshcore:set_name": function (p) { DEMO_MC.name = p.name; return { ok: true }; },
+		"pirate.meshcore:gps": function (p) { DEMO_MC.gps = !!p.enabled; return { ok: true }; },
+		"pirate.meshcore:channel_set": function (p) {
+			DEMO_MC.channels = DEMO_MC.channels.filter(function (c) { return c.index !== p.index; });
+			if (p.name) DEMO_MC.channels.push({ index: p.index, conv: "#" + p.index, name: p.name,
+				secret: p.secret || "5f2e9a0c7b1d4e8f6a3c2b1d0e9f8a7b" });
+			DEMO_MC.channels.sort(function (a, b) { return a.index - b.index; });
+			return { ok: true };
+		},
+		"pirate.meshcore:contact_remove": function (p) {
+			DEMO_MC.contacts = DEMO_MC.contacts.filter(function (c) { return c.key !== p.key; });
+			return { ok: true };
+		},
+		"pirate.meshcore:contact_reset_path": function (p) {
+			DEMO_MC.contacts.forEach(function (c) { if (c.key === p.key) { c.flood = true; delete c.hops; } });
+			return { ok: true };
+		},
+		"pirate.meshcore:refresh": { ok: true },
 		"pirate.capture:interfaces": {
 			interfaces: [
 				{ name: "br-lan", state: "up" },
@@ -1798,6 +1918,386 @@
 			clear(wrap).appendChild(alertEl("warn", String(e.message || e) === "ubus status 4"
 				? "The access service isn't installed on this router yet." : String(e.message || e)));
 		});
+	}
+
+	/* ---------- Messenger: a MeshCore radio on the USB port ---------- */
+
+	function mcTime(t) {
+		if (!t) return "";
+		var d = new Date(t * 1000), now = new Date();
+		var hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+		return d.toDateString() === now.toDateString() ? hm : d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + hm;
+	}
+	function mcBattery(mv) {
+		if (!mv) return "";
+		var pct = Math.max(0, Math.min(100, Math.round((mv - 3300) / 9)));
+		return pct + "% (" + (mv / 1000).toFixed(2) + " V)";
+	}
+	// UTF-8 bytes, as the radio counts them
+	function utf8len(s) {
+		var n = 0, i, c;
+		for (i = 0; i < s.length; i++) {
+			c = s.charCodeAt(i);
+			n += c < 0x80 ? 1 : c < 0x800 ? 2 : (c >= 0xd800 && c < 0xdc00) ? (i++, 4) : 3;
+		}
+		return n;
+	}
+
+	function renderMessenger() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Messenger", "a MeshCore radio on the USB port: its contacts and channels, as MeshCore's app has them"));
+
+		var devPanel = panel("MeshCore radio");
+		var devWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		devPanel.appendChild(devWrap);
+
+		var chatPanel = panel();
+		chatPanel.style.marginTop = "14px";
+		var listCol = el("div", { class: "mc-list" });
+		var threadHead = el("div", { class: "mc-thead" });
+		var threadBody = el("div", { class: "mc-msgs", "aria-live": "polite" });
+		var input = el("textarea", { class: "inp mc-input", rows: "2", placeholder: "a message", maxlength: "150" });
+		var count = el("span", { class: "status mc-count" });
+		var sendBtn = btn("Send", { primary: true, onclick: send });
+		var sendStatus = el("span", { class: "status" });
+		var composer = el("div", { class: "mc-compose" }, input, el("div", { class: "toolbar" }, sendBtn, count, sendStatus));
+		var threadCol = el("div", { class: "mc-thread" }, threadHead, threadBody, composer);
+		var chat = el("div", { class: "mc-chat" }, listCol, threadCol);
+		chatPanel.appendChild(chat);
+
+		var chanPanel = panel("Channels");
+		chanPanel.style.marginTop = "14px";
+		var chanWrap = el("div");
+		var chName = el("input", { class: "inp", type: "text", placeholder: "#hashtag, or a name" });
+		var chKey = el("input", { class: "inp", type: "text", spellcheck: "false", placeholder: "its key, if you have one (32 hex digits)" });
+		var chStatus = el("span", { class: "status" });
+		chanPanel.appendChild(chanWrap);
+		chanPanel.appendChild(el("h4", { class: "sub-h2", text: "Add a channel" }));
+		chanPanel.appendChild(el("div", { class: "form" },
+			el("label", {}, el("span", { class: "lbl", text: "Name" }), chName),
+			el("label", {}, el("span", { class: "lbl", text: "Key" }), chKey)));
+		chanPanel.appendChild(el("div", { class: "toolbar" }, btn("Add channel", { primary: true, onclick: addChannel }), chStatus));
+		chanPanel.appendChild(el("p", { class: "descr", text:
+			"A #hashtag channel's key comes from its name: anyone who knows the name can join, so it isn't private. Another name gets a random key, private to those you give it to; or give the key someone shared." }));
+
+		var conPanel = panel("Contacts");
+		conPanel.style.marginTop = "14px";
+		var conWrap = el("div");
+		conPanel.appendChild(conWrap);
+		conPanel.appendChild(el("p", { class: "descr", text:
+			"Contacts come from adverts heard on the mesh: send one from here and others add you. A route is the path messages last took; forget it and the next goes out to the whole mesh to find a new one." }));
+
+		VIEW.appendChild(devPanel); VIEW.appendChild(chatPanel); VIEW.appendChild(chanPanel); VIEW.appendChild(conPanel);
+
+		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, open = null, shown = {}, timer = null;
+		function alive() { return VIEW.contains(chat); }
+		function failed(e) {
+			if (String(e.message || e) === "unauthorized") { onError(e); return true; }
+			return false;
+		}
+		function line(node, text, kind) { node.textContent = text; node.className = "status" + (kind ? " " + kind : ""); }
+
+		/* The radio */
+		function showDevice(s) {
+			st = s;
+			clear(devWrap);
+			if (s.state === "absent") {
+				devWrap.appendChild(el("div", { class: "placeholder" },
+					el("b", { text: "No MeshCore radio is plugged in." }),
+					el("div", { text: "Plug one into the USB port, running MeshCore's companion firmware for USB (for a LilyGo T-Echo: \"Companion (USB)\" on flasher.meshcore.co.uk)." })));
+				if (s.error) devWrap.appendChild(alertEl("warn", s.error));
+				chat.hidden = true; chanPanel.hidden = conPanel.hidden = true;
+				return;
+			}
+			if (s.state !== "ready") {
+				devWrap.appendChild(el("div", { class: "muted", text: "Connecting to the radio on " + devLabel(s.device) + "…" }));
+				chat.hidden = true; chanPanel.hidden = conPanel.hidden = true;
+				return;
+			}
+			chat.hidden = false; chanPanel.hidden = conPanel.hidden = false;
+			var r = s.radio || {}, g = s.gps || {};
+			devWrap.appendChild(el("div", { class: "drive-head" },
+				el("strong", { text: s.name || "MeshCore" }),
+				badge(s.model || "MeshCore", "sec-neutral"),
+				s.firmware ? badge("MeshCore " + s.firmware, "sec-ok") : null,
+				s.unread ? badge(s.unread + " unread", "sec-warn") : null));
+			devWrap.appendChild(kvEl([
+				["Battery", mcBattery(s.battery_mv)],
+				["Radio", r.freq_khz ? (r.freq_khz / 1000) + " MHz · " + (r.bw_hz / 1000) + " kHz · SF" + r.sf + " · CR" + r.cr + " · " + r.tx_power + " dBm" : null],
+				["Port", devLabel(s.device)],
+				["Key", s.key ? el("code", { text: s.key }) : null],
+				["Contacts", s.contacts + (s.max_contacts ? " of " + s.max_contacts : "") + (s.contacts_full ? " (full)" : "")]
+			]));
+			var gpsLine = el("span", { class: "status" });
+			if (!g.available) gpsLine.textContent = "no GPS on this radio";
+			else if (!g.enabled) gpsLine.textContent = "GPS off";
+			else if (g.live) gpsLine.textContent = "GPS fix: " + g.lat.toFixed(5) + ", " + g.lon.toFixed(5) + " (tags the Wi-Fi survey)";
+			else gpsLine.textContent = "GPS on, no fix yet";
+			devWrap.appendChild(el("div", { class: "toolbar" },
+				btn("Advert to neighbours", { onclick: function () { advert(false); } }),
+				btn("Advert to the whole mesh", { onclick: function () { advert(true); } }),
+				btn("Rename", { onclick: rename }),
+				g.available ? btn(g.enabled ? "GPS off" : "GPS on", { onclick: function () { gps(!g.enabled); } }) : null,
+				gpsLine));
+			if (s.share_location)
+				devWrap.appendChild(alertEl("warn", "This radio shares its location in its adverts: everyone on the mesh sees where it is. MeshCore's app turns that off."));
+			var actStatus = el("span", { class: "status" });
+			devWrap.appendChild(actStatus);
+			devWrap.actStatus = actStatus;
+		}
+		function act(p, ok) {
+			var a = devWrap.actStatus;
+			if (a) line(a, "…");
+			return p.then(function (r) {
+				if (r.error) { if (a) line(a, r.error, "err"); return; }
+				if (a) line(a, ok, "ok-text");
+				refreshAll();
+			}).catch(function (e) { if (!failed(e) && a) line(a, String(e.message || e), "err"); });
+		}
+		function advert(flood) { act(call("pirate.meshcore", "advert", { flood: flood }), flood ? "advert sent to the whole mesh" : "advert sent to its neighbours"); }
+		function gps(on) { act(call("pirate.meshcore", "gps", { enabled: on }), on ? "GPS on: give it a few minutes for a fix" : "GPS off"); }
+		function rename() {
+			var n = window.prompt("The radio's name, as the mesh knows it:", (st && st.name) || "");
+			if (n == null || !n.trim()) return;
+			act(call("pirate.meshcore", "set_name", { name: n.trim() }), "renamed: send an advert so others see it");
+		}
+
+		/* Conversations */
+		function convName(conv) {
+			var i;
+			for (i = 0; i < channels.length; i++) if (channels[i].conv === conv) return channels[i].name;
+			for (i = 0; i < contacts.length; i++) if (contacts[i].conv === conv) return contacts[i].name;
+			return conv;
+		}
+		function showList() {
+			clear(listCol);
+			function item(conv, name, sub, unread) {
+				var b = el("button", { type: "button", class: "mc-item" + (open === conv ? " active" : ""),
+					onclick: function () { openConv(conv); } },
+					el("span", { class: "mc-name", text: name }),
+					unread ? el("span", { class: "mc-unread", text: String(unread) }) : null,
+					el("span", { class: "mc-sub", text: sub }));
+				listCol.appendChild(b);
+			}
+			listCol.appendChild(el("div", { class: "nav-grp mc-grp", text: "Channels" }));
+			channels.forEach(function (c) { item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : "", c.unread); });
+			var chats = contacts.filter(function (c) { return c.type === "chat"; });
+			chats.sort(function (a, b) { return (b.last_message || 0) - (a.last_message || 0) || (b.last_advert || 0) - (a.last_advert || 0); });
+			listCol.appendChild(el("div", { class: "nav-grp mc-grp", text: "Contacts" }));
+			if (!chats.length) listCol.appendChild(el("div", { class: "muted mc-none", text: "No contacts yet: they come with adverts." }));
+			chats.forEach(function (c) {
+				item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : (c.flood ? "no route yet" : c.hops + " hop" + (c.hops === 1 ? "" : "s")), c.unread);
+			});
+		}
+		function maxBytes() {
+			if (open && open.charAt(0) === "#") return Math.max(10, 150 - utf8len((st && st.name) || "") - 2);
+			return 150;
+		}
+		function updateCount() {
+			var n = utf8len(input.value), m = maxBytes();
+			count.textContent = n + " / " + m;
+			count.className = "status mc-count" + (n > m ? " err" : "");
+			sendBtn.disabled = !open || !input.value.trim() || n > m;
+		}
+		input.addEventListener("input", updateCount);
+		input.addEventListener("keydown", function (ev) {
+			if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); if (!sendBtn.disabled) send(); }
+		});
+
+		function statusEl(m) {
+			var s = m.status, t = { queued: "queued", sent: "sent", delivered: "delivered", unconfirmed: "not confirmed", failed: "failed" }[s] || s;
+			var span = el("span", { class: "mc-st mc-" + s, text: t + (s === "delivered" && m.trip_ms ? " · " + m.trip_ms + " ms" : "") +
+				(m.attempt ? " · try " + (m.attempt + 1) : "") });
+			if ((s === "unconfirmed" || s === "failed") && m.conv.charAt(0) === "c")
+				span.appendChild(el("button", { type: "button", class: "linkbtn mc-retry", text: " retry", onclick: function () { resend(m); } }));
+			return span;
+		}
+		function msgEl(m) {
+			var meta = [];
+			if (!m.out) {
+				if (m.from && open && open.charAt(0) === "#") meta.push(m.from);
+				if (m.snr != null) meta.push("SNR " + m.snr + " dB");
+				if (m.hops != null) meta.push(m.hops + " hop" + (m.hops === 1 ? "" : "s"));
+			}
+			meta.push(mcTime(m.ts));
+			return el("div", { class: "mc-msg" + (m.out ? " out" : ""), "data-id": String(m.id) },
+				el("div", { class: "mc-text", text: m.text }),
+				el("div", { class: "mc-meta" }, meta.join(" · ") + " ", m.out ? statusEl(m) : null));
+		}
+		function placeMsg(m) {
+			var node = msgEl(m), old = shown[m.id];
+			if (old) { threadBody.replaceChild(node, old); }
+			else {
+				var near = threadBody.scrollHeight - threadBody.scrollTop - threadBody.clientHeight < 60;
+				threadBody.appendChild(node);
+				if (near || m.out) threadBody.scrollTop = threadBody.scrollHeight;
+			}
+			shown[m.id] = node;
+		}
+		function openConv(conv) {
+			open = conv;
+			shown = {};
+			showList();
+			clear(threadHead);
+			var c = contacts.filter(function (x) { return x.conv === conv; })[0];
+			threadHead.appendChild(el("button", { type: "button", class: "linkbtn mc-back", text: "← all", onclick: function () {
+				chat.classList.remove("mc-open");
+			} }));
+			threadHead.appendChild(el("strong", { text: convName(conv) }));
+			if (c) threadHead.appendChild(el("span", { class: "muted", text: " · " + (c.flood ? "no route yet: messages go out to the whole mesh" : c.hops + " hop" + (c.hops === 1 ? "" : "s")) }));
+			chat.classList.add("mc-open");
+			clear(threadBody).appendChild(el("div", { class: "muted", text: "Loading…" }));
+			call("pirate.meshcore", "messages", { conv: conv, limit: 100 }).then(function (r) {
+				if (!alive() || open !== conv) return;
+				clear(threadBody);
+				var list = r.messages || [];
+				if (!list.length) threadBody.appendChild(el("div", { class: "muted mc-none", text: "No messages yet." }));
+				list.forEach(placeMsg);
+				threadBody.scrollTop = threadBody.scrollHeight;
+				markRead();
+			}).catch(function (e) { if (!failed(e)) clear(threadBody).appendChild(warnEl(e)); });
+			updateCount();
+			input.focus();
+		}
+		// The open conversation is read: on the router too, when it had news
+		function markRead(force) {
+			if (!open) return;
+			var c = channels.concat(contacts).filter(function (x) { return x.conv === open; })[0];
+			if (force || (c && c.unread)) {
+				if (c) c.unread = 0;
+				showList();
+				call("pirate.meshcore", "read", { conv: open }).catch(function () {});
+			}
+		}
+		function send() {
+			var text = input.value.trim(), to = open;
+			if (!to || !text) return;
+			sendBtn.disabled = true;
+			line(sendStatus, "");
+			call("pirate.meshcore", "send", { to: to, text: text }).then(function (r) {
+				if (r.error) { line(sendStatus, r.error, "err"); updateCount(); return; }
+				input.value = "";
+				updateCount();
+				poll();
+			}).catch(function (e) { if (!failed(e)) line(sendStatus, String(e.message || e), "err"); updateCount(); });
+		}
+		function resend(m) {
+			call("pirate.meshcore", "resend", { id: m.id }).then(function (r) {
+				if (r.error) line(sendStatus, r.error, "err");
+				poll();
+			}).catch(function (e) { if (!failed(e)) line(sendStatus, String(e.message || e), "err"); });
+		}
+
+		/* Channels and contacts */
+		function showChannels() {
+			clear(chanWrap);
+			chanWrap.appendChild(tableEl(["Channel", "Slot", "Key", ""], channels.map(function (c) {
+				var key = el("code", { class: "mc-key", text: "••••••••" });
+				var showing = false;
+				return [el("strong", { text: c.name }), String(c.index),
+					el("span", {}, key, " ", el("button", { type: "button", class: "linkbtn", text: "show", onclick: function () {
+						showing = !showing;
+						key.textContent = showing ? c.secret : "••••••••";
+						this.textContent = showing ? "hide" : "show";
+					} })),
+					btn("Remove", { cls: "small reset", onclick: function () { removeChannel(c); } })];
+			})));
+		}
+		function addChannel() {
+			var n = chName.value.trim(), k = chKey.value.trim().toLowerCase();
+			if (!n) return line(chStatus, "give it a name", "err");
+			if (k && !/^[0-9a-f]{32}$/.test(k)) return line(chStatus, "a key is 32 hex digits", "err");
+			if (freeSlot == null) return line(chStatus, "the radio's channel slots are all taken: remove one first", "err");
+			line(chStatus, "adding…");
+			call("pirate.meshcore", "channel_set", { index: freeSlot, name: n, secret: k || undefined }).then(function (r) {
+				if (r.error) return line(chStatus, r.error, "err");
+				chName.value = chKey.value = "";
+				line(chStatus, "added: " + n, "ok-text");
+				setTimeout(refreshAll, 600);
+			}).catch(function (e) { if (!failed(e)) line(chStatus, String(e.message || e), "err"); });
+		}
+		function removeChannel(c) {
+			if (!window.confirm("Remove the channel " + c.name + "? Its messages here stay; the radio forgets its key.")) return;
+			call("pirate.meshcore", "channel_set", { index: c.index, name: "" }).then(function (r) {
+				if (r.error) return line(chStatus, r.error, "err");
+				if (open === c.conv) open = null;
+				setTimeout(refreshAll, 600);
+			}).catch(function (e) { if (!failed(e)) line(chStatus, String(e.message || e), "err"); });
+		}
+		function showContacts() {
+			clear(conWrap);
+			if (!contacts.length) { conWrap.appendChild(el("div", { class: "placeholder", text: "No contacts yet." })); return; }
+			conWrap.appendChild(tableEl(["Name", "Kind", "Route", "Last advert", ""], contacts.map(function (c) {
+				return [el("strong", { text: c.name }), c.type, c.flood ? "none yet" : c.hops + " hop" + (c.hops === 1 ? "" : "s"),
+					c.last_advert ? mcTime(c.last_advert) : "—",
+					el("span", { class: "fz-acts" },
+						c.flood ? null : btn("Forget route", { cls: "small", onclick: function () { contactOp("contact_reset_path", c); } }),
+						btn("Remove", { cls: "small reset", onclick: function () {
+							if (window.confirm("Remove " + c.name + " from the radio's contacts? An advert from them adds them back.")) contactOp("contact_remove", c);
+						} }))];
+			})));
+		}
+		function contactOp(method, c) {
+			call("pirate.meshcore", method, { key: c.key }).then(function (r) {
+				if (r.error) window.alert(r.error);
+				refreshAll();
+			}).catch(function (e) { if (!failed(e)) window.alert(String(e.message || e)); });
+		}
+
+		/* Keeping up: everything, then what changed every few seconds */
+		function refreshAll() {
+			return call("pirate.meshcore", "status").then(function (s) {
+				if (!alive()) return;
+				showDevice(s);
+				seq = Math.max(seq, s.seq || 0);
+				if (s.state !== "ready") return;
+				return refreshLists().then(function () {
+					// On a phone, the list first; beside it, the first channel
+					if (alive() && !open && channels.length && window.innerWidth > 860) openConv(channels[0].conv);
+				});
+			}).catch(function (e) {
+				if (failed(e)) return;
+				clear(devWrap).appendChild(alertEl("warn", String(e.message || e) === "ubus status 4"
+					? "The MeshCore service isn't running on this router (pirate-meshcore)." : String(e.message || e)));
+				chat.hidden = true; chanPanel.hidden = conPanel.hidden = true;
+			});
+		}
+		function poll() {
+			return call("pirate.meshcore", "poll", { since: seq }).then(function (p) {
+				if (!alive()) return;
+				var was = st && st.state;
+				seq = p.seq || seq;
+				if (p.meta || p.state !== was) return refreshAll().then(function () { catchUp(p); });
+				catchUp(p);
+			}).catch(function () {});
+		}
+		// New and changed messages: the open thread's shown, the others'
+		// counted afresh (the lists come again, with their unread)
+		function catchUp(p) {
+			var msgs = p.messages || [], elsewhere = false;
+			if (p.truncated && open) return openConv(open);
+			msgs.forEach(function (m) {
+				if (m.conv === open) placeMsg(m);
+				else if (!m.out) elsewhere = true;
+			});
+			if (msgs.some(function (m) { return m.conv === open && !m.out; })) markRead(true);
+			if (elsewhere) refreshLists();
+		}
+		function refreshLists() {
+			return Promise.all([call("pirate.meshcore", "contacts"), call("pirate.meshcore", "channels")]).then(function (r) {
+				if (!alive()) return;
+				contacts = r[0].contacts || [];
+				channels = r[1].channels || [];
+				freeSlot = r[1].free != null ? r[1].free : null;
+				showList(); showChannels(); showContacts();
+			}).catch(function () {});
+		}
+		function loop() {
+			if (!alive()) { timer = null; return; }
+			poll().then(function () { timer = setTimeout(loop, 3000); });
+		}
+		updateCount();
+		refreshAll().then(function () { timer = setTimeout(loop, 3000); });
 	}
 
 	/* ---------- Capture ---------- */
@@ -3125,7 +3625,7 @@
 	/* ---------- sections (the sidebar) / router ---------- */
 
 	var GROUPS = [
-		["Overview", [["dashboard", "Dashboard"]]],
+		["Overview", [["dashboard", "Dashboard"], ["messenger", "Messenger"]]],
 		["Radio", [["receivers", "Receivers"], ["sensors", "Sensors"]]],
 		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshakes"]]],
 		["Network", [["uplink", "Uplink"], ["clients", "Clients"], ["hosts", "Hosts"], ["capture", "Capture"]]],
@@ -3184,6 +3684,7 @@
 		renderTabs();
 		try { location.hash = id; } catch (e) {}
 		if (id === "dashboard") return loadDashboard();
+		if (id === "messenger") return renderMessenger();
 		if (id === "receivers") return renderReceivers();
 		if (id === "sensors") return renderSensors();
 		if (id === "hosts") return renderHosts();

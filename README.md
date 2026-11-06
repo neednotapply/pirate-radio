@@ -154,7 +154,7 @@ the left (on a phone, the menu button at the top opens them):
 
 | Group | Pages |
 |---|---|
-| Overview | Dashboard |
+| Overview | Dashboard, Messenger (a MeshCore radio's messages, below) |
 | Radio | Receivers (the SDR jobs and their addresses), Sensors (what rtl_433 has decoded) |
 | Wi-Fi | Survey, Threats, Handshakes |
 | Network | Uplink (the network it joins), Clients (its own network's, and ad blocking), Hosts, Capture |
@@ -344,6 +344,38 @@ Flipper locked with a PIN gives no answer until it is unlocked; one in DFU
 (recovery) mode is shown as such, for qFlipper to repair. Firmware updates
 aren't done here yet. `logread -e pirate-flipper` shows it connecting.
 
+**A MeshCore radio:** plug one into the USB port (a LilyGo T-Echo, or another
+nRF52 board on Adafruit's bootloader) running MeshCore's companion firmware
+*for USB* (for the T-Echo, "Companion (USB)" on
+[MeshCore's flasher](https://flasher.meshcore.co.uk); the Bluetooth build
+says nothing over USB, and the page says so) and the **Messenger** tab is its
+app, as MeshCore's is on a phone:
+
+- **Channels and contacts**, each with its unread messages; a thread with
+  each message's sender, SNR and hops, and for yours whether it was sent,
+  delivered (with the round trip) or not confirmed (*retry* sends it again,
+  as the same message).
+- **Channels**: add a #hashtag one (its key comes from its name), a private
+  one (a random key) or one whose key you were given; see a key to share it;
+  remove one.
+- **Contacts**, from adverts heard: forget a route, remove one. *Advert*
+  announces the radio to its neighbours or to the whole mesh; *Rename*
+  changes the name it announces.
+- **Its GPS**, on or off. With it on and a fix, its position tags the
+  **Wi-Fi survey**'s sightings when no USB GPS (gpsd) has one: no separate
+  GPS needed for wardriving. The radio's adverts carry its position only if
+  it is set to share its location (off by default; the page warns if it is
+  on).
+
+`pirate-meshcore` (its own package) speaks MeshCore's companion protocol over
+USB, after MeshCore's documentation and firmware (both MIT; the code here is
+Pirate Radio's own). Messages are kept on the router in
+`/etc/pirate-meshcore/messages`, through a flash that keeps settings, as the
+radio passes each on once. It waits while no radio is plugged in, and gpsd
+leaves its serial port alone. MeshCore reports no satellites or fix, so a
+position counts as a fix while it moves (a GPS's does, by a little, from one
+reading to the next). `logread -e pirate-meshcore` shows it connecting.
+
 **On the card** (`pirate-radio/<job>/<date>/`):
 
 | Files | Open with |
@@ -405,7 +437,14 @@ Tested in this repository's tests and builds:
   and RPC session on a pseudo-terminal: connecting, its details, folders over
   several messages, uploads in pieces and downloads in slices, renaming and
   deleting, the screen stream and its stop, buttons, the clock, restarting,
-  and gpsd keeping off its port),
+  and gpsd keeping off its port), a MeshCore radio (pirate-meshcore against
+  `tests/fakemeshcore`, a companion radio on a pseudo-terminal: a Bluetooth
+  build's silence, connecting, its details, contacts and channels, the
+  messages it kept and those that come, sending to contacts and channels,
+  delivery and its absence, a retry, hashtag, private and keyed channels,
+  adverts, its name, its GPS and the survey taking its position, contacts'
+  routes and removal, the messages kept through a restart, and gpsd keeping
+  off its port),
   against mock radios and tools on that same userland, and the rename from
   slate-sdr (settings, card mount, card folder) and pirateradio.local: 527
   checks.
@@ -454,10 +493,11 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore` |
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
+| `feed/utils/pirate-meshcore/` | the Messenger tab's daemon (`src/pirate-meshcore.c`: a MeshCore radio's companion protocol, on ubus as `pirate.meshcore`) and its init script |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
 | `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics and its ports (`pirate-router`), access (`pirate-access`: SSH, sign-ins, the terminal), firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |

@@ -40,6 +40,7 @@ jobs:
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-usb feed/utils/pirate-radio-ui/root/etc/init.d/pirate-usb feed/utils/pirate-radio-ui/root/etc/hotplug.d/block/05-pirate-usb feed/utils/pirate-radio-ui/root/etc/hotplug.d/block/20-pirate-usb-card feed/utils/pirate-radio-ui/root/etc/uci-defaults/96-pirate-usb feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.usb
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-dreampi feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.dreampi
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-flipper/files/pirate-flipper.init
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-meshcore/files/pirate-meshcore.init
           cd feed/net/dreampi/files
           shellcheck -s sh -e SC1091,SC3043,SC2034,SC2154 call.sh dcnow.sh nat.sh lib.sh dreampi.init dreampi.hotplug dreampi.defaults
           cd "$GITHUB_WORKSPACE"

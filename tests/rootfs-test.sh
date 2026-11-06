@@ -496,6 +496,17 @@ check "gps: 3D fix reports the position" sh -c "[ \"\$(jsonfilter -i $T/gps.out 
 printf '%s\n' '{"bssid":"de:ad:be:ef:00:01","ssid":"Mobile","freq":2412,"channel":1,"signal":-55,"security":"WPA2"}' |
 	PIRATE_SURVEY_STORE="$T/gpssurv" PIRATE_SURVEY_TIME=2026-10-24T13:00:00Z PIRATE_SURVEY_LAT=37.42 PIRATE_SURVEY_LON=-122.08 "$M" scan > "$T/gpsm.out"
 check "gps: a located sighting tags the network" sh -c "[ \"\$(jsonfilter -i $T/gpsm.out -e '@.gps.lat') \$(jsonfilter -i $T/gpsm.out -e '@.networks[0].lat')\" = '37.420 37.420' ]"
+# Or a MeshCore radio's GPS (pirate-meshcore's position), while gpsd has no fix
+echo '{ "state": "ready", "available": true, "enabled": true, "live": true, "lat": 37.421926, "lon": -122.084103, "source": "LilyGo T-Echo" }' > "$T/mcpos.json"
+echo '{ "state": "ready", "available": true, "enabled": true, "live": false }' > "$T/mcstale.json"
+check "gps: gpsd's fix first" sh -c "[ \"\$(PATH=$GM:\$PATH PIRATE_MESHCORE_POSITION=$T/mcpos.json pirate-survey gps | jsonfilter -e '@.fix' -e '@.source' | tr '\n' ' ')\" = '3D ' ]"
+printf '#!/bin/sh\nprintf "%%s\\n" %s %s %s\n' \
+	"'{\"class\":\"VERSION\"}'" "'{\"class\":\"DEVICES\",\"devices\":[]}'" "'{\"class\":\"WATCH\"}'" > "$GM/gpspipe"
+PATH="$GM:$PATH" PIRATE_MESHCORE_POSITION="$T/mcpos.json" pirate-survey gps > "$T/mcg.out"
+check "gps: gpsd without a fix: the MeshCore radio's" [ "$(jsonfilter -i "$T/mcg.out" -e '@.source' -e '@.fix' -e '@.device' | tr '\n' '|')" = "meshcore|2D|LilyGo T-Echo's GPS|" ]
+check "gps: its position" sh -c "jsonfilter -i $T/mcg.out -e '@.lat' -e '@.lon' | tr '\n' ' ' | grep -qx '37.421926 -122.084103 '"
+check "gps: no gpsd at all: the MeshCore radio's" [ "$(PIRATE_MESHCORE_POSITION="$T/mcpos.json" pirate-survey gps | jsonfilter -e '@.source')" = meshcore ]
+check "gps: a position not moving isn't a fix" [ "$(PIRATE_MESHCORE_POSITION="$T/mcstale.json" pirate-survey gps | jsonfilter -e '@.installed' -e '@.source' | tr '\n' ' ')" = "false " ]
 
 echo "# threat detection (rogue analysis + deauth parser)"
 TR="$T/threats"; mkdir -p "$TR"
@@ -1735,6 +1746,176 @@ if [ "$FAIL" != 0 ]; then
 	"$FZ_UBUS" -s "$FZ/ubus.sock" list 2>&1 | head -n 5 | sed 's/^/  ubus list: /'
 fi
 kill "$FZ_DAEMON" "$FZ_FAKE" "$FZ_UBUSD" 2> /dev/null
+
+echo "# MeshCore (pirate-meshcore; tests/fakemeshcore plays the radio)"
+MC="$T/meshcore"
+mkdir -p "$MC"
+check "meshcore: ACL is valid JSON" sh -c 'jsonfilter -i /usr/share/rpcd/acl.d/pirate-meshcore.json -e "@" > /dev/null'
+# An nRF52 radio on Adafruit's bootloader takes /dev/ttyACM0 too: gpsd keeps off it
+mkusb 1-5 239a 8029 "" "NRF52 DK"
+mkdir -p "$T/sys/bus/usb/devices/1-5/1-5:1.0"
+rm -f "$T/sys/class/tty/ttyACM0/device"
+ln -s "$T/sys/bus/usb/devices/1-5/1-5:1.0" "$T/sys/class/tty/ttyACM0/device"
+check "gps pnp: a MeshCore radio is not a GPS" [ "$(gsync)" = stop ]
+ubusd -s "$MC/ubus.sock" > "$MC/ubusd.log" 2>&1 &
+MC_UBUSD=$!
+mc() { "$FZ_UBUS" -s "$MC/ubus.sock" -t 30 call pirate.meshcore "$@" 2> /dev/null; }
+mcs() { mc status | jsonfilter -e "$1"; }
+mce() { mc "$@" | jsonfilter -e '@.error'; }
+mc_ok() { [ "$(mc "$@" | jsonfilter -e '@.ok')" = true ]; }
+# Wait (up to $3 s, default 30) for a jsonfilter expression on status to be $2
+mc_wait() {
+	i=0
+	while [ $i -lt "${3:-30}" ]; do
+		[ "$(mcs "$1")" = "$2" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+mc_tty() {
+	i=0
+	while [ ! -e "$MC/tty" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
+}
+# A message's field, by its text: "$(mc_msg <conv> <text> <field>)"
+mc_msg() { mc messages "{\"conv\":\"$1\"}" | jsonfilter -e "@.messages[@.text='$2'].$3"; }
+# First a Bluetooth build, which says nothing over USB
+rm -f "$MC/tty"
+fakemeshcore -s -l "$MC/tty" > "$MC/silent.log" 2>&1 &
+MC_FAKE=$!
+mc_tty
+pirate-meshcore -d "$MC/tty" -m "$MC/messages" -u "$MC/ubus.sock" -p 1000 -a 1500 > "$MC/daemon.log" 2>&1 &
+MC_DAEMON=$!
+check "meshcore: a Bluetooth build: no answer, and why" mc_wait '@.error' "no answer from the radio: it needs a MeshCore companion build for USB (the Bluetooth one says nothing over USB)"
+
+# Then a USB build
+kill "$MC_FAKE" 2> /dev/null
+rm -f "$MC/tty"
+fakemeshcore -l "$MC/tty" -c "$MC/ctl" > "$MC/fake.log" 2>&1 &
+MC_FAKE=$!
+mc_tty
+check "meshcore: connects" mc_wait '@.state' ready 40
+check "meshcore: its details asked for, its clock set" sh -c "grep -q '^query$' '$MC/fake.log' && grep -q '^start$' '$MC/fake.log' && grep -q '^time [0-9]' '$MC/fake.log'"
+mc status > "$MC/status.json"
+mj() { jsonfilter -i "$MC/status.json" -e "$1"; }
+check "meshcore: status: model, firmware, protocol" [ "$(mj '@.model') / $(mj '@.firmware') / $(mj '@.protocol') / $(mj '@.max_channels')" = "LilyGo T-Echo / v1.18.0 / 9 / 8" ]
+check "meshcore: status: its name and key" [ "$(mj '@.name') $(mj '@.key')" = "PirateTest eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ]
+check "meshcore: status: its radio" [ "$(mj '@.radio.freq_khz') $(mj '@.radio.bw_hz') $(mj '@.radio.sf') $(mj '@.radio.cr') $(mj '@.radio.tx_power')" = "910525 62500 7 5 22" ]
+check "meshcore: status: battery and storage" [ "$(mj '@.battery_mv') $(mj '@.storage_used_kb') $(mj '@.storage_total_kb')" = "4012 128 4096" ]
+check "meshcore: status: a GPS, off" [ "$(mj '@.gps.available') $(mj '@.gps.enabled') $(mj '@.gps.live')" = "true false false" ]
+check "meshcore: status: not sharing its location" [ "$(mj '@.share_location')" = false ]
+mc contacts > "$MC/contacts.json"
+cj() { jsonfilter -i "$MC/contacts.json" -e "$1"; }
+check "meshcore: contacts" [ "$(cj '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|" ]
+check "meshcore: contacts: types" [ "$(cj '@.contacts[*].type' | tr '\n' ' ')" = "chat chat repeater " ]
+check "meshcore: contacts: routes" [ "$(cj '@.contacts[0].hops') $(cj '@.contacts[1].flood')" = "1 true" ]
+check "meshcore: contacts: keys" [ "$(cj '@.contacts[0].key') $(cj '@.contacts[0].conv')" = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 ca1a1a1a1a1a1" ]
+check "meshcore: contacts: a position" sh -c "[ -n \"\$(jsonfilter -i $MC/contacts.json -e '@.contacts[0].lat')\" ] && [ -z \"\$(jsonfilter -i $MC/contacts.json -e '@.contacts[1].lat')\" ]"
+mc channels > "$MC/channels.json"
+hj() { jsonfilter -i "$MC/channels.json" -e "$1"; }
+check "meshcore: channels: Public and #test" [ "$(hj '@.channels[*].name' | tr '\n' '|')" = "Public|#test|" ]
+check "meshcore: channels: their keys" [ "$(hj '@.channels[0].secret') $(hj '@.channels[1].secret')" = "8b3387e9c5cdea6ac9e5edbaa115cd72 9cd8fcf22a47333b591d96a2b848b73f" ]
+check "meshcore: channels: the first free slot" [ "$(hj '@.free')" = 2 ]
+check "meshcore: messages it kept: fetched" [ "$(mc_msg ca1a1a1a1a1a1 'hello router' from)" = Alice ]
+check "meshcore: a contact's: SNR, hops" [ "$(mc_msg ca1a1a1a1a1a1 'hello router' snr | cut -c1-4) $(mc_msg ca1a1a1a1a1a1 'hello router' hops)" = "10.0 1" ]
+check "meshcore: a channel's: who sent it" [ "$(mc_msg '#0' 'hi all' from) $(mc_msg '#0' 'hi all' snr | cut -c1-4)" = "Bob -5.5" ]
+check "meshcore: unread: two" [ "$(mcs '@.unread')" = 2 ]
+check "meshcore: unread: on the contact" [ "$(mc contacts | jsonfilter -e '@.contacts[0].unread')" = 1 ]
+check "meshcore: read" mc_ok read '{"conv":"ca1a1a1a1a1a1"}'
+check "meshcore: read: one left" [ "$(mcs '@.unread') $(mc channels | jsonfilter -e '@.channels[0].unread')" = "1 1" ]
+mc_ok read '{"conv":"#0"}'
+check "meshcore: read: none" [ "$(mcs '@.unread')" = 0 ]
+S0=$(mcs '@.seq')
+# A message to Alice: sent, then delivered (she answers)
+check "meshcore: send to a contact" mc_ok send '{"to":"a1a1a1a1a1a1","text":"hi alice"}'
+check "meshcore: send: the radio told" grep -qx 'send a1a1a1a1a1a1 0 hi alice' "$MC/fake.log"
+sleep 2
+check "meshcore: send: delivered" [ "$(mc_msg ca1a1a1a1a1a1 'hi alice' status) $(mc_msg ca1a1a1a1a1a1 'hi alice' trip_ms)" = "delivered 850" ]
+check "meshcore: send: by its conv too" mc_ok send '{"to":"cb0b0b0b0b0b0","text":"hi bob"}'
+check "meshcore: send: flooded to Bob" [ "$(mc_msg cb0b0b0b0b0b0 'hi bob' flood)" = true ]
+check "meshcore: send: Bob doesn't answer: unconfirmed" sh -c "sleep 7; [ \"\$('$FZ_UBUS' -s '$MC/ubus.sock' call pirate.meshcore messages '{\"conv\":\"cb0b0b0b0b0b0\"}' | jsonfilter -e '@.messages[0].status')\" = unconfirmed ]"
+I=$(mc_msg cb0b0b0b0b0b0 'hi bob' id)
+check "meshcore: resend" mc_ok resend "{\"id\":$I}"
+check "meshcore: resend: the next attempt" grep -qx 'send b0b0b0b0b0b0 1 hi bob' "$MC/fake.log"
+check "meshcore: resend: on its way, not again" sh -c "[ \"\$('$FZ_UBUS' -s '$MC/ubus.sock' call pirate.meshcore resend '{\"id\":$I}' | jsonfilter -e '@.error')\" = 'it is on its way: wait for it' ]"
+check "meshcore: send to a channel" mc_ok send '{"to":"#0","text":"hello mesh"}'
+check "meshcore: send to a channel: the radio told" grep -qx 'chan 0 hello mesh' "$MC/fake.log"
+sleep 1
+check "meshcore: send to a channel: sent, from us" [ "$(mc_msg '#0' 'hello mesh' status) $(mc_msg '#0' 'hello mesh' from)" = "sent PirateTest" ]
+check "meshcore: send: no text" [ "$(mce send '{"to":"#0"}')" = "text: the message" ]
+check "meshcore: send: no such contact" [ "$(mce send '{"to":"ffffffffffff","text":"x"}')" = "to: no such contact" ]
+check "meshcore: send: no such channel" [ "$(mce send '{"to":"#5","text":"x"}')" = "to: no such channel" ]
+check "meshcore: send: too long" [ "$(mce send "{\"to\":\"#0\",\"text\":\"$(printf '%0200d' 0)\"}")" = "text: 150 bytes at most" ]
+check "meshcore: poll: what changed" [ "$(mc poll "{\"since\":$S0}" | jsonfilter -e '@.messages[*].text' | sort -u | tr '\n' '|')" = "hello mesh|hi alice|hi bob|" ]
+# Heard: a message (the radio tells there is one waiting), an advert
+S1=$(mcs '@.seq')
+echo "msg are you there" > "$MC/ctl"
+sleep 2
+check "meshcore: a message comes: fetched" sh -c "'$FZ_UBUS' -s '$MC/ubus.sock' call pirate.meshcore poll '{\"since\":$S1}' | jsonfilter -e '@.messages[*].text' | grep -qx 'are you there'"
+echo "chan anyone about" > "$MC/ctl"
+sleep 2
+check "meshcore: a channel's comes" [ "$(mc_msg '#0' 'anyone about' from)" = Bob ]
+echo "advert" > "$MC/ctl"
+sleep 1
+check "meshcore: an advert: a new contact" [ "$(mc contacts | jsonfilter -e '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|Carol|" ]
+# Channels: a hashtag one (its key from its name), a private one, one with a key, cleared
+check "meshcore: channel: a hashtag one" mc_ok channel_set '{"index":2,"name":"#pirates"}'
+check "meshcore: channel: its key, from its name" grep -qx 'channel 2 #pirates 6ea268a7936a8b03d5abda223c429af0' "$MC/fake.log"
+check "meshcore: channel: listed" [ "$(mc channels | jsonfilter -e '@.channels[@.index=2].secret')" = 6ea268a7936a8b03d5abda223c429af0 ]
+check "meshcore: channel: a private one" mc_ok channel_set '{"index":3,"name":"Crew"}'
+check "meshcore: channel: a random key" sh -c "grep '^channel 3 Crew ' '$MC/fake.log' | grep -qv ' 00000000000000000000000000000000\$'"
+check "meshcore: channel: one with a key given" mc_ok channel_set '{"index":4,"name":"Team","secret":"00112233445566778899aabbccddeeff"}'
+check "meshcore: channel: that key" grep -qx 'channel 4 Team 00112233445566778899aabbccddeeff' "$MC/fake.log"
+check "meshcore: channel: a bad key" [ "$(mce channel_set '{"index":4,"name":"Team","secret":"xyz"}')" = "secret: 32 hex digits (16 bytes)" ]
+check "meshcore: channel: cleared" mc_ok channel_set '{"index":3,"name":""}'
+check "meshcore: channel: cleared on the radio" grep -qx 'channel 3 - 00000000000000000000000000000000' "$MC/fake.log"
+sleep 1
+check "meshcore: channel: gone from the list" [ "$(mc channels | jsonfilter -e '@.channels[*].name' | tr '\n' '|')" = "Public|#test|#pirates|Team|" ]
+check "meshcore: channel: a slot past the radio's" [ "$(mce channel_set '{"index":9,"name":"x"}')" = "index: a channel slot, 0 up" ]
+# Its name, adverts
+check "meshcore: set its name" mc_ok set_name '{"name":"Pirate Two"}'
+check "meshcore: set its name: told" grep -qx 'name Pirate Two' "$MC/fake.log"
+check "meshcore: set its name: shown" [ "$(mcs '@.name')" = "Pirate Two" ]
+check "meshcore: advert, to its neighbours" mc_ok advert
+check "meshcore: advert, flooded" mc_ok advert '{"flood":true}'
+check "meshcore: adverts: told" [ "$(grep '^advert ' "$MC/fake.log" | tr '\n' ' ')" = "advert 0 advert 1 " ]
+# Its GPS: on, its position moves (a fix), then off
+check "meshcore: GPS on" mc_ok gps '{"enabled":true}'
+check "meshcore: GPS on: told" grep -qx 'var gps:1' "$MC/fake.log"
+check "meshcore: GPS on: a fix, as its position moves" mc_wait '@.gps.live' true 15
+mc position > "$MC/pos.json"
+check "meshcore: position, for the survey" sh -c "[ \"\$(jsonfilter -i $MC/pos.json -e '@.live') \$(jsonfilter -i $MC/pos.json -e '@.source')\" = 'true LilyGo T-Echo' ] && jsonfilter -i $MC/pos.json -e '@.lat' | grep -q '^37\\.42192'"
+check "meshcore: the survey takes it, with no gpsd" [ "$(PIRATE_MESHCORE_POSITION="$MC/pos.json" pirate-survey gps | jsonfilter -e '@.source')" = meshcore ]
+check "meshcore: GPS off" mc_ok gps '{"enabled":false}'
+check "meshcore: GPS off: no fix" [ "$(mc position | jsonfilter -e '@.enabled' -e '@.live' | tr '\n' ' ')" = "false false " ]
+check "meshcore: GPS: true or false" [ "$(mce gps '{}')" = "enabled: true or false" ]
+# Contacts: a route forgotten, one removed
+check "meshcore: forget a route" mc_ok contact_reset_path '{"key":"b0b0b0b0b0b0"}'
+check "meshcore: forget a route: told" grep -qx 'reset b0b0b0b0b0b0' "$MC/fake.log"
+check "meshcore: remove a contact" mc_ok contact_remove '{"key":"c2c2c2c2c2c2"}'
+check "meshcore: remove a contact: told, gone" sh -c "grep -qx 'remove c2c2c2c2c2c2' '$MC/fake.log' && [ \"\$('$FZ_UBUS' -s '$MC/ubus.sock' call pirate.meshcore contacts | jsonfilter -e '@.contacts[*].name' | tr '\n' '|')\" = 'Alice|Bob|Carol|' ]"
+check "meshcore: remove: no such contact" [ "$(mce contact_remove '{"key":"999999999999"}')" = "no such contact" ]
+check "meshcore: refresh" mc_ok refresh
+# Kept: the messages and what became of them, after a restart
+N=$(mc messages '{"conv":"ca1a1a1a1a1a1"}' | jsonfilter -e '@.messages[*].id' | wc -l)
+kill "$MC_DAEMON"
+sleep 1
+pirate-meshcore -d "$MC/tty" -m "$MC/messages" -u "$MC/ubus.sock" -p 1000 -a 1500 > "$MC/daemon2.log" 2>&1 &
+MC_DAEMON=$!
+check "meshcore: restarted, connects again" mc_wait '@.state' ready 40
+check "meshcore: kept: the messages" [ "$(mc messages '{"conv":"ca1a1a1a1a1a1"}' | jsonfilter -e '@.messages[*].id' | wc -l)" = "$N" ]
+check "meshcore: kept: delivered stays delivered" [ "$(mc_msg ca1a1a1a1a1a1 'hi alice' status)" = delivered ]
+check "meshcore: kept: what was read" [ "$(mc channels | jsonfilter -e '@.channels[0].unread')" = 1 ]
+# Unplugged
+kill "$MC_FAKE"
+check "meshcore: unplugged: absent" mc_wait '@.state' absent
+check "meshcore: unplugged: nothing to send with" [ "$(mce send '{"to":"#0","text":"x"}')" = "no MeshCore radio is plugged in" ]
+check "meshcore: the daemon is still running" kill -0 "$MC_DAEMON"
+if [ "$FAIL" != 0 ]; then
+	tail -n 30 "$MC/daemon.log" "$MC/daemon2.log" 2> /dev/null | sed 's/^/  pirate-meshcore: /'
+	tail -n 40 "$MC/fake.log" | sed 's/^/  fakemeshcore: /'
+fi
+kill "$MC_DAEMON" "$MC_UBUSD" 2> /dev/null
 
 echo
 echo "$PASS passed, $FAIL failed"

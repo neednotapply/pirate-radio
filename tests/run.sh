@@ -21,7 +21,8 @@ trap 'rm -rf "$ov"' EXIT
 # Unpacked as root, then handed back to the caller so the steps below (and
 # the cleanup) can write to it. tests/fakemodem (a modem with a Dreamcast on
 # the line, for the dreampi tests) and tests/fakeflipper (a Flipper Zero, for
-# pirate-flipper's) are built with the SDK's compiler.
+# pirate-flipper's) and tests/fakemeshcore (a MeshCore radio, for
+# pirate-meshcore's) are built with the SDK's compiler.
 docker run --rm --user 0 -e OWNER="$(id -u):$(id -g)" \
 	-v "$pkgs:/pkgs:ro" -v "$ov:/ov" -v "$here/tests:/tests:ro" "$SDK_IMAGE" sh -c '
 	set -e
@@ -34,6 +35,7 @@ docker run --rm --user 0 -e OWNER="$(id -u):$(id -g)" \
 	mkdir -p /ov/usr/bin
 	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakemodem /tests/fakemodem.c
 	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakeflipper /tests/fakeflipper.c
+	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakemeshcore /tests/fakemeshcore.c
 	chown -R "$OWNER" /ov'
 
 f="$here/feed/utils/pirate-radio/files"
@@ -86,6 +88,8 @@ cp "$u/etc/uci-defaults/96-pirate-terminal" "$ov/etc/uci-defaults/"
 chmod 755 "$ov/usr/sbin/pirate-access" "$ov/usr/libexec/rpcd/pirate.access"
 # The Flipper page's ACL (the pirate-flipper package itself comes built, above)
 cp "$u/usr/share/rpcd/acl.d/pirate-flipper.json" "$ov/usr/share/rpcd/acl.d/"
+# The Messenger page's ACL (the pirate-meshcore package comes built, above)
+cp "$u/usr/share/rpcd/acl.d/pirate-meshcore.json" "$ov/usr/share/rpcd/acl.d/"
 chmod 755 "$ov/usr/sbin/pirate-dreampi" "$ov/usr/libexec/rpcd/pirate.dreampi"
 # USB drives plug and play (pirate-usb), its block hotplug hook and rpcd plugin
 mkdir -p "$ov/etc/hotplug.d/block"

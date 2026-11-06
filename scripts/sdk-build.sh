@@ -35,10 +35,11 @@ cat > .config <<-CONFIG
 	CONFIG_PACKAGE_pirate-radio-ui=m
 	CONFIG_PACKAGE_dreampi=m
 	CONFIG_PACKAGE_pirate-flipper=m
+	CONFIG_PACKAGE_pirate-meshcore=m
 CONFIG
 quiet make defconfig
 
-for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote dreampi pirate-flipper; do
+for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote dreampi pirate-flipper pirate-meshcore; do
 	echo "-- $p"
 	make -j"$(nproc)" "package/$p/compile"
 done
