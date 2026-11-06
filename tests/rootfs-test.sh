@@ -1817,8 +1817,8 @@ check "meshcore: channels: Public and #test" [ "$(hj '@.channels[*].name' | tr '
 check "meshcore: channels: their keys" [ "$(hj '@.channels[0].secret') $(hj '@.channels[1].secret')" = "8b3387e9c5cdea6ac9e5edbaa115cd72 9cd8fcf22a47333b591d96a2b848b73f" ]
 check "meshcore: channels: the first free slot" [ "$(hj '@.free')" = 2 ]
 check "meshcore: messages it kept: fetched" [ "$(mc_msg ca1a1a1a1a1a1 'hello router' from)" = Alice ]
-check "meshcore: a contact's: SNR, hops" [ "$(mc_msg ca1a1a1a1a1a1 'hello router' snr | cut -c1-4) $(mc_msg ca1a1a1a1a1a1 'hello router' hops)" = "10.0 1" ]
-check "meshcore: a channel's: who sent it" [ "$(mc_msg '#0' 'hi all' from) $(mc_msg '#0' 'hi all' snr | cut -c1-4)" = "Bob -5.5" ]
+check "meshcore: a contact's: SNR, hops" [ "$(mc_msg ca1a1a1a1a1a1 'hello router' snr | awk '{ print $1 + 0 }') $(mc_msg ca1a1a1a1a1a1 'hello router' hops)" = "10 1" ]
+check "meshcore: a channel's: who sent it" [ "$(mc_msg '#0' 'hi all' from) $(mc_msg '#0' 'hi all' snr | awk '{ print $1 + 0 }')" = "Bob -5.5" ]
 check "meshcore: unread: two" [ "$(mcs '@.unread')" = 2 ]
 check "meshcore: unread: on the contact" [ "$(mc contacts | jsonfilter -e '@.contacts[0].unread')" = 1 ]
 check "meshcore: read" mc_ok read '{"conv":"ca1a1a1a1a1a1"}'

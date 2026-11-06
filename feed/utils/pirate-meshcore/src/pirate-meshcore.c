@@ -1441,6 +1441,8 @@ static void close_cb(struct uloop_timeout *t)
 	(void)t;
 	if (fd >= 0) {
 		uloop_fd_delete(&ufd);
+		/* Exclusive no more: the tty may outlive this (another holds it) */
+		ioctl(fd, TIOCNXCL);
 		close(fd);
 		fd = -1;
 	}
@@ -2481,8 +2483,10 @@ int main(int argc, char **argv)
 	ubus_auto_connect(&conn);
 	uloop_timeout_set(&scan_t, 0);
 	uloop_run();
-	if (fd >= 0)
+	if (fd >= 0) {
+		ioctl(fd, TIOCNXCL);
 		close(fd);
+	}
 	uloop_done();
 	return 0;
 }
