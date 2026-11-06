@@ -591,6 +591,225 @@ check "router: wifi_join rejects a missing SSID" sh -c 'pirate-router wifi_join 
 check "router: wifi_join needs a password for a secured network" sh -c 'echo "" | pirate-router wifi_join MyNet psk2 | jsonfilter -e "@.error" | grep -q "needs a password"'
 check "router: set_password rejects an empty password" sh -c 'echo "" | pirate-router set_password | jsonfilter -e "@.error" | grep -q "empty"'
 check "router: set_password rejects a short password" sh -c 'printf abc | pirate-router set_password | jsonfilter -e "@.error" | grep -q "at least 5"'
+# Its ports and radios, a GL-AR750S's: swconfig, iw and sysfs faked
+HM="$T/hwmock"; HS="$T/hwsys"
+mkdir -p "$HM" "$HS/class/ieee80211/phy0" "$HS/class/ieee80211/phy1" "$HS/drivers/ath10k_pci" "$HS/drivers/ath9k" \
+	"$HS/devices/pci0000:00/0000:00:00.0" "$HS/devices/platform/ahb/18100000.wmac" \
+	"$HS/devices/usb2/2-1/2-1.1/host1" "$HS/bus/usb/devices/1-1" "$HS/bus/usb/devices/1-1:1.0" "$HS/block/sdb"
+ln -s "$HS/drivers/ath10k_pci" "$HS/devices/pci0000:00/0000:00:00.0/driver"
+ln -s "$HS/drivers/ath9k" "$HS/devices/platform/ahb/18100000.wmac/driver"
+ln -s "$HS/devices/pci0000:00/0000:00:00.0" "$HS/class/ieee80211/phy0/device"
+ln -s "$HS/devices/platform/ahb/18100000.wmac" "$HS/class/ieee80211/phy1/device"
+ln -s "$HS/devices/usb2/2-1/2-1.1/host1" "$HS/block/sdb/device"
+echo 62333952 > "$HS/block/sdb/size"
+printf '0483\n' > "$HS/bus/usb/devices/1-1/idVendor"
+printf '5740\n' > "$HS/bus/usb/devices/1-1/idProduct"
+printf 'Flipper Devices Inc.\n' > "$HS/bus/usb/devices/1-1/manufacturer"
+printf 'Rolet\n' > "$HS/bus/usb/devices/1-1/product"
+printf '02\n' > "$HS/bus/usb/devices/1-1/bDeviceClass"
+cat > "$HM/swconfig" <<-'EOF'
+	#!/bin/sh
+	printf '\tlink: port:0 link:up speed:1000baseT full-duplex\n\tlink: port:1 link:down\n'
+	printf '\tlink: port:2 link:up speed:1000baseT full-duplex txflow rxflow auto\n\tlink: port:3 link:up speed:100baseT half-duplex\n'
+EOF
+cat > "$HM/iw" <<-'EOF'
+	#!/bin/sh
+	[ "$1" = dev ] || exit 0
+	printf 'phy#1\n\tInterface mon0\n\t\ttype monitor\n\t\tchannel 10 (2457 MHz), width: 20 MHz\n'
+	printf 'phy#0\n\tInterface phy0-sta0\n\t\tssid NoInternetHere-5\n\t\ttype managed\n\t\tchannel 36 (5180 MHz)\n'
+	printf '\tInterface phy0-ap0\n\t\tssid Pirate Radio\n\t\ttype AP\n\t\tchannel 36 (5180 MHz)\n\tInterface phy0-ap1\n\t\ttype AP\n'
+EOF
+chmod 755 "$HM/swconfig" "$HM/iw"
+PATH="$HM:$PATH" PIRATE_SWCONFIG="$HM/swconfig" PIRATE_SYSFS="$HS" pirate-router ports > "$T/ports.json"
+pj() { jsonfilter -i "$T/ports.json" -e "$1"; }
+check "router: ports: the WAN jack, unplugged" [ "$(pj '@.ethernet[0].name') $(pj '@.ethernet[0].iface') $(pj '@.ethernet[0].link')" = "WAN eth0.2 false" ]
+check "router: ports: LAN 1, 1000 Mb/s full duplex" [ "$(pj '@.ethernet[1].name') $(pj '@.ethernet[1].iface') $(pj '@.ethernet[1].link') $(pj '@.ethernet[1].speed') $(pj '@.ethernet[1].full_duplex')" = "LAN 1 eth0.1 true 1000 true" ]
+check "router: ports: LAN 2, 100 half" [ "$(pj '@.ethernet[2].name') $(pj '@.ethernet[2].speed') $(pj '@.ethernet[2].full_duplex')" = "LAN 2 100 false" ]
+check "router: ports: the 5 GHz radio, a QCA9887" [ "$(pj '@.radios[0].phy') $(pj '@.radios[0].band') $(pj '@.radios[0].chip') $(pj '@.radios[0].driver') $(pj '@.radios[0].usb')" = "phy0 5 GHz QCA9887 ath10k_pci false" ]
+check "router: ports: its uplink and access points" [ "$(pj '@.radios[0].interfaces[*].name' | tr '\n' ' ')" = "phy0-sta0 phy0-ap0 phy0-ap1 " ]
+check "router: ports: their types, channels and networks" [ "$(pj '@.radios[0].interfaces[0].type') $(pj '@.radios[0].interfaces[0].channel') $(pj '@.radios[0].interfaces[1].ssid')" = "managed 36 Pirate Radio" ]
+check "router: ports: an interface with no channel" [ "$(pj '@.radios[0].interfaces[2].type'):$(pj '@.radios[0].interfaces[2].channel')" = "AP:" ]
+check "router: ports: the monitor, on the 2.4 GHz radio (QCA9563)" [ "$(pj '@.radios[1].band') $(pj '@.radios[1].chip') $(pj '@.radios[1].interfaces[0].name') $(pj '@.radios[1].interfaces[0].type') $(pj '@.radios[1].interfaces[0].channel')" = "2.4 GHz QCA9563 mon0 monitor 10" ]
+check "router: ports: what is on the USB port" [ "$(pj '@.usb[*].id') / $(pj '@.usb[0].name')" = "0483:5740 / Flipper Devices Inc. Rolet" ]
+check "router: ports: a card in the microSD slot" [ "$(pj '@.card.present') $(pj '@.card.device')" = "true sdb" ]
+echo 0 > "$HS/block/sdb/size"
+check "router: ports: an empty slot" [ "$(PATH="$HM:$PATH" PIRATE_SWCONFIG="$HM/swconfig" PIRATE_SYSFS="$HS" pirate-router ports | jsonfilter -e '@.card.present')" = false ]
+check "router: rpcd offers ports" sh -c '"'"$RR"'" list | jsonfilter -e "@.ports" >/dev/null'
+# The root password: changed only with the current one proved (a sign-in's
+# session, fresh), unless there is none yet. ubus and passwd mocked.
+PM="$T/pwmock"; mkdir -p "$PM"
+cat > "$PM/ubus" <<-'EOF'
+	#!/bin/sh
+	# ubus call session list|destroy '{ "ubus_rpc_session": "<sid>" }'
+	sid=$(echo "$4" | sed -n 's/.*"\([0-9a-f]\{32\}\)".*/\1/p')
+	echo "$3 $sid" >> "$PW_T/ubus.log"
+	[ "$3" = destroy ] && exit 0
+	case "$sid" in
+	aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa) echo '{ "timeout": 60, "expires": 52, "data": { "username": "root" } }' ;;
+	bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb) echo '{ "timeout": 3600, "expires": 2000, "data": { "username": "root" } }' ;;
+	cccccccccccccccccccccccccccccccc) echo '{ "timeout": 60, "expires": 60, "data": { } }' ;;
+	*) exit 4 ;;
+	esac
+EOF
+cat > "$PM/passwd" <<-'EOF'
+	#!/bin/sh
+	echo "passwd $*: $(head -n 1)" >> "$PW_T/passwd.log"
+EOF
+cat > "$PM/router" <<-'EOF'
+	#!/bin/sh
+	cat > "$PW_T/router.in"
+	echo '{ "ok": true }'
+EOF
+chmod 755 "$PM/ubus" "$PM/passwd" "$PM/router"
+echo 'root:$5$salt$hash:20000:0:99999:7:::' > "$PM/shadow"
+: > "$PM/passwd.log"; : > "$PM/ubus.log"
+export PW_T="$PM"
+PA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+PD=dddddddddddddddddddddddddddddddd
+spw() { printf '%s\n%s\n%s\n' "$1" "$2" "$3" | PATH="$PM:$PATH" PIRATE_UBUS="$PM/ubus" PIRATE_SHADOW="$PM/shadow" pirate-router set_password | jsonfilter -e '@.error' -e '@.ok'; }
+PWE="enter the current password to change it"
+check "router: set_password: the current password needed" [ "$(spw newpass1 '' "$PD")" = "$PWE" ]
+check "router: set_password: not a session" [ "$(spw newpass1 0123abc "$PD")" = "$PWE" ]
+check "router: set_password: a session no one has" [ "$(spw newpass1 eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee "$PD")" = "$PWE" ]
+check "router: set_password: an old sign-in isn't proof" [ "$(spw newpass1 bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb "$PD")" = "$PWE" ]
+check "router: set_password: nor a session no one signed in to" [ "$(spw newpass1 cccccccccccccccccccccccccccccccc "$PD")" = "$PWE" ]
+check "router: set_password: nor the caller's own" [ "$(spw newpass1 "$PA" "$PA")" = "$PWE" ]
+check "router: set_password: nothing set without proof" [ ! -s "$PM/passwd.log" ]
+check "router: set_password: a fresh sign-in is proof" [ "$(spw newpass1 "$PA" "$PD")" = true ]
+check "router: set_password: the new password set" grep -qx 'passwd root: newpass1' "$PM/passwd.log"
+check "router: set_password: the proof spent" grep -qx "destroy $PA" "$PM/ubus.log"
+echo 'root:::0:0:99999:7:::' > "$PM/shadow"; : > "$PM/passwd.log"
+check "router: set_password: the first one needs no proof" [ "$(spw firstpass '' "$PD")" = true ]
+check "router: set_password: and is set" grep -qx 'passwd root: firstpass' "$PM/passwd.log"
+echo "{\"password\":\"newpass1\",\"proof\":\"$PA\",\"ubus_rpc_session\":\"$PD\"}" | PIRATE_ROUTER="$PM/router" "$RR" call set_password > /dev/null
+check "router: rpcd: the password, proof and caller's session on stdin" [ "$(tr '\n' ' ' < "$PM/router.in")" = "newpass1 $PA $PD " ]
+
+echo "# pirate-radio-ui: access (pirate-access: SSH, sign-ins, the terminal)"
+RA=/usr/libexec/rpcd/pirate.access
+AC="$T/access"; AB="$AC/bin"; AP="$AC/proc"
+mkdir -p "$AB" "$AP" "$AC/hostkeys"
+export ACC_T="$AC"
+check "access: ACL is valid JSON" jsonfilter -i /usr/share/rpcd/acl.d/pirate-access.json -e '@' -q
+check "access: rpcd plugin offers SSH, sessions and the terminal" sh -c '"'"$RA"'" list | jsonfilter -e "@.ssh_set.port" | grep -qx 22 && "'"$RA"'" list | jsonfilter -e "@.ssh_key_add.key" | grep -qx str && "'"$RA"'" list | jsonfilter -e "@.session_end.pid" | grep -qx 0 && "'"$RA"'" list | jsonfilter -e "@.term_set.enabled" | grep -qx true'
+# Two sessions to end (real processes, faked in /proc as dropbear's and
+# ttyd's), and one that is neither
+sleep 300 & S1=$!
+sleep 300 & S2=$!
+sleep 300 & S3=$!
+mkst() { mkdir -p "$AP/$1"; printf 'Name:\t%s\nPPid:\t%s\n' "$2" "$3" > "$AP/$1/status"; echo "$1 ($2) S $3 $1 $1 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 $4 1376256 0" > "$AP/$1/stat"; }
+echo '1000.00 900.00' > "$AP/uptime"
+mkst 6042 dropbear 1937 50000
+mkst "$S1" dropbear 1937 60000
+mkst "$S2" ash 4242 90000
+mkst "$S3" sh 1 90000
+cat > "$AB/pidof" <<-'EOF'
+	#!/bin/sh
+	case "$1" in ttyd) echo 4242 ;; dropbear) echo 1937 ;; *) exit 1 ;; esac
+EOF
+FP1=SHA256:y0Er8ulxKFhLeqneIJqQBkQkSCl3Vv1GF3dmxrjXSMU
+FP2=SHA256:sNIAzx6YYwB8XVn4c9avCjnUWWgXtXTT3ki7q9gzo/s
+K1='ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP2XEHhUfV+Qf66vWJqdL1rd8ynDPC02Bv7PwREszCg2 test@pc'
+K2='ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCsQfpo/GPfYcfLoYTjZ+pYziNo5416yHhiJAIx2T8nVzyHBtnJuHBkhyyNP4CnhjW7Q8bqwgmGT1T5sQs+YFm9r1Qall+AShLUGzquFpwiA6BFhVbGzMNAS4crwioqd1qwp5uZWXoEL6/H1djCMf4A1yih1ayC7kQ2LNi671ClNxpXTB3ATPz0xCM5gh00FxjFrbIu2gXXOAvPNGW1Bz8UD2EfW9/lis4CG520CCrg2PzwG1Z7Sm0PkXNmGioTjNlo1qrRha1qX08bNncZqeknqG41ZF+Adr3Ss3qmoGVBqLzu2C/xSXY2zt38vvfzQs7YRkfPhQ5/qyZuFkcTQLzQ6tVChanM1nBI6XMvQgqqTkbAR2kGBimEj08rQlqkocUW58/4rSHswPwzRmVwcMMJPgXHdq8HFqiNf0bZlbiin1nCkgYKYbufVxtnyXVHOuLhQW1WcZ3kZgPHYOxZauVU9fxLm3yPI6NCl0qcJUVLKUf0HH5YidUDBcVyKgRY3Ik= laptop key'
+cat > "$AC/log" <<-EOF
+	Thu Nov  5 16:49:22 2026 [1793926162.203] authpriv.info dropbear[6042]: Child connection from 10.69.4.181:57699
+	Thu Nov  5 16:49:22 2026 [1793926162.467] authpriv.notice dropbear[6042]: Pubkey auth succeeded for 'root' with ssh-ed25519 key $FP1 from 10.69.4.181:57699
+	Thu Nov  5 16:50:01 2026 [1793926201.000] authpriv.warn dropbear[6050]: Bad password attempt for 'root' from 10.69.4.99:40000
+	Thu Nov  5 16:50:05 2026 [1793926205.000] authpriv.notice dropbear[6051]: Password auth succeeded for 'root' from 10.69.4.99:40002
+	Thu Nov  5 16:50:30 2026 [1793926230.000] authpriv.info dropbear[6051]: Exit (root) from <10.69.4.99:40002>: Disconnect received
+	Thu Nov  5 16:51:00 2026 [1793926260.000] daemon.notice ttyd[4242]: [2026/11/05 16:51:00:0000] N: WS   /ws - 10.69.4.181, clients: 1
+	Thu Nov  5 16:51:00 2026 [1793926260.100] daemon.notice ttyd[4242]: [2026/11/05 16:51:00:1000] N: started process, pid: $S2
+	Thu Nov  5 16:52:00 2026 [1793926320.000] auth.info login[$S2]: root login on 'pts/0'
+	Thu Nov  5 16:53:00 2026 [1793926380.000] auth.warn login[7002]: invalid password for 'root' on 'pts/1'
+EOF
+cat > "$AB/logread" <<-'EOF'
+	#!/bin/sh
+	cat "$ACC_T/log"
+EOF
+cat > "$AB/netstat" <<-'EOF'
+	#!/bin/sh
+	echo 'Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name'
+	echo 'tcp        0      0 10.69.4.20:22           10.69.4.181:57699       ESTABLISHED 6042/dropbear'
+	echo 'tcp        0      0 10.69.4.20:80           10.69.4.181:57700       ESTABLISHED 1500/uhttpd'
+	echo 'tcp        0      0 10.69.4.20:7681         10.69.4.181:57800       ESTABLISHED 4242/ttyd'
+	echo 'tcp        0      0 10.69.4.20:22           10.69.4.99:40010        TIME_WAIT   -'
+EOF
+cat > "$AB/init" <<-'EOF'
+	#!/bin/sh
+	echo "$(basename "$0") $1" >> "$ACC_T/init.log"
+	[ "$1" = enabled ] && [ -e "$ACC_T/enabled" ] && exit 0
+	[ "$1" = enabled ] && exit 1
+	[ "$1" = enable ] && : > "$ACC_T/enabled"
+	[ "$1" = disable ] && rm -f "$ACC_T/enabled"
+	exit 0
+EOF
+printf '#!/bin/sh\nexit 0\n' > "$AB/ttyd"
+cp "$AB/init" "$AB/dropbear-init"
+chmod 755 "$AB/pidof" "$AB/logread" "$AB/netstat" "$AB/init" "$AB/dropbear-init" "$AB/ttyd"
+: > "$AC/init.log"
+pa() { PATH="$AB:$PATH" PIRATE_KEYS="$AC/keys" PIRATE_HOSTKEYS="$AC/hostkeys" PIRATE_PROC="$AP" \
+	PIRATE_LOGREAD="$AB/logread" PIRATE_NETSTAT="$AB/netstat" PIRATE_DROPBEAR_INIT="$AB/dropbear-init" \
+	PIRATE_TTYD_INIT="$AB/init" PIRATE_TTYD="$AB/ttyd" pirate-access "$@"; }
+pae() { pa "$@" | jsonfilter -e '@.error'; }
+uci -q set 'dropbear.@dropbear[0].Port=22'; uci -q set 'dropbear.@dropbear[0].PasswordAuth=on'
+uci -q set 'dropbear.@dropbear[0].RootPasswordAuth=on'; uci -q commit dropbear
+check "access: no keys yet" [ "$(pa ssh_status | jsonfilter -e '@.keys[*].type' | wc -l)" = 0 ]
+check "access: add a key" [ "$(echo "$K1" | pa ssh_key_add | jsonfilter -e '@.fingerprint')" = "$FP1" ]
+check "access: and an RSA one (fingerprints as ssh-keygen's)" [ "$(echo "$K2" | pa ssh_key_add | jsonfilter -e '@.fingerprint')" = "$FP2" ]
+check "access: a key once only" [ "$(echo "$K1" | pae ssh_key_add)" = "that key is here already" ]
+check "access: not a key" [ "$(echo 'hello there' | pae ssh_key_add)" = "key: paste a public key's line, such as ssh-ed25519 AAAA… you@computer" ]
+check "access: not a whole key" [ "$(echo 'ssh-ed25519 AAAAC3NzaC1lZDI1 x' | pae ssh_key_add)" = "key: that isn't a whole public key" ]
+check "access: no options before a key" [ "$(echo "command=\"ls\" $K1" | pae ssh_key_add)" = "key: paste a public key's line, such as ssh-ed25519 AAAA… you@computer" ]
+check "access: the keys file, as dropbear reads it" [ "$(cat "$AC/keys")" = "$(printf '%s\n%s' "$K1" "$K2")" ]
+pa ssh_status > "$AC/status.json"
+aj() { jsonfilter -i "$AC/status.json" -e "$1"; }
+check "access: status: port, passwords, running" [ "$(aj '@.port') $(aj '@.passwords') $(aj '@.running')" = "22 true true" ]
+check "access: status: the keys, their names and fingerprints" [ "$(aj '@.keys[*].comment' | tr '\n' '|')$(aj '@.keys[*].fingerprint' | tr '\n' '|')" = "test@pc|laptop key|$FP1|$FP2|" ]
+check "access: status: an SSH session, its key and age" [ "$(aj '@.sessions[0].kind') $(aj '@.sessions[0].pid') $(aj '@.sessions[0].from') $(aj '@.sessions[0].how') $(aj '@.sessions[0].key') $(aj '@.sessions[0].age')" = "ssh 6042 10.69.4.181 key $FP1 500" ]
+check "access: status: a terminal, from its address in ttyd's log" [ "$(aj '@.sessions[1].kind') $(aj '@.sessions[1].pid') $(aj '@.sessions[1].from') $(aj '@.sessions[1].how') $(aj '@.sessions[1].age')" = "terminal $S2 10.69.4.181 password 100" ]
+check "access: status: those two only" [ "$(aj '@.sessions[*].pid' | wc -l)" = 2 ]
+check "access: status: sign-ins, newest first" [ "$(aj '@.recent[*].event' | tr '\n' ' ')" = "refused in out in refused in " ]
+check "access: status: the terminal's" [ "$(aj '@.recent[0].how') $(aj '@.recent[1].how')" = "terminal terminal" ]
+check "access: status: SSH's, by key and by password" [ "$(aj '@.recent[5].how') $(aj '@.recent[5].key') $(aj '@.recent[5].from') $(aj '@.recent[3].how') $(aj '@.recent[3].from') $(aj '@.recent[4].how') $(aj '@.recent[2].from')" = "key $FP1 10.69.4.181 password 10.69.4.99 password 10.69.4.99" ]
+check "access: status: when" [ "$(aj '@.recent[0].time') $(aj '@.recent[5].time')" = "1793926380 1793926162" ]
+dropbearkey -t ed25519 -f "$AC/hostkeys/dropbear_ed25519_host_key" > /dev/null 2>&1
+check "access: status: the router's own key, as dropbearkey has it" [ "$(pa ssh_status | jsonfilter -e '@.host_keys[0].fingerprint')" = "$(dropbearkey -y -f "$AC/hostkeys/dropbear_ed25519_host_key" | sed -n 's/^Fingerprint: //p')" ]
+check "access: ssh_set: a port is a number" [ "$(pae ssh_set abc on)" = "port: a number, 1 to 65535" ]
+check "access: ssh_set: 1 to 65535" [ "$(pae ssh_set 70000 on)" = "port: a number, 1 to 65535" ]
+check "access: ssh_set: not another service's port" [ "$(pae ssh_set 80 on)" = "port: 80 is another service's here" ]
+check "access: ssh_set: passwords on or off" [ "$(pae ssh_set 22 maybe)" = "passwords: on or off" ]
+check "access: ssh_set: passwords off" [ "$(pa ssh_set 2222 off | jsonfilter -e '@.ok' -e '@.port' -e '@.passwords' | tr '\n' ' ')" = "true 2222 false " ]
+check "access: ssh_set: in dropbear's settings" [ "$(uci -q get 'dropbear.@dropbear[0].Port') $(uci -q get 'dropbear.@dropbear[0].PasswordAuth') $(uci -q get 'dropbear.@dropbear[0].RootPasswordAuth')" = "2222 off off" ]
+sleep 2
+check "access: ssh_set: dropbear restarted" grep -qx 'dropbear-init restart' "$AC/init.log"
+check "access: remove a key" [ "$(pa ssh_key_remove "$FP2" | jsonfilter -e '@.ok')" = true ]
+check "access: not the last, with passwords off" [ "$(pae ssh_key_remove "$FP1")" = "that's the last key, and SSH takes no passwords: turn passwords on first" ]
+check "access: no such key" [ "$(pae ssh_key_remove SHA256:nope)" = "no such key" ]
+check "access: the other key left" [ "$(cat "$AC/keys")" = "$K1" ]
+pa ssh_set 22 on > /dev/null
+check "access: the last, with passwords on" [ "$(pa ssh_key_remove "$FP1" | jsonfilter -e '@.ok')" = true ]
+check "access: passwords off needs a key" [ "$(pae ssh_set 22 off)" = "add a key first: with passwords off and no key, nobody could sign in over SSH" ]
+check "access: end an SSH session" [ "$(pa session_end "$S1" | jsonfilter -e '@.ok')" = true ]
+check "access: end a terminal" [ "$(pa session_end "$S2" | jsonfilter -e '@.ok')" = true ]
+sleep 1
+check "access: both ended" sh -c "! kill -0 $S1 2>/dev/null && ! kill -0 $S2 2>/dev/null"
+check "access: not another process" [ "$(pae session_end "$S3")" = "that isn't an SSH or terminal session" ]
+check "access: nor the one that listens" [ "$(pae session_end 1)" = "that isn't an SSH or terminal session" ]
+check "access: a PID is a number" [ "$(pae session_end 12x)" = "pid: a session's, as the list shows it" ]
+check "access: that other process kept" kill -0 "$S3"
+kill "$S3" 2>/dev/null
+check "access: no ttyd, no terminal" [ "$(PIRATE_TTYD=/nonexistent pirate-access term_status | jsonfilter -e '@.installed')" = false ]
+check "access: no ttyd, nothing to turn on" [ "$(PIRATE_TTYD=/nonexistent pirate-access term_set on | jsonfilter -e '@.error')" = "the terminal (ttyd) isn't installed" ]
+rm -f /etc/config/ttyd
+pa term_set on > "$AC/term.json"
+check "access: terminal on" [ "$(jsonfilter -i "$AC/term.json" -e '@.installed' -e '@.enabled' -e '@.port' | tr '\n' ' ')" = "true true 7681 " ]
+check "access: terminal: on the LAN, root's password asked" [ "$(uci -q get 'ttyd.@ttyd[0].interface') $(uci -q get 'ttyd.@ttyd[0].command') $(uci -q get 'ttyd.@ttyd[0].enable')" = "@lan /bin/login root 1" ]
+check "access: terminal: its own pages only, two at a time, no IPv6" [ "$(uci -q get 'ttyd.@ttyd[0].check_origin') $(uci -q get 'ttyd.@ttyd[0].max_clients') $(uci -q get 'ttyd.@ttyd[0].ipv6') $(uci -q get 'ttyd.@ttyd[0].url_arg')" = "1 2 0 0" ]
+check "access: terminal: dark, as the UI is" sh -c "uci -q get 'ttyd.@ttyd[0].client_option' | grep -q 'theme={\"background\":\"#0e1012\"'"
+check "access: terminal: started, and at boot" sh -c "grep -qx 'init enable' '$AC/init.log' && grep -qx 'init restart' '$AC/init.log'"
+check "access: terminal: set up twice, one section" [ "$(pa term_setup; uci -q show ttyd | grep -c '=ttyd$')" = 1 ]
+check "access: terminal off" [ "$(pa term_set off | jsonfilter -e '@.enabled')" = false ]
+check "access: terminal off: stopped, and not at boot" sh -c "grep -qx 'init stop' '$AC/init.log' && grep -qx 'init disable' '$AC/init.log' && [ \"\$(uci -q get 'ttyd.@ttyd[0].enable')\" = 0 ]"
+rm -f /etc/config/ttyd
 
 echo "# pirate-radio-ui: capture workbench (pirate-capture)"
 RC=/usr/libexec/rpcd/pirate.capture

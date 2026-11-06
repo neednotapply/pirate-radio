@@ -1,17 +1,25 @@
 #!/bin/sh
 # pirate-router: router basics for the Pirate Radio web UI — system + uplink status,
-# connected clients (from the DHCP leases), and the adblock toggle. Read-only
-# except `adblock on|off`. Prints one JSON object per subcommand, the reply the
+# its ports and radios, connected clients (from the DHCP leases), and the
+# adblock toggle. Read-only except `adblock on|off`, set_password and
+# wifi_join. Prints one JSON object per subcommand, the reply the
 # pirate.router rpcd plugin returns.
 #
 #   pirate-router status
+#   pirate-router ports
 #   pirate-router clients
 #   pirate-router adblock [on|off]
+#   pirate-router set_password      (new password, proof session, caller's on stdin)
 
 . /usr/share/libubox/jshn.sh
 
-# PIRATE_LEASES points it at another leases file (tests).
+# PIRATE_LEASES points it at another leases file (tests), and the others at
+# mocks and fake trees.
 LEASES=${PIRATE_LEASES:-/tmp/dhcp.leases}
+SWCONFIG=${PIRATE_SWCONFIG:-swconfig}
+SYSFS=${PIRATE_SYSFS:-/sys}
+SHADOW=${PIRATE_SHADOW:-/etc/shadow}
+UBUS=${PIRATE_UBUS:-ubus}
 
 cmd_status() {
 	local host model fw up load mt mf ma fst fsf online
@@ -45,6 +53,123 @@ cmd_status() {
 	json_add_int free "${fsf:-0}"
 	json_close_object
 	json_add_boolean online "$online"
+	json_dump
+}
+
+# The Slate's ports and radios, by what they are on a GL.iNet GL-AR750S: its
+# switch's port 1 is the WAN jack and 2 and 3 the LAN jacks (0 is the CPU);
+# its 5 GHz radio is the QCA9887 on PCIe and its 2.4 GHz one the SoC's own
+# (QCA9563); the USB port is the first USB bus, and the microSD slot a card
+# reader on the second, behind an internal hub.
+cmd_ports() {
+	local sw p name line speed d phy path drv band chip usb ifs dev b where
+	local ifc type ch ssid id
+
+	json_init
+	json_add_array ethernet
+	sw=$("$SWCONFIG" dev switch0 show 2>/dev/null)
+	for p in 1 2 3; do
+		case "$p" in 1) name=WAN ;; 2) name="LAN 1" ;; 3) name="LAN 2" ;; esac
+		line=$(printf '%s\n' "$sw" | sed -n "s/.*link: port:$p link:\\(.*\\)/\\1/p" | head -n 1)
+		json_add_object ""
+		json_add_int port "$p"
+		json_add_string name "$name"
+		if [ "$p" = 1 ]; then json_add_string iface eth0.2; else json_add_string iface eth0.1; fi
+		case "$line" in
+		up*)
+			json_add_boolean link 1
+			speed=$(printf '%s' "$line" | sed -n 's/.*speed:\([0-9]\{1,\}\)base.*/\1/p')
+			[ -n "$speed" ] && json_add_int speed "$speed"
+			case "$line" in
+			*full-duplex*) json_add_boolean full_duplex 1 ;;
+			*half-duplex*) json_add_boolean full_duplex 0 ;;
+			esac
+			;;
+		*) json_add_boolean link 0 ;;
+		esac
+		json_close_object
+	done
+	json_close_array
+
+	# Every Wi-Fi interface: its radio, type, channel and network ("-" for
+	# none: read would run empty tab-separated fields together)
+	ifs=$(iw dev 2>/dev/null | awk '
+		function out() { if (ifc != "") print phy "\t" ifc "\t" (type == "" ? "-" : type) "\t" (ch == "" ? "-" : ch) "\t" ssid }
+		/^phy#/ { out(); ifc = ""; phy = "phy" substr($1, 5) }
+		/^\tInterface / { out(); ifc = $2; type = ""; ch = ""; ssid = "" }
+		/^\t\ttype / { type = $2 }
+		/^\t\tchannel / { ch = $2 }
+		/^\t\tssid / { s = $0; sub(/^\t\tssid /, "", s); gsub(/\t/, " ", s); ssid = s }
+		END { out() }')
+	json_add_array radios
+	for d in "$SYSFS"/class/ieee80211/*; do
+		[ -e "$d" ] || continue
+		phy=${d##*/}
+		path=$(readlink -f "$d/device" 2>/dev/null)
+		drv=$(readlink -f "$d/device/driver" 2>/dev/null); drv=${drv##*/}
+		usb=0
+		case "$path" in
+		*0000:00:00.0) band="5 GHz"; chip=QCA9887 ;;
+		*18100000.wmac) band="2.4 GHz"; chip=QCA9563 ;;
+		*/usb*)
+			usb=1; chip=$drv
+			band=$(iw phy "$phy" info 2>/dev/null | awk '
+				/\* 24[0-9][0-9](\.[0-9])? MHz/ { two = 1 } /\* 5[0-9][0-9][0-9](\.[0-9])? MHz/ { five = 1 }
+				END { print (two && five) ? "2.4 and 5 GHz" : five ? "5 GHz" : "2.4 GHz" }') ;;
+		*) band=""; chip=$drv ;;
+		esac
+		json_add_object ""
+		json_add_string phy "$phy"
+		json_add_string band "$band"
+		json_add_string chip "$chip"
+		json_add_string driver "$drv"
+		json_add_boolean usb "$usb"
+		json_add_array interfaces
+		while IFS="$(printf '\t')" read -r p ifc type ch ssid; do
+			[ "$p" = "$phy" ] || continue
+			json_add_object ""
+			json_add_string name "$ifc"
+			[ "$type" = - ] || json_add_string type "$type"
+			case "$ch" in ''|*[!0-9]*) ;; *) json_add_int channel "$ch" ;; esac
+			[ -n "$ssid" ] && json_add_string ssid "$ssid"
+			json_close_object
+		done <<-EOF
+		$ifs
+		EOF
+		json_close_array
+		json_close_object
+	done
+	json_close_array
+
+	# What is plugged in: the USB port's devices (not hubs), and whether a
+	# card is in the microSD slot
+	json_add_array usb
+	for d in "$SYSFS"/bus/usb/devices/1-*; do
+		[ -e "$d/idVendor" ] || continue
+		case "${d##*/}" in *:*) continue ;; esac
+		[ "$(cat "$d/bDeviceClass" 2>/dev/null)" = 09 ] && continue
+		id="$(cat "$d/idVendor"):$(cat "$d/idProduct" 2>/dev/null)"
+		name="$(cat "$d/manufacturer" 2>/dev/null) $(cat "$d/product" 2>/dev/null)"
+		json_add_object ""
+		json_add_string id "$id"
+		json_add_string name "$(printf '%s' "$name" | sed 's/^ *//; s/ *$//')"
+		json_close_object
+	done
+	json_close_array
+	json_add_object card
+	dev=
+	for b in "$SYSFS"/block/sd*; do
+		[ -e "$b" ] || continue
+		where=$(readlink -f "$b/device" 2>/dev/null)
+		case "$where" in */usb2/*) dev=${b##*/}; break ;; esac
+	done
+	if [ -n "$dev" ] && [ "$(cat "$SYSFS/block/$dev/size" 2>/dev/null)" != 0 ]; then
+		json_add_boolean present 1
+		json_add_string device "$dev"
+	else
+		json_add_boolean present 0
+	fi
+	json_close_object
 	json_dump
 }
 
@@ -109,18 +234,54 @@ sta_section() {
 	uci show wireless 2>/dev/null | sed -n "s/^wireless\\.\\([^.]*\\)\\.mode='sta'/\\1/p" | head -1
 }
 
-# Set the root password. Reads the new password from stdin so it never appears
-# in the process list.
+# Whether root has a password yet: a fresh flash has none, and the page then
+# sets the first one without asking for the current.
+root_has_password() {
+	[ -n "$(awk -F: '$1 == "root" { print $2 }' "$SHADOW" 2>/dev/null)" ]
+}
+
+# The current password, proved: the page signs in with it again and passes
+# that session. A fresh rpcd login (a minute old at most) for root, not the
+# caller's own session, is proof: rpcd checked the password, which never
+# reaches this script. Signed-in pages can't make or change sessions (their
+# ACL has session login and access only), so they can't forge one.
+proof_ok() {
+	local proof="$1" caller="$2" s user timeout expires
+
+	case "$proof" in ''|*[!0-9a-f]*) return 1 ;; esac
+	[ "${#proof}" = 32 ] && [ "$proof" != "$caller" ] || return 1
+	s=$("$UBUS" call session list "{ \"ubus_rpc_session\": \"$proof\" }" 2>/dev/null) || return 1
+	user=$(printf '%s' "$s" | jsonfilter -e '@.data.username' 2>/dev/null)
+	timeout=$(printf '%s' "$s" | jsonfilter -e '@.timeout' 2>/dev/null)
+	expires=$(printf '%s' "$s" | jsonfilter -e '@.expires' 2>/dev/null)
+	[ "$user" = root ] || return 1
+	case "$timeout:$expires" in *[!0-9:]*|:*|*:) return 1 ;; esac
+	[ $((timeout - expires)) -le 60 ]
+}
+
+# Set the root password. Reads the new password, then the proof session and
+# the caller's, from stdin, so none of them appears in the process list.
 cmd_set_password() {
-	local pw
+	local pw proof caller
 	IFS= read -r pw
+	IFS= read -r proof
+	IFS= read -r caller
 	if [ -z "$pw" ]; then echo '{ "error": "empty password" }'; return; fi
 	if [ "${#pw}" -lt 5 ]; then echo '{ "error": "use at least 5 characters" }'; return; fi
+	if root_has_password && ! proof_ok "$proof" "$caller"; then
+		echo '{ "error": "enter the current password to change it" }'
+		return
+	fi
 	if printf '%s\n%s\n' "$pw" "$pw" | passwd root >/dev/null 2>&1; then
 		echo '{ "ok": true }'
 	else
 		echo '{ "error": "could not set the password" }'
 	fi
+	# The proof is spent
+	if [ -n "$proof" ] && proof_ok "$proof" "$caller"; then
+		"$UBUS" call session destroy "{ \"ubus_rpc_session\": \"$proof\" }" >/dev/null 2>&1
+	fi
+	return 0
 }
 
 cmd_wifi_status() {
@@ -208,11 +369,12 @@ cmd_wifi_join() {
 
 case "$1" in
 status)       cmd_status ;;
+ports)        cmd_ports ;;
 clients)      cmd_clients ;;
 adblock)      cmd_adblock "$2" ;;
 set_password) cmd_set_password ;;
 wifi_status)  cmd_wifi_status ;;
 wifi_scan)    cmd_wifi_scan ;;
 wifi_join)    cmd_wifi_join "$2" "$3" ;;
-*) echo '{ "error": "usage: pirate-router status|clients|adblock|set_password|wifi_status|wifi_scan|wifi_join" }' ;;
+*) echo '{ "error": "usage: pirate-router status|ports|clients|adblock|set_password|wifi_status|wifi_scan|wifi_join" }' ;;
 esac

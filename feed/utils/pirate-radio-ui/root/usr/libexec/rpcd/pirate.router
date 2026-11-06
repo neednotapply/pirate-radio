@@ -3,6 +3,7 @@
 # the pirate-router tool.
 #
 #   ubus call pirate.router status
+#   ubus call pirate.router ports
 #   ubus call pirate.router clients
 #   ubus call pirate.router adblock '{"enabled":true}'   (omit to just read)
 
@@ -23,12 +24,16 @@ run_adblock() {
 }
 
 run_set_password() {
-	local input pw
+	local input pw proof caller
 	read -r input
 	json_load "$input"
 	json_get_var pw password
-	# The password goes to the tool on stdin, never on its command line.
-	printf '%s' "$pw" | "$ROUTER" set_password
+	# proof: a session the page signed in with the current password, just
+	# now; ubus_rpc_session: the caller's own (uhttpd adds it)
+	json_get_var proof proof
+	json_get_var caller ubus_rpc_session
+	# All of it goes to the tool on stdin, never on its command line.
+	printf '%s\n%s\n%s\n' "$pw" "$proof" "$caller" | "$ROUTER" set_password
 }
 
 run_wifi_join() {
@@ -44,11 +49,12 @@ run_wifi_join() {
 
 case "$1" in
 list)
-	echo '{ "status": {}, "clients": {}, "adblock": { "enabled": false }, "set_password": { "password": "str" }, "wifi_status": {}, "wifi_scan": {}, "wifi_join": { "ssid": "str", "enc": "str", "key": "str" } }'
+	echo '{ "status": {}, "ports": {}, "clients": {}, "adblock": { "enabled": false }, "set_password": { "password": "str", "proof": "str" }, "wifi_status": {}, "wifi_scan": {}, "wifi_join": { "ssid": "str", "enc": "str", "key": "str" } }'
 	;;
 call)
 	case "$2" in
 	status)       "$ROUTER" status ;;
+	ports)        "$ROUTER" ports ;;
 	clients)      "$ROUTER" clients ;;
 	adblock)      run_adblock ;;
 	set_password) run_set_password ;;

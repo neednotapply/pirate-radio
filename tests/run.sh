@@ -78,6 +78,12 @@ chmod 755 "$ov/usr/sbin/pirate-gps" "$ov/etc/init.d/pirate-gps"
 cp "$u/usr/sbin/pirate-dreampi" "$ov/usr/sbin/"
 cp "$u/usr/libexec/rpcd/pirate.dreampi" "$ov/usr/libexec/rpcd/"
 cp "$u/usr/share/rpcd/acl.d/pirate-dreampi.json" "$ov/usr/share/rpcd/acl.d/"
+# The Access and Terminal pages' backend
+cp "$u/usr/sbin/pirate-access" "$ov/usr/sbin/"
+cp "$u/usr/libexec/rpcd/pirate.access" "$ov/usr/libexec/rpcd/"
+cp "$u/usr/share/rpcd/acl.d/pirate-access.json" "$ov/usr/share/rpcd/acl.d/"
+cp "$u/etc/uci-defaults/96-pirate-terminal" "$ov/etc/uci-defaults/"
+chmod 755 "$ov/usr/sbin/pirate-access" "$ov/usr/libexec/rpcd/pirate.access"
 # The Flipper page's ACL (the pirate-flipper package itself comes built, above)
 cp "$u/usr/share/rpcd/acl.d/pirate-flipper.json" "$ov/usr/share/rpcd/acl.d/"
 chmod 755 "$ov/usr/sbin/pirate-dreampi" "$ov/usr/libexec/rpcd/pirate.dreampi"

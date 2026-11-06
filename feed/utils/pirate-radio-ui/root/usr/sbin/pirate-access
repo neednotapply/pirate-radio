@@ -1,0 +1,449 @@
+#!/bin/sh
+# pirate-access: who can get into the Slate, and how, for the Pirate Radio web
+# UI's Access and Terminal pages. SSH (dropbear): its port, whether it takes
+# passwords, the keys it takes, who is signed in, recent sign-ins; and the
+# terminal in the browser (ttyd: on the LAN only, behind the root password,
+# as SSH is). One JSON object per subcommand, the reply the pirate.access
+# rpcd plugin returns.
+#
+#   pirate-access ssh_status
+#   pirate-access ssh_set <port> <on|off>       on|off: password sign-ins
+#   pirate-access ssh_key_add                   the key's line on stdin
+#   pirate-access ssh_key_remove <fingerprint>  SHA256:..., as ssh_status has it
+#   pirate-access session_end <pid>             an SSH or terminal session
+#   pirate-access term_status
+#   pirate-access term_set <on|off>
+#   pirate-access term_setup                    ttyd's settings (first boot)
+
+. /usr/share/libubox/jshn.sh
+
+# Overridable for the tests
+KEYS=${PIRATE_KEYS:-/etc/dropbear/authorized_keys}
+HOSTKEYS=${PIRATE_HOSTKEYS:-/etc/dropbear}
+DROPBEAR_INIT=${PIRATE_DROPBEAR_INIT:-/etc/init.d/dropbear}
+TTYD_INIT=${PIRATE_TTYD_INIT:-/etc/init.d/ttyd}
+TTYD=${PIRATE_TTYD:-/usr/bin/ttyd}
+PROC=${PIRATE_PROC:-/proc}
+LOGREAD=${PIRATE_LOGREAD:-logread}
+NETSTAT=${PIRATE_NETSTAT:-netstat}
+
+TAB=$(printf '\t')
+
+err() {
+	json_init
+	json_add_string error "$1"
+	json_dump
+}
+
+# A key's SHA256 fingerprint, as ssh-keygen -l and dropbear's log show it:
+# the base64 of the SHA-256 of the key's blob, without the padding. The blob
+# is decoded into printf's octal escapes (the router has no base64).
+key_fp() {
+	local esc hex
+	esc=$(printf '%s' "$1" | awk '
+	BEGIN { a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/" }
+	{
+		acc = 0; bits = 0
+		for (i = 1; i <= length($0); i++) {
+			v = index(a, substr($0, i, 1)) - 1
+			if (v < 0) continue
+			acc = acc * 64 + v; bits += 6
+			if (bits >= 8) {
+				bits -= 8; p = 2 ^ bits
+				b = int(acc / p); acc -= b * p
+				printf "\\%03o", b
+			}
+		}
+	}')
+	[ -n "$esc" ] || return 1
+	# shellcheck disable=SC2059 # the escapes are the point
+	hex=$(printf "$esc" | sha256sum | cut -d' ' -f1)
+	printf '%s' "$hex" | awk '
+	function byte(k) { return (index(h, substr($0, 2 * k + 1, 1)) - 1) * 16 + index(h, substr($0, 2 * k + 2, 1)) - 1 }
+	BEGIN { a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"; h = "0123456789abcdef" }
+	{
+		n = length($0) / 2; out = "SHA256:"
+		for (i = 0; i < n; i += 3) {
+			v = byte(i) * 65536 + (i + 1 < n ? byte(i + 1) : 0) * 256 + (i + 2 < n ? byte(i + 2) : 0)
+			out = out substr(a, int(v / 262144) + 1, 1) substr(a, int(v / 4096) % 64 + 1, 1)
+			if (i + 1 < n) out = out substr(a, int(v / 64) % 64 + 1, 1)
+			if (i + 2 < n) out = out substr(a, v % 64 + 1, 1)
+		}
+		print out
+	}'
+}
+
+# The accepted keys, one a line: type, blob, comment, and 1 when options
+# (command="...", from="...") come before the key: those are listed, and
+# kept as they are
+keys_list() {
+	[ -f "$KEYS" ] || return 0
+	awk '
+	/^[ \t]*(#|$)/ { next }
+	{
+		for (i = 1; i <= NF; i++) if ($i ~ /^(ssh-|ecdsa-|sk-)/) break
+		if (i >= NF) next
+		c = ""; for (j = i + 2; j <= NF; j++) c = c (c == "" ? "" : " ") $j
+		print $i "\t" $(i + 1) "\t" (c == "" ? "-" : c) "\t" (i > 1 ? 1 : 0)
+	}' "$KEYS"
+}
+
+key_count() { keys_list | grep -c .; }
+
+ssh_port() {
+	local p
+	p=$(uci -q get 'dropbear.@dropbear[0].Port')
+	echo "${p:-22}"
+}
+
+ssh_passwords() {
+	local a b
+	a=$(uci -q get 'dropbear.@dropbear[0].PasswordAuth')
+	b=$(uci -q get 'dropbear.@dropbear[0].RootPasswordAuth')
+	# Only root signs in here, so it takes both
+	case "${a:-on}:${b:-on}" in on:on|1:1|on:1|1:on) echo 1 ;; *) echo 0 ;; esac
+}
+
+# The PID's parent, name and age in seconds (its start, in clock ticks since
+# boot: USER_HZ is 100)
+proc_ppid() { sed -n 's/^PPid:[[:space:]]*//p' "$PROC/$1/status" 2>/dev/null; }
+proc_name() { sed -n 's/^Name:[[:space:]]*//p' "$PROC/$1/status" 2>/dev/null; }
+proc_age() {
+	local st up
+	st=$(sed 's/.*) //' "$PROC/$1/stat" 2>/dev/null | cut -d' ' -f20)
+	up=$(cut -d. -f1 "$PROC/uptime" 2>/dev/null)
+	case "$st:$up" in *[!0-9:]*|:*|*:) echo 0; return ;; esac
+	echo $((up - st / 100))
+}
+
+ttyd_pid() { pidof ttyd 2>/dev/null | cut -d' ' -f1; }
+
+# The log, with times: "<epoch> <program>[<pid>]: <message>"
+log_lines() {
+	"$LOGREAD" -t 2>/dev/null | sed -n 's/^.* \[\([0-9]\{1,\}\)\.[0-9]*\] [a-z]*\.[a-z]* \([a-z0-9_-]\{1,\}\[[0-9]\{1,\}\]\): /\1 \2 /p'
+}
+
+add_session_ssh() {
+	local pid="$1" from="$2" how key age ln
+	ln=$(log_lines | grep " dropbear\[$pid\] .* auth succeeded for " | tail -n 1)
+	case "$ln" in
+	*"Pubkey auth succeeded"*) how=key; key=$(printf '%s' "$ln" | sed -n 's/.* key \(SHA256:[A-Za-z0-9+/]*\) from .*/\1/p') ;;
+	*"Password auth succeeded"*) how=password ;;
+	*) how= ;;
+	esac
+	age=$(proc_age "$pid")
+	json_add_object ""
+	json_add_string kind ssh
+	json_add_int pid "$pid"
+	json_add_string from "${from%:*}"
+	json_add_int age "$age"
+	[ -n "$how" ] && json_add_string how "$how"
+	[ -n "$key" ] && json_add_string key "$key"
+	json_close_object
+}
+
+# Terminal sessions: ttyd's children (login, then the shell it becomes), and
+# where each came from, by ttyd's log: a "WS /ws - <address>" line, then
+# "started process, pid: <pid>"
+add_sessions_term() {
+	local tp d pid from name
+	tp=$(ttyd_pid)
+	[ -n "$tp" ] || return 0
+	for d in "$PROC"/[0-9]*; do
+		pid=${d##*/}
+		case "$pid" in *[!0-9]*) continue ;; esac
+		[ "$(proc_ppid "$pid")" = "$tp" ] || continue
+		name=$(proc_name "$pid")
+		from=$("$LOGREAD" -e ttyd 2>/dev/null | awk -v p="$pid" '
+			/ WS +\/ws - / { s = $0; sub(/.* WS +\/ws - /, "", s); sub(/[ ,].*/, "", s); ip = s }
+			/started process, pid: / { s = $0; sub(/.*pid: /, "", s); sub(/[^0-9].*/, "", s); if (s == p) found = ip }
+			END { print found }')
+		json_add_object ""
+		json_add_string kind terminal
+		json_add_int pid "$pid"
+		[ -n "$from" ] && json_add_string from "$from"
+		json_add_int age "$(proc_age "$pid")"
+		if [ "$name" = login ]; then json_add_string how waiting; else json_add_string how password; fi
+		json_close_object
+	done
+}
+
+cmd_ssh_status() {
+	local port type blob comment opts f pub pid from tmp t ev how extra
+
+	port=$(ssh_port)
+	json_init
+	if pidof dropbear >/dev/null 2>&1; then json_add_boolean running 1; else json_add_boolean running 0; fi
+	json_add_int port "$port"
+	json_add_boolean passwords "$(ssh_passwords)"
+
+	json_add_array keys
+	while IFS="$TAB" read -r type blob comment opts; do
+		[ -n "$blob" ] || continue
+		json_add_object ""
+		json_add_string type "$type"
+		[ "$comment" = - ] || json_add_string comment "$comment"
+		json_add_string fingerprint "$(key_fp "$blob")"
+		[ "$opts" = 1 ] && json_add_boolean options 1
+		json_close_object
+	done <<-EOF
+	$(keys_list)
+	EOF
+	json_close_array
+
+	# The router's own keys, to check against on a first connection
+	json_add_array host_keys
+	for f in "$HOSTKEYS"/dropbear_ed25519_host_key "$HOSTKEYS"/dropbear_ecdsa_host_key "$HOSTKEYS"/dropbear_rsa_host_key; do
+		[ -f "$f" ] || continue
+		pub=$(dropbearkey -y -f "$f" 2>/dev/null | grep -E '^(ssh-|ecdsa-)')
+		[ -n "$pub" ] || continue
+		json_add_object ""
+		json_add_string type "${pub%% *}"
+		pub=${pub#* }
+		json_add_string fingerprint "$(key_fp "${pub%% *}")"
+		json_close_object
+	done
+	json_close_array
+
+	# Who is in now: SSH connections (dropbear's session processes) and
+	# terminals
+	json_add_array sessions
+	while read -r pid from; do
+		[ -n "$pid" ] && add_session_ssh "$pid" "$from"
+	done <<-EOF
+	$("$NETSTAT" -tnp 2>/dev/null | awk -v p=":$port" '
+		$6 == "ESTABLISHED" && $7 ~ /\/dropbear$/ && substr($4, length($4) - length(p) + 1) == p {
+			split($7, x, "/"); print x[1], $5 }')
+	EOF
+	add_sessions_term
+	json_close_array
+
+	# Sign-ins, newest first: SSH's, and the terminal's (login's). Through a
+	# file: a pipe into the loop would keep its JSON in a subshell.
+	json_add_array recent
+	tmp=$(mktemp)
+	log_lines | awk '
+	function emit(ev, from, how, extra) { print $1 "\t" ev "\t" from "\t" how "\t" extra }
+	$2 ~ /^dropbear\[/ {
+		m = $0; sub(/^[^ ]+ [^ ]+ /, "", m)
+		if (m ~ /^Pubkey auth succeeded for /) { k = m; sub(/.* key /, "", k); sub(/ .*/, "", k); f = m; sub(/.* from /, "", f); emit("in", f, "key", k) }
+		else if (m ~ /^Password auth succeeded for /) { f = m; sub(/.* from /, "", f); emit("in", f, "password", "") }
+		else if (m ~ /^Bad password attempt for /) { f = m; sub(/.* from /, "", f); emit("refused", f, "password", "") }
+		else if (m ~ /^Login attempt for nonexistent user/) { f = m; sub(/.* from /, "", f); emit("refused", f, "user", "") }
+		else if (m ~ /^Exit \(/) { f = m; sub(/^[^<]*</, "", f); sub(/>.*/, "", f); emit("out", f, "", "") }
+	}
+	$2 ~ /^login\[/ {
+		m = $0; sub(/^[^ ]+ [^ ]+ /, "", m)
+		if (m ~ /^root login/) emit("in", "", "terminal", "")
+		else if (m ~ /^invalid password for /) emit("refused", "", "terminal", "")
+	}' | tail -n 40 | sed '1!G;h;$!d' > "$tmp"
+	while IFS="$TAB" read -r t ev from how extra; do
+		[ -n "$t" ] || continue
+		json_add_object ""
+		json_add_int time "$t"
+		json_add_string event "$ev"
+		[ -n "$from" ] && json_add_string from "${from%:*}"
+		[ -n "$how" ] && json_add_string how "$how"
+		[ -n "$extra" ] && json_add_string key "$extra"
+		json_close_object
+	done < "$tmp"
+	rm -f "$tmp"
+	json_close_array
+	json_dump
+}
+
+cmd_ssh_set() {
+	local port="$1" pw="$2" taken="53 80 139 443 445 1234 5353 7681 8080 8081 8082 10110 30003 30005 55132"
+
+	case "$port" in ''|*[!0-9]*) err "port: a number, 1 to 65535"; return ;; esac
+	if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then err "port: a number, 1 to 65535"; return; fi
+	# The ports Pirate Radio's other services listen on
+	case " $taken " in
+	*" $port "*) err "port: $port is another service's here"; return ;;
+	esac
+	case "$pw" in
+	on|off) ;;
+	*) err "passwords: on or off"; return ;;
+	esac
+	if [ "$pw" = off ] && [ "$(key_count)" = 0 ]; then
+		err "add a key first: with passwords off and no key, nobody could sign in over SSH"
+		return
+	fi
+	uci -q set "dropbear.@dropbear[0].Port=$port"
+	uci -q set "dropbear.@dropbear[0].PasswordAuth=$pw"
+	uci -q set "dropbear.@dropbear[0].RootPasswordAuth=$pw"
+	uci -q commit dropbear
+	# In the background, so this answers first; sessions already open stay
+	( sleep 1; "$DROPBEAR_INIT" restart ) >/dev/null 2>&1 &
+	json_init
+	json_add_boolean ok 1
+	json_add_int port "$port"
+	json_add_boolean passwords "$([ "$pw" = on ] && echo 1 || echo 0)"
+	json_dump
+}
+
+cmd_ssh_key_add() {
+	local line type blob comment fp
+
+	IFS= read -r line
+	line=$(printf '%s' "$line" | tr -d '\r' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+	type=${line%% *}
+	blob=${line#"$type"}; blob=${blob# }; blob=${blob%% *}
+	comment=${line#"$type"}; comment=${comment# }; comment=${comment#"$blob"}; comment=${comment# }
+	case "$type" in
+	ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521|sk-ssh-ed25519@openssh.com|sk-ecdsa-sha2-nistp256@openssh.com) ;;
+	*) err "key: paste a public key's line, such as ssh-ed25519 AAAA… you@computer"; return ;;
+	esac
+	case "$blob" in
+	''|*[!A-Za-z0-9+/=]*) err "key: that isn't a whole public key"; return ;;
+	esac
+	if [ "${#blob}" -lt 60 ]; then err "key: that isn't a whole public key"; return; fi
+	case "$comment" in
+	*[![:print:]]*) err "key: its name has characters it can't have"; return ;;
+	esac
+	if keys_list | cut -f2 | grep -qxF "$blob"; then err "that key is here already"; return; fi
+	fp=$(key_fp "$blob") || { err "key: that isn't a whole public key"; return; }
+	mkdir -p "${KEYS%/*}"
+	# End the last line first, if it isn't
+	if [ -s "$KEYS" ] && [ -n "$(tail -c 1 "$KEYS")" ]; then echo >> "$KEYS"; fi
+	printf '%s %s%s\n' "$type" "$blob" "${comment:+ $comment}" >> "$KEYS"
+	chmod 600 "$KEYS"
+	json_init
+	json_add_boolean ok 1
+	json_add_string fingerprint "$fp"
+	json_dump
+}
+
+cmd_ssh_key_remove() {
+	local want="$1" type blob comment opts hit=
+
+	case "$want" in SHA256:?*) ;; *) err "fingerprint: SHA256:…, as the list shows it"; return ;; esac
+	while IFS="$TAB" read -r type blob comment opts; do
+		[ -n "$blob" ] || continue
+		[ "$(key_fp "$blob")" = "$want" ] && { hit=$blob; break; }
+	done <<-EOF
+	$(keys_list)
+	EOF
+	if [ -z "$hit" ]; then err "no such key"; return; fi
+	if [ "$(key_count)" = 1 ] && [ "$(ssh_passwords)" = 0 ]; then
+		err "that's the last key, and SSH takes no passwords: turn passwords on first"
+		return
+	fi
+	grep -vF " $hit" "$KEYS" > "$KEYS.new"
+	chmod 600 "$KEYS.new"
+	mv "$KEYS.new" "$KEYS"
+	echo '{ "ok": true }'
+}
+
+# End an SSH session (one of dropbear's session processes: not the one that
+# listens, procd's child) or a terminal (one of ttyd's children)
+cmd_session_end() {
+	local pid="$1" name pp tp
+
+	case "$pid" in ''|*[!0-9]*) err "pid: a session's, as the list shows it"; return ;; esac
+	name=$(proc_name "$pid")
+	pp=$(proc_ppid "$pid")
+	tp=$(ttyd_pid)
+	if [ "$name" = dropbear ] && [ -n "$pp" ] && [ "$pp" != 1 ]; then
+		kill -TERM "$pid" 2>/dev/null
+	elif [ -n "$tp" ] && [ "$pp" = "$tp" ]; then
+		# A shell ignores TERM; a hangup ends it, as a closed window would
+		kill -HUP "$pid" 2>/dev/null
+		sleep 1
+		kill -0 "$pid" 2>/dev/null && kill -KILL "$pid" 2>/dev/null
+	else
+		err "that isn't an SSH or terminal session"
+		return
+	fi
+	echo '{ "ok": true }'
+}
+
+ttyd_enabled() {
+	[ "$(uci -q get 'ttyd.@ttyd[0].enable')" != 0 ] && "$TTYD_INIT" enabled 2>/dev/null
+}
+
+cmd_term_status() {
+	local port
+	json_init
+	if [ ! -x "$TTYD" ]; then
+		json_add_boolean installed 0
+		json_dump
+		return
+	fi
+	json_add_boolean installed 1
+	if ttyd_enabled; then json_add_boolean enabled 1; else json_add_boolean enabled 0; fi
+	if [ -n "$(ttyd_pid)" ]; then json_add_boolean running 1; else json_add_boolean running 0; fi
+	port=$(uci -q get 'ttyd.@ttyd[0].port')
+	json_add_int port "${port:-7681}"
+	json_add_array sessions
+	add_sessions_term
+	json_close_array
+	json_dump
+}
+
+# ttyd as Pirate Radio has it: on the LAN only (the uplink's network can't
+# reach it, nor IPv6), only pages from itself may open its socket (another
+# site's can't), two at a time, root's password asked for, as SSH asks.
+# Dark, as the UI is.
+term_configure() {
+	# uci adds to a config only once its file is there
+	[ -f /etc/config/ttyd ] || : > /etc/config/ttyd
+	[ -n "$(uci -q get 'ttyd.@ttyd[0]')" ] || uci -q add ttyd ttyd >/dev/null
+	uci -q batch <<-'EOF'
+	set ttyd.@ttyd[0].interface='@lan'
+	set ttyd.@ttyd[0].command='/bin/login root'
+	set ttyd.@ttyd[0].check_origin='1'
+	set ttyd.@ttyd[0].max_clients='2'
+	set ttyd.@ttyd[0].ipv6='0'
+	set ttyd.@ttyd[0].url_arg='0'
+	set ttyd.@ttyd[0].readonly='0'
+	delete ttyd.@ttyd[0].client_option
+	add_list ttyd.@ttyd[0].client_option='titleFixed=Pirate Radio'
+	add_list ttyd.@ttyd[0].client_option='fontSize=14'
+	add_list ttyd.@ttyd[0].client_option='theme={"background":"#0e1012","foreground":"#d6dade","cursor":"#e0a040","selectionBackground":"#363a40"}'
+	EOF
+	uci -q commit ttyd
+}
+
+cmd_term_set() {
+	local to="$1"
+	if [ ! -x "$TTYD" ]; then err "the terminal (ttyd) isn't installed"; return; fi
+	case "$to" in
+	on)
+		term_configure
+		uci -q set 'ttyd.@ttyd[0].enable=1'
+		uci -q commit ttyd
+		"$TTYD_INIT" enable >/dev/null 2>&1
+		"$TTYD_INIT" restart >/dev/null 2>&1
+		;;
+	off)
+		uci -q set 'ttyd.@ttyd[0].enable=0'
+		uci -q commit ttyd
+		"$TTYD_INIT" stop >/dev/null 2>&1
+		"$TTYD_INIT" disable >/dev/null 2>&1
+		;;
+	*) err "enabled: true or false"; return ;;
+	esac
+	cmd_term_status
+}
+
+# First boot (uci-defaults), or ttyd newly installed: Pirate Radio's
+# settings, leaving it on or off as it is
+cmd_term_setup() {
+	[ -x "$TTYD" ] || return 0
+	term_configure
+	[ -n "$(ttyd_pid)" ] && "$TTYD_INIT" restart >/dev/null 2>&1
+	return 0
+}
+
+case "$1" in
+ssh_status)     cmd_ssh_status ;;
+ssh_set)        cmd_ssh_set "$2" "$3" ;;
+ssh_key_add)    cmd_ssh_key_add ;;
+ssh_key_remove) cmd_ssh_key_remove "$2" ;;
+session_end)    cmd_session_end "$2" ;;
+term_status)    cmd_term_status ;;
+term_set)       cmd_term_set "$2" ;;
+term_setup)     cmd_term_setup ;;
+*) err "usage: pirate-access ssh_status|ssh_set|ssh_key_add|ssh_key_remove|session_end|term_status|term_set|term_setup" ;;
+esac

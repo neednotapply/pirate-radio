@@ -1,0 +1,5 @@
+#!/bin/sh
+# The terminal in the browser (ttyd) as Pirate Radio has it: on the LAN only,
+# behind the root password, its socket only for its own pages
+[ -x /usr/sbin/pirate-access ] && /usr/sbin/pirate-access term_setup >/dev/null 2>&1
+exit 0

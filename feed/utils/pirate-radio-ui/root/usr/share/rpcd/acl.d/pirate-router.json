@@ -1,9 +1,9 @@
 {
 	"pirate-router": {
-		"description": "Grant access to router basics: system status, clients, adblock toggle",
+		"description": "Grant access to router basics: system status, ports, clients, adblock, the root password, the Wi-Fi uplink",
 		"read": {
 			"ubus": {
-				"pirate.router": [ "status", "clients", "wifi_status", "wifi_scan" ]
+				"pirate.router": [ "status", "ports", "clients", "wifi_status", "wifi_scan" ]
 			}
 		},
 		"write": {

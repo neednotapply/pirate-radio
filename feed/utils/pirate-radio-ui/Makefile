@@ -86,6 +86,12 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-router $(1)/usr/sbin/pirate-router
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.router $(1)/usr/libexec/rpcd/pirate.router
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-router.json $(1)/usr/share/rpcd/acl.d/pirate-router.json
+	# Access: SSH's settings, keys and sessions, recent sign-ins, and the
+	# terminal in the browser (ttyd, set up on first boot)
+	$(INSTALL_BIN) ./root/usr/sbin/pirate-access $(1)/usr/sbin/pirate-access
+	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.access $(1)/usr/libexec/rpcd/pirate.access
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-access.json $(1)/usr/share/rpcd/acl.d/pirate-access.json
+	$(INSTALL_BIN) ./root/etc/uci-defaults/96-pirate-terminal $(1)/etc/uci-defaults/96-pirate-terminal
 	# Packet capture
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-capture $(1)/usr/sbin/pirate-capture
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.capture $(1)/usr/libexec/rpcd/pirate.capture
@@ -125,6 +131,7 @@ define Package/pirate-radio-ui/postinst
 #!/bin/sh
 [ -n "$${IPKG_INSTROOT}" ] || {
 	[ -f /etc/uci-defaults/95-pirate-radio-ui ] && ( . /etc/uci-defaults/95-pirate-radio-ui ) >/dev/null 2>&1
+	/usr/sbin/pirate-access term_setup >/dev/null 2>&1
 	/etc/init.d/rpcd reload >/dev/null 2>&1
 	/etc/init.d/uhttpd reload >/dev/null 2>&1
 }

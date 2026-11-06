@@ -80,6 +80,11 @@ ksmbd-server
 wsdd2
 kmod-fs-ntfs3
 
+# The terminal in the browser (the Pirate Radio UI's Terminal page): ttyd, on
+# the LAN only and behind the root password, as SSH is (pirate-access sets
+# it up on first boot). Pulls libwebsockets, libuv and OpenSSL: about 5 MB.
+ttyd
+
 # lsusb, for checking what is plugged in
 usbutils
 

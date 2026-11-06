@@ -1,0 +1,15 @@
+{
+	"pirate-access": {
+		"description": "Grant access to SSH's settings, keys and sessions, recent sign-ins, and the terminal in the browser",
+		"read": {
+			"ubus": {
+				"pirate.access": [ "ssh_status", "term_status" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.access": [ "ssh_set", "ssh_key_add", "ssh_key_remove", "session_end", "term_set" ]
+			}
+		}
+	}
+}
