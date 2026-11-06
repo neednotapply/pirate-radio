@@ -108,10 +108,12 @@
 		var now = Math.floor(Date.now() / 1000), seq = 20, id = 0;
 		function key(b) { var s = ""; for (var i = 0; i < 32; i++) s += b; return s; }
 		var mc = {
-			seq: seq, name: "Pirate Radio", gps: false, read: {},
+			seq: seq, name: "🏴‍☠️ Pirate Radio", gps: false, read: {},
 			contacts: [
 				{ key: key("a1"), conv: "ca1a1a1a1a1a1", name: "Alice", type: "chat", hops: 1, last_advert: now - 900, lat: 37.422, lon: -122.084 },
 				{ key: key("b0"), conv: "cb0b0b0b0b0b0", name: "Bob", type: "chat", flood: true, last_advert: now - 7200 },
+				{ key: key("d4"), conv: "cd4d4d4d4d4d4", name: "🦜 Polly", type: "chat", hops: 0, last_advert: now - 2400 },
+				{ key: key("e5"), conv: "ce5e5e5e5e5e5", name: "Kiwi 🇳🇿", type: "chat", hops: 3, last_advert: now - 2100 },
 				{ key: key("c2"), conv: "cc2c2c2c2c2c2", name: "Hilltop Repeater", type: "repeater", hops: 0, last_advert: now - 300 }
 			],
 			channels: [
@@ -121,14 +123,30 @@
 			msgs: []
 		};
 		function add(m) { m.id = ++id; m.seq = ++mc.seq; mc.msgs.push(m); return m; }
-		add({ conv: "#0", out: false, from: "Bob", text: "anyone on tonight?", ts: now - 5400, rx: now - 5400, snr: -5.5, hops: 2 });
-		add({ conv: "#0", out: true, from: "Pirate Radio", text: "here, from the van", ts: now - 5300, rx: now - 5300, status: "sent" });
-		add({ conv: "ca1a1a1a1a1a1", out: false, from: "Alice", text: "the repeater on the hill is back up", ts: now - 1800, rx: now - 1800, snr: 10, hops: 1 });
-		add({ conv: "ca1a1a1a1a1a1", out: true, from: "Pirate Radio", text: "great, hearing it at -92", ts: now - 1700, rx: now - 1700, status: "delivered", trip_ms: 850 });
-		add({ conv: "cb0b0b0b0b0b0", out: true, from: "Pirate Radio", text: "still on for saturday?", ts: now - 3600, rx: now - 3600, status: "unconfirmed", flood: true });
-		add({ conv: "#1", out: false, from: "Carol", text: "test from the bridge", ts: now - 120, rx: now - 120, snr: 4.25, hops: 3 });
-		mc.read["#0"] = 1;
-		mc.read["ca1a1a1a1a1a1"] = 3;
+		function said(conv, from, text, ago, snr, hops) {
+			return add({ conv: conv, out: false, from: from, text: text, ts: now - ago, rx: now - ago, snr: snr, hops: hops });
+		}
+		function mine(conv, text, ago, status, more) {
+			var m = { conv: conv, out: true, from: mc.name, text: text, ts: now - ago, rx: now - ago, status: status };
+			for (var k in more || {}) m[k] = more[k];
+			return add(m);
+		}
+		said("#0", "Bob", "anyone on tonight?", 90000, -5.5, 2);
+		mine("#0", "here, from the van", 89900, "sent");
+		said("#0", "🦜 Polly", "morning all", 2400, 6.25, 0);
+		said("#0", "🦜 Polly", "the repeater on the ridge is back", 2370, 6, 0);
+		said("#0", "🦜 Polly", "hearing it at -88 from town", 2340, 5.75, 0);
+		said("#0", "Kiwi 🇳🇿", "nice, it reaches the harbour too", 2100, -2.5, 3);
+		mine("#0", "great news", 1500, "sent");
+		mine("#0", "I'll drive up on saturday and check its battery", 1480, "sent");
+		var read0 = said("#0", "Alice", "count me in", 1200, 9.5, 1).id;
+		said("#0", "Bob", "same, if the weather holds", 600, -6, 2);
+		said("ca1a1a1a1a1a1", "Alice", "the repeater on the hill is back up", 1800, 10, 1);
+		var readA = mine("ca1a1a1a1a1a1", "great, hearing it at -92", 1700, "delivered", { trip_ms: 850 }).id;
+		mine("cb0b0b0b0b0b0", "still on for saturday?", 3600, "unconfirmed", { flood: true });
+		said("#1", "Carol", "test from the bridge", 120, 4.25, 3);
+		mc.read["#0"] = read0;
+		mc.read["ca1a1a1a1a1a1"] = readA;
 		mc.add = add;
 		return mc;
 	})();
@@ -1946,6 +1964,76 @@
 		return n;
 	}
 
+	/* Who said it, at a glance: a colour of their own, from their name (the
+	   same in every conversation, on every visit), and a picture: the first
+	   emoji in the name, or else its first letter. Thirteen hues, each light
+	   or deep: 26 colours, so few in one thread share one. Amber is left
+	   out: it's yours. */
+	var MC_HUES = [352, 12, 80, 110, 140, 165, 185, 203, 222, 248, 275, 300, 325];
+	function mcHue(name) {
+		var h = 0x811c9dc5, i;
+		for (i = 0; i < name.length; i++) h = Math.imul(h ^ name.charCodeAt(i), 0x01000193);
+		// FNV's low bits are poorly mixed, and they pick the colour: mix them (murmur3's finish)
+		h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+		h = (h >>> 0) % (MC_HUES.length * 2);
+		return { h: MC_HUES[h >> 1], deep: !!(h & 1) };
+	}
+	function mcColour(node, name) {
+		var c = mcHue(name || "");
+		node.style.setProperty("--h", String(c.h));
+		if (c.deep) node.classList.add("deep");
+	}
+	function mcRe(src) { try { return new RegExp(src, "u"); } catch (e) { return null; } }
+	var MC_PRES = mcRe("\\p{Emoji_Presentation}"), MC_PICT = mcRe("\\p{Extended_Pictographic}"),
+		MC_WORD = mcRe("[\\p{L}\\p{N}]") || /[A-Za-z0-9]/;
+	// A name's characters as one sees them: an emoji whole, with its skin
+	// tone, its joins (a 🏴‍☠️ is three) and a flag's two letters
+	var MC_SEG = window.Intl && Intl.Segmenter ? new Intl.Segmenter() : null;
+	function mcGlyphs(s) {
+		if (MC_SEG) return Array.from(MC_SEG.segment(s), function (g) { return g.segment; });
+		var cps = Array.from(s), out = [], i, c, last;
+		for (i = 0; i < cps.length; i++) {
+			c = cps[i];
+			last = out.length ? out[out.length - 1] : null;
+			if (last !== null && (/^[‍︎️⃣̀-ͯ]$/.test(c) || /^\ud83c[\udffb-\udfff]$/.test(c) ||
+				/^\udb40[\udc20-\udc7f]$/.test(c) || /‍$/.test(last) ||
+				(/^\ud83c[\udde6-\uddff]$/.test(c) && /^\ud83c[\udde6-\uddff]$/.test(last))))
+				out[out.length - 1] = last + c;
+			else out.push(c);
+		}
+		return out;
+	}
+	function mcPicture(name) {
+		var g = mcGlyphs(name || ""), i;
+		if (MC_PRES) for (i = 0; i < g.length; i++)
+			if (MC_PRES.test(g[i]) || /⃣/.test(g[i]) || (MC_PICT.test(g[i]) && /️/.test(g[i])))
+				return { emoji: true, text: g[i] };
+		for (i = 0; i < g.length; i++)
+			if (MC_WORD.test(g[i])) return { emoji: false, text: g[i].toLocaleUpperCase() };
+		return { emoji: false, text: "?" };
+	}
+	// A person's face: a circle in their hue (yours, amber); a channel's, a square
+	function mcFace(name, mine, cls) {
+		var p = mcPicture(name);
+		var a = el("span", { class: "mc-av" + (p.emoji ? " emoji" : "") + (mine ? " mine" : "") + (cls ? " " + cls : ""),
+			"aria-hidden": "true", text: p.text });
+		if (!mine) mcColour(a, name);
+		return a;
+	}
+	function mcTile(name, cls) {
+		var p = mcPicture(name);
+		return el("span", { class: "mc-av mc-tile" + (p.emoji ? " emoji" : "") + (cls ? " " + cls : ""), "aria-hidden": "true", text: p.text });
+	}
+	function mcHM(t) { return new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }); }
+	function mcSameDay(a, b) { return new Date(a * 1000).toDateString() === new Date(b * 1000).toDateString(); }
+	function mcDay(t) {
+		var d = new Date(t * 1000), now = new Date();
+		if (mcSameDay(t, now / 1000)) return "Today";
+		if (mcSameDay(t, now / 1000 - 86400)) return "Yesterday";
+		return d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric",
+			year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
+	}
+
 	function renderMessenger() {
 		clear(VIEW);
 		VIEW.appendChild(viewHead("Messenger", "a MeshCore radio on the USB port: its contacts and channels, as MeshCore's app has them"));
@@ -1992,7 +2080,7 @@
 
 		VIEW.appendChild(devPanel); VIEW.appendChild(chatPanel); VIEW.appendChild(chanPanel); VIEW.appendChild(conPanel);
 
-		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, open = null, shown = {}, timer = null;
+		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, open = null, shown = {}, thread = [], timer = null;
 		function alive() { return VIEW.contains(chat); }
 		function failed(e) {
 			if (String(e.message || e) === "unauthorized") { onError(e); return true; }
@@ -2074,22 +2162,24 @@
 		}
 		function showList() {
 			clear(listCol);
-			function item(conv, name, sub, unread) {
+			function item(conv, name, sub, unread, face) {
 				var b = el("button", { type: "button", class: "mc-item" + (open === conv ? " active" : ""),
 					onclick: function () { openConv(conv); } },
+					face,
 					el("span", { class: "mc-name", text: name }),
 					unread ? el("span", { class: "mc-unread", text: String(unread) }) : null,
 					el("span", { class: "mc-sub", text: sub }));
 				listCol.appendChild(b);
 			}
 			listCol.appendChild(el("div", { class: "nav-grp mc-grp", text: "Channels" }));
-			channels.forEach(function (c) { item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : "", c.unread); });
+			channels.forEach(function (c) { item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : "", c.unread, mcTile(c.name, "sm")); });
 			var chats = contacts.filter(function (c) { return c.type === "chat"; });
 			chats.sort(function (a, b) { return (b.last_message || 0) - (a.last_message || 0) || (b.last_advert || 0) - (a.last_advert || 0); });
 			listCol.appendChild(el("div", { class: "nav-grp mc-grp", text: "Contacts" }));
 			if (!chats.length) listCol.appendChild(el("div", { class: "muted mc-none", text: "No contacts yet: they come with adverts." }));
 			chats.forEach(function (c) {
-				item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : (c.flood ? "no route yet" : c.hops + " hop" + (c.hops === 1 ? "" : "s")), c.unread);
+				item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : (c.flood ? "no route yet" : c.hops ? c.hops + " hop" + (c.hops === 1 ? "" : "s") : "direct"),
+					c.unread, mcFace(c.name, false, "sm"));
 			});
 		}
 		function maxBytes() {
@@ -2115,44 +2205,82 @@
 				span.appendChild(el("button", { type: "button", class: "linkbtn mc-retry", text: " retry", onclick: function () { resend(m); } }));
 			return span;
 		}
-		function msgEl(m) {
-			var meta = [];
-			if (!m.out) {
-				if (m.from && open && open.charAt(0) === "#") meta.push(m.from);
-				if (m.snr != null) meta.push("SNR " + m.snr + " dB");
-				if (m.hops != null) meta.push(m.hops + " hop" + (m.hops === 1 ? "" : "s"));
-			}
-			meta.push(mcTime(m.ts));
-			return el("div", { class: "mc-msg" + (m.out ? " out" : ""), "data-id": String(m.id) },
-				el("div", { class: "mc-text", text: m.text }),
-				el("div", { class: "mc-meta" }, meta.join(" · ") + " ", m.out ? statusEl(m) : null));
+		// Who sent it: you, or the name it came with (a direct message's, the contact's)
+		function sender(m) {
+			if (m.out) return (st && st.name) || m.from || "you";
+			return m.from || (m.conv.charAt(0) === "#" ? "someone" : convName(m.conv));
 		}
+		// One sender's messages run together, as a chat app has them: a new
+		// group for another sender, another day, or after a few minutes' quiet
+		function startsGroup(prev, m) {
+			return !prev || !prev.out !== !m.out || sender(prev) !== sender(m) ||
+				!mcSameDay(prev.ts, m.ts) || Math.abs(m.ts - prev.ts) > 420;
+		}
+		function signal(m) {
+			var s = [];
+			if (m.snr != null) s.push("SNR " + m.snr + " dB");
+			if (m.hops != null) s.push(m.hops ? m.hops + " hop" + (m.hops === 1 ? "" : "s") : "direct");
+			return s.join(" · ");
+		}
+		// A group's first message carries the face, the name and the time; the
+		// rest, only their text (the time and signal show on hover)
+		function msgEl(m, head) {
+			var who = sender(m), sig = m.out ? "" : signal(m), when = new Date(m.ts * 1000).toLocaleString();
+			var row = el("div", { class: "mc-row" + (head ? " mc-head" : "") + (m.out ? " out" : ""), "data-id": String(m.id) });
+			if (!m.out) mcColour(row, who);
+			row.appendChild(el("div", { class: "mc-gut" },
+				head ? mcFace(who, m.out) : el("span", { class: "mc-gtime", title: when, text: mcHM(m.ts) })));
+			var body = el("div", { class: "mc-body" });
+			if (head) body.appendChild(el("div", { class: "mc-who" },
+				el("span", { class: "mc-author", text: who }),
+				el("span", { class: "mc-when", title: when, text: mcHM(m.ts) }),
+				sig ? el("span", { class: "mc-sig", text: sig }) : null));
+			body.appendChild(el("div", { class: "mc-text" }, m.text,
+				m.out ? statusEl(m) : null,
+				!head && sig ? el("span", { class: "mc-sig mc-hover", text: sig }) : null));
+			row.appendChild(body);
+			return row;
+		}
+		// Into the open thread: a new one at the end (under its day), a changed
+		// one (its delivery) where it is
 		function placeMsg(m) {
-			var node = msgEl(m), old = shown[m.id];
-			if (old) { threadBody.replaceChild(node, old); }
-			else {
-				var near = threadBody.scrollHeight - threadBody.scrollTop - threadBody.clientHeight < 60;
-				threadBody.appendChild(node);
-				if (near || m.out) threadBody.scrollTop = threadBody.scrollHeight;
+			var i, at = -1, node;
+			for (i = thread.length - 1; i >= 0 && at < 0; i--) if (thread[i].id === m.id) at = i;
+			if (at >= 0) {
+				thread[at] = m;
+				node = msgEl(m, startsGroup(thread[at - 1], m));
+				threadBody.replaceChild(node, shown[m.id]);
+				shown[m.id] = node;
+				return;
 			}
-			shown[m.id] = node;
+			var prev = thread[thread.length - 1];
+			var near = threadBody.scrollHeight - threadBody.scrollTop - threadBody.clientHeight < 60;
+			if (!prev) clear(threadBody);
+			if (!prev || !mcSameDay(prev.ts, m.ts))
+				threadBody.appendChild(el("div", { class: "mc-day", role: "separator" }, el("span", { text: mcDay(m.ts) })));
+			thread.push(m);
+			shown[m.id] = threadBody.appendChild(msgEl(m, startsGroup(prev, m)));
+			if (near || m.out) threadBody.scrollTop = threadBody.scrollHeight;
 		}
 		function openConv(conv) {
 			open = conv;
-			shown = {};
+			shown = {}; thread = [];
 			showList();
 			clear(threadHead);
 			var c = contacts.filter(function (x) { return x.conv === conv; })[0];
 			threadHead.appendChild(el("button", { type: "button", class: "linkbtn mc-back", text: "← all", onclick: function () {
 				chat.classList.remove("mc-open");
 			} }));
+			threadHead.appendChild(c ? mcFace(c.name, false, "sm") : mcTile(convName(conv), "sm"));
 			threadHead.appendChild(el("strong", { text: convName(conv) }));
-			if (c) threadHead.appendChild(el("span", { class: "muted", text: " · " + (c.flood ? "no route yet: messages go out to the whole mesh" : c.hops + " hop" + (c.hops === 1 ? "" : "s")) }));
+			if (c) threadHead.appendChild(el("span", { class: "muted", text: c.flood ? "no route yet: messages go out to the whole mesh" : c.hops ? c.hops + " hop" + (c.hops === 1 ? "" : "s") : "direct" }));
+			input.placeholder = "Message " + convName(conv);
 			chat.classList.add("mc-open");
-			clear(threadBody).appendChild(el("div", { class: "muted", text: "Loading…" }));
+			clear(threadBody).appendChild(el("div", { class: "muted mc-none", text: "Loading…" }));
 			call("pirate.meshcore", "messages", { conv: conv, limit: 100 }).then(function (r) {
 				if (!alive() || open !== conv) return;
 				clear(threadBody);
+				shown = {}; thread = [];
 				var list = r.messages || [];
 				if (!list.length) threadBody.appendChild(el("div", { class: "muted mc-none", text: "No messages yet." }));
 				list.forEach(placeMsg);
@@ -2231,7 +2359,8 @@
 			clear(conWrap);
 			if (!contacts.length) { conWrap.appendChild(el("div", { class: "placeholder", text: "No contacts yet." })); return; }
 			conWrap.appendChild(tableEl(["Name", "Kind", "Route", "Last advert", ""], contacts.map(function (c) {
-				return [el("strong", { text: c.name }), c.type, c.flood ? "none yet" : c.hops + " hop" + (c.hops === 1 ? "" : "s"),
+				return [el("span", { class: "mc-tname" }, c.type === "chat" ? mcFace(c.name, false, "xs") : mcTile(c.name, "xs"), el("strong", { text: c.name })),
+					c.type, c.flood ? "none yet" : c.hops ? c.hops + " hop" + (c.hops === 1 ? "" : "s") : "direct",
 					c.last_advert ? mcTime(c.last_advert) : "—",
 					el("span", { class: "fz-acts" },
 						c.flood ? null : btn("Forget route", { cls: "small", onclick: function () { contactOp("contact_reset_path", c); } }),

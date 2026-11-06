@@ -351,10 +351,13 @@ nRF52 board on Adafruit's bootloader) running MeshCore's companion firmware
 says nothing over USB, and the page says so) and the **Messenger** tab is its
 app, as MeshCore's is on a phone:
 
-- **Channels and contacts**, each with its unread messages; a thread with
-  each message's sender, SNR and hops, and for yours whether it was sent,
-  delivered (with the round trip) or not confirmed (*retry* sends it again,
-  as the same message).
+- **Channels and contacts**, each with its unread messages; a thread laid
+  out as a chat app's: each sender with a colour of their own (from their
+  name, the same everywhere) and a face (the first emoji in their name, or
+  its first letter), one sender's run of messages under one header, a line
+  between days; each message's SNR and hops, and for yours whether it was
+  sent, delivered (with the round trip) or not confirmed (*retry* sends it
+  again, as the same message).
 - **Channels**: add a #hashtag one (its key comes from its name), a private
   one (a random key) or one whose key you were given; see a key to share it;
   remove one.

@@ -489,24 +489,69 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .mc-grp { padding: 12px 12px 4px; }
 .mc-none { padding: 6px 12px; font-size: 12px; }
 .mc-item {
-	appearance: none; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 8px;
+	appearance: none; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: 10px;
 	width: 100%; text-align: left; background: transparent; border: 0; color: var(--txt);
-	font: inherit; padding: 7px 12px; cursor: pointer;
+	font: inherit; padding: 6px 12px; cursor: pointer;
 }
 .mc-item:hover { background: #16191c; }
 .mc-item.active { background: var(--panel-2); box-shadow: inset 2px 0 0 var(--accent); }
-.mc-name { color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mc-sub { grid-column: 1 / -1; font-size: 11px; color: var(--faint); }
-.mc-unread { background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: var(--r); align-self: center; }
+.mc-item > .mc-av { grid-column: 1; grid-row: 1 / span 2; align-self: center; }
+.mc-name { grid-column: 2; grid-row: 1; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mc-sub { grid-column: 2; grid-row: 2; font-size: 11px; color: var(--faint); }
+.mc-unread { grid-column: 3; grid-row: 1 / span 2; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 700; padding: 0 6px; border-radius: var(--r); align-self: center; }
+
+/* Faces: a person's a circle in the hue of their name (yours, amber), their
+   first emoji or first letter; a channel's a square */
+.mc-av {
+	--h: 210;
+	flex: none; display: inline-flex; align-items: center; justify-content: center;
+	width: 38px; height: 38px; border-radius: 50%; overflow: hidden;
+	background: hsl(var(--h), 34%, 21%); border: 1px solid hsl(var(--h), 40%, 36%);
+	color: hsl(var(--h), 85%, 80%); font-size: 16px; font-weight: 700; line-height: 1;
+	user-select: none; -webkit-user-select: none;
+}
+.mc-av.deep { background: hsl(var(--h), 62%, 30%); border-color: hsl(var(--h), 70%, 46%); color: hsl(var(--h), 100%, 86%); }
+.mc-av.emoji { font-size: 21px; font-weight: 400; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--sans); }
+.mc-av.mine { background: var(--accent-soft); border-color: rgba(224, 160, 64, .5); color: var(--accent); }
+.mc-av.mc-tile { border-radius: 7px; background: var(--panel-2); border-color: var(--line-3); color: var(--muted); }
+.mc-av.sm { width: 28px; height: 28px; font-size: 12px; }
+.mc-av.sm.emoji { font-size: 16px; }
+.mc-av.sm.mc-tile { border-radius: 5px; }
+.mc-av.xs { width: 22px; height: 22px; font-size: 11px; }
+.mc-av.xs.emoji { font-size: 13px; }
+.mc-av.xs.mc-tile { border-radius: 4px; }
+.mc-tname { display: inline-flex; align-items: center; gap: 8px; }
+
 .mc-thread { display: flex; flex-direction: column; min-width: 0; }
-.mc-thead { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.mc-thead { padding: 9px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .mc-thead strong { color: var(--hi); }
+.mc-thead .muted { font-size: 12px; }
 .mc-back { display: none; }
-.mc-msgs { flex: 1; overflow-y: auto; height: 46vh; min-height: 260px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
-.mc-msg { max-width: 78%; align-self: flex-start; background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r); padding: 6px 10px; }
-.mc-msg.out { align-self: flex-end; background: var(--accent-soft); border-color: rgba(224, 160, 64, .35); }
-.mc-text { color: var(--hi); white-space: pre-wrap; overflow-wrap: anywhere; }
-.mc-meta { font-size: 11px; color: var(--faint); margin-top: 2px; }
+
+/* The thread, as a chat app has it: everyone down the left, a group's first
+   message under its sender's face and name, the rest just their lines */
+.mc-msgs { flex: 1; overflow-y: auto; height: 50vh; min-height: 280px; padding: 4px 0 16px; display: flex; flex-direction: column; }
+.mc-msgs > .mc-none { padding: 12px 16px; }
+.mc-msgs > :first-child { margin-top: auto; }   /* a short thread sits down by the composer */
+.mc-day { display: flex; align-items: center; gap: 10px; margin: 18px 16px 2px; font-size: 11px; font-weight: 600; color: var(--faint); letter-spacing: .3px; }
+.mc-day::before, .mc-day::after { content: ""; flex: 1; border-top: 1px solid var(--line-2); }
+.mc-row { display: grid; grid-template-columns: 62px minmax(0, 1fr); padding: 1px 16px 1px 0; }
+.mc-row.mc-head { margin-top: 14px; padding-top: 3px; }
+.mc-day + .mc-row.mc-head { margin-top: 8px; }
+.mc-row:hover { background: rgba(255, 255, 255, .028); }
+.mc-gut { display: flex; justify-content: center; align-items: flex-start; }
+.mc-head .mc-gut { padding-top: 1px; }
+.mc-gtime { font-family: var(--mono); font-size: 10px; color: var(--faint); line-height: 21px; visibility: hidden; }
+.mc-row:hover .mc-gtime, .mc-row:hover .mc-hover { visibility: visible; }
+.mc-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.mc-author { color: hsl(var(--h), 75%, 76%); font-weight: 650; overflow-wrap: anywhere; }
+.mc-row.deep .mc-author { color: hsl(var(--h), 92%, 64%); }
+.mc-row.out .mc-author { color: var(--accent); }
+.mc-when { font-size: 11px; color: var(--faint); }
+.mc-sig { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.mc-hover { visibility: hidden; margin-left: 10px; white-space: nowrap; }
+.mc-text { color: var(--txt); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mc-text .mc-st { margin-left: 8px; font-size: 11px; color: var(--faint); white-space: nowrap; }
 .mc-st.mc-delivered { color: var(--ok); }
 .mc-st.mc-unconfirmed, .mc-st.mc-failed { color: var(--warn); }
 .mc-retry { font-size: 11px; }
@@ -595,7 +640,10 @@ a { color: var(--link); }
 	.mc-chat.mc-open .mc-list { display: none; }
 	.mc-chat.mc-open .mc-thread { display: flex; }
 	.mc-back { display: inline; }
-	.mc-msg { max-width: 90%; }
+	.mc-row { grid-template-columns: 52px minmax(0, 1fr); padding-right: 10px; }
+	.mc-day { margin-left: 10px; margin-right: 10px; }
+	.mc-av { width: 34px; height: 34px; font-size: 15px; }
+	.mc-av.emoji { font-size: 19px; }
 }
 @media (max-width: 520px) {
 	.grid { grid-template-columns: 1fr 1fr; gap: 8px; }
