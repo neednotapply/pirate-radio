@@ -37,10 +37,13 @@
 	}
 
 	// ubus "call" returns [status, data]; status 0 == ok, 6 == permission. An
-	// expired or unknown session comes back as JSON-RPC error -32002 instead.
+	// expired or unknown session comes back as JSON-RPC error -32002 instead,
+	// and an object nothing has registered (its service not installed or not
+	// running) as -32000, "Object not found": the views know that as status 4.
 	function callm(object, method, params) {
 		return rpc("call", [SID || NULL_SID, object, method, params || {}]).catch(function (e) {
 			if (e.code === -32002) { dropSession(); throw new Error("unauthorized"); }
+			if (e.code === -32000) throw new Error("ubus status 4");
 			throw e;
 		}).then(function (r) {
 			if (!Array.isArray(r)) throw new Error("bad ubus reply");
