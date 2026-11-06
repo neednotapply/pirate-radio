@@ -673,8 +673,11 @@
 	var VIEW = $("view");
 	function loading() { clear(VIEW).appendChild(el("div", { class: "loading", text: "Loading…" })); }
 	function viewHead(title, sub) {
+		var g = groupOf(current);
 		return el("div", { class: "view-head" },
-			el("h2", { text: title }), sub ? el("span", { class: "sub", text: sub }) : null);
+			g ? el("div", { class: "eyebrow", text: g }) : null,
+			el("div", { class: "view-title" },
+				el("h2", { text: title }), sub ? el("span", { class: "sub", text: sub }) : null));
 	}
 	function panel(title) {
 		var p = el("div", { class: "panel" });
@@ -685,10 +688,10 @@
 	/* ---------- Dashboard ---------- */
 
 	function tile(o) {
-		var t = el(o.tab ? "button" : "div", { class: "tile tone-" + (o.tone || "neutral") });
+		var t = el(o.tab ? "button" : "div", { class: "tile tone-" + (o.tone || "neutral") + (o.wide ? " span-2" : "") });
 		if (o.tab) { t.type = "button"; t.addEventListener("click", function () { setTab(o.tab); }); }
 		t.appendChild(el("span", { class: "k", text: o.k }));
-		t.appendChild(el("span", { class: "v", text: String(o.v) }));
+		t.appendChild(el("span", { class: "v", text: String(o.v), title: String(o.v) }));
 		if (o.s) t.appendChild(el("span", { class: "s", text: o.s }));
 		return t;
 	}
@@ -705,7 +708,7 @@
 		setNetPill(online, up.ssid);
 
 		var grid = el("div", { class: "grid" });
-		grid.appendChild(tile({ k: "Uplink", v: up.ssid || "—", tone: online ? "accent" : "bad",
+		grid.appendChild(tile({ k: "Uplink", v: up.ssid || "—", tone: online ? "accent" : "bad", wide: true,
 			s: online ? "online · " + (up.subnet || "") : "no internet route", tab: "survey" }));
 		grid.appendChild(tile({ k: "Hosts", v: d.hosts ? d.hosts.count : 0, tab: "hosts",
 			s: d.hosts && d.hosts.scanned ? "last scan " + d.hosts.scanned : "on the joined network" }));
@@ -2688,34 +2691,59 @@
 		VIEW.appendChild(el("div", { class: "placeholder", text: "Unknown section." }));
 	}
 
-	/* ---------- tabs / router ---------- */
+	/* ---------- sections (the sidebar) / router ---------- */
 
-	var TABS = [
-		["dashboard", "Dashboard"],
-		["sdr", "Radios & SDR"],
-		["hosts", "Hosts"],
-		["survey", "Wi-Fi Survey"],
-		["threats", "Threats"],
-		["router", "Router"],
-		["dreampi", "DreamPi"],
-		["drives", "Drives"],
-		["flipper", "Flipper"],
-		["capture", "Capture"],
-		["handshake", "Handshake"],
-		["firmware", "Firmware"]
+	var GROUPS = [
+		["Overview", [["dashboard", "Dashboard"]]],
+		["Radio", [["sdr", "Radios & SDR"]]],
+		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshake"]]],
+		["Network", [["hosts", "Hosts"], ["capture", "Capture"]]],
+		["USB devices", [["drives", "Drives"], ["flipper", "Flipper"], ["dreampi", "DreamPi"]]],
+		["System", [["router", "Router"], ["firmware", "Firmware"]]]
 	];
+	var TABS = [];
+	GROUPS.forEach(function (g) { TABS = TABS.concat(g[1]); });
 	var current = "dashboard";
 
-	function renderTabs() {
-		var nav = clear($("tabs"));
-		TABS.forEach(function (t) {
-			nav.appendChild(el("button", {
-				class: "tab" + (t[0] === current ? " active" : ""),
-				type: "button", text: t[1],
-				onclick: function () { setTab(t[0]); }
-			}));
-		});
+	function groupOf(id) {
+		for (var i = 0; i < GROUPS.length; i++)
+			if (GROUPS[i][1].some(function (t) { return t[0] === id; })) return GROUPS[i][0];
+		return "";
 	}
+
+	function renderTabs() {
+		var nav = clear($("tabs")), here = "";
+		GROUPS.forEach(function (g) {
+			nav.appendChild(el("div", { class: "nav-grp", text: g[0] }));
+			g[1].forEach(function (t) {
+				var b = el("button", {
+					class: "nav-item" + (t[0] === current ? " active" : ""),
+					type: "button", text: t[1],
+					onclick: function () {
+						menu(false);
+						if (t[0] !== current) window.scrollTo(0, 0);
+						setTab(t[0]);
+					}
+				});
+				if (t[0] === current) { b.setAttribute("aria-current", "page"); here = t[1]; }
+				nav.appendChild(b);
+			});
+		});
+		$("top-title").textContent = here;
+	}
+
+	// On a phone the sidebar is a drawer, opened from the strip at the top
+	function menu(open) {
+		document.body.classList.toggle("menu-open", open);
+		$("menu-btn").setAttribute("aria-expanded", open ? "true" : "false");
+	}
+	$("menu-btn").addEventListener("click", function () {
+		menu(!document.body.classList.contains("menu-open"));
+	});
+	$("scrim").addEventListener("click", function () { menu(false); });
+	document.addEventListener("keydown", function (ev) {
+		if (ev.key === "Escape" && document.body.classList.contains("menu-open")) menu(false);
+	});
 
 	function setTab(id) {
 		current = id;
@@ -2740,7 +2768,9 @@
 
 	function setNetPill(online, ssid) {
 		var p = $("net-pill");
-		if (online == null) { p.className = "pill"; p.textContent = "—"; return; }
+		// Shown once a page has said whether the router is online
+		p.hidden = online == null;
+		if (online == null) { p.className = "pill"; p.textContent = ""; return; }
 		p.className = "pill " + (online ? "ok" : "bad");
 		p.textContent = (online ? "online" : "offline") + (ssid ? " · " + ssid : "");
 	}

@@ -5,25 +5,40 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
 <title>Pirate Radio</title>
-<style>body { opacity: 0; background: #0b0f14; }</style>
+<style>body { opacity: 0; background: #131518; }</style>
 </head>
 <body>
-<header class="topbar">
-	<div class="brand">
-		<span class="brand-mark" aria-hidden="true">&#x259E;&#x259A;</span>
-		<div class="brand-text">
-			<strong id="devname">Pirate Radio</strong>
-			<small>Slate &middot; field station</small>
+<div class="shell">
+	<aside id="side" class="side">
+		<div class="brand">
+			<svg class="brand-mark" width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="square">
+				<path d="M12 10.5V21M8 21h8" stroke-width="1.8"/>
+				<circle cx="12" cy="8" r="1.9" fill="currentColor" stroke="none"/>
+				<path d="M8 4.2a5.4 5.4 0 0 0 0 7.6M16 4.2a5.4 5.4 0 0 1 0 7.6" stroke-width="1.6"/>
+				<path d="M4.8 1.8a9 9 0 0 0 0 12.4M19.2 1.8a9 9 0 0 1 0 12.4" stroke-width="1.6"/>
+			</svg>
+			<div class="brand-text">
+				<strong id="devname">Pirate Radio</strong>
+				<small>Slate &middot; field station</small>
+			</div>
 		</div>
+		<nav id="tabs" class="nav" aria-label="Sections"></nav>
+	</aside>
+	<div class="main-col">
+		<header class="topbar">
+			<button id="menu-btn" class="menu-btn" type="button" aria-label="Sections" aria-controls="side" aria-expanded="false">
+				<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 4.5h14M2 9h14M2 13.5h14" stroke="currentColor" stroke-width="1.6" fill="none"/></svg>
+			</button>
+			<span id="top-title" class="top-title"></span>
+			<div class="top-right">
+				<span id="demo-badge" class="badge badge-demo" hidden>demo data</span>
+				<span id="net-pill" class="pill" hidden></span>
+			</div>
+		</header>
+		<main id="view" class="view" aria-live="polite"></main>
 	</div>
-	<div class="top-right">
-		<span id="demo-badge" class="badge badge-demo" hidden>demo data</span>
-		<span id="net-pill" class="pill">&mdash;</span>
-	</div>
-</header>
-
-<nav id="tabs" class="tabs" aria-label="Sections"></nav>
-<main id="view" class="view" aria-live="polite"></main>
+</div>
+<div id="scrim" class="scrim"></div>
 
 <div id="login" class="overlay" hidden>
 	<form id="login-form" class="login-card">

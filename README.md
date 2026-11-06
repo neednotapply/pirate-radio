@@ -148,13 +148,15 @@ take that console for a GPS.
 card and jobs, with links to the aircraft map, the ISM live view and the
 recorded files (`http://192.168.1.1:8081/pirate-radio/`).
 
-**In the Pirate Radio UI** (`http://192.168.1.1/`): the *Radios & SDR* tab has the
-same status with every address the receivers serve, the aircraft map, the ISM
-devices rtl_433 has decoded (one row per device, with its latest readings) and
-the recorded files; using a radio hands the RTL-SDR to that job. The Dashboard,
-Hosts, Wi-Fi Survey, Threats, Router, Capture, Handshake and Firmware tabs cover
-the network, the router and firmware, the DreamPi tab the Dreamcast, the
-Drives tab USB drives and the Flipper tab a Flipper Zero (below).
+**In the Pirate Radio UI** (`http://192.168.1.1/`): its tabs are grouped down the
+left (on a phone, the menu button at the top opens them): *Overview* (the
+Dashboard), *Radio* (Radios & SDR), *Wi-Fi* (Survey, Threats, Handshake),
+*Network* (Hosts, Capture), *USB devices* (Drives, Flipper, DreamPi) and
+*System* (Router, Firmware). The *Radios & SDR* tab has the same status with
+every address the receivers serve, the aircraft map, the ISM devices rtl_433
+has decoded (one row per device, with its latest readings) and the recorded
+files; using a radio hands the RTL-SDR to that job. The DreamPi tab is for the
+Dreamcast, Drives for USB drives and Flipper for a Flipper Zero (below).
 
 **Over SSH:**
 
