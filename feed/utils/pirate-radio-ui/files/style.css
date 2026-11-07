@@ -71,7 +71,12 @@ body {
 .main-col { min-width: 0; }
 
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 18px 14px; min-width: 0; }
-.brand-mark { flex: none; display: block; color: var(--accent); }
+/* The mark: a skull and crossbones, the emoji, in the 24px the old one had */
+.brand-mark {
+	flex: none; display: grid; place-items: center; width: 24px; height: 24px; overflow: visible;
+	font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", var(--sans);
+	font-size: 22px; line-height: 1; user-select: none; -webkit-user-select: none;
+}
 .brand-text { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .brand-text strong { font-size: 15px; color: var(--hi); letter-spacing: .2px; }
 .brand-text small { color: var(--muted); font-size: 12px; }
