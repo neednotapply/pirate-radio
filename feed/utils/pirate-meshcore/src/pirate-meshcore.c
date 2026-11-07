@@ -61,6 +61,7 @@
 #define MAX_CHANNELS 40
 #define MAX_MSGS     2000
 #define MAX_TEXT     160     /* a message's text, in bytes, at most */
+#define MSG_TEXT     240     /* as kept: an image come as channel data, in its text form, is longer */
 #define MAX_NAME     32
 #define MAX_QUEUE    64
 #define MAX_CONVS    (MAX_CONTACTS + MAX_CHANNELS + 64)
@@ -258,7 +259,7 @@ struct msg {
 	uint32_t ack, trip;
 	int64_t ack_by;
 	char from[MAX_NAME + 1];    /* in a channel, who sent it */
-	char text[MAX_TEXT + 1];
+	char text[MSG_TEXT + 1];
 	uint32_t reply;             /* the message it answers ("@[Name] " first), or 0 */
 	char emoji[33];             /* a reaction's emoji: this is one */
 	uint32_t react;             /* a reaction's message, or 0 (not here, or not yet) */
@@ -1343,6 +1344,103 @@ static void on_message(const uint8_t *f, size_t n)
 	store_msg(m);
 }
 
+/* basE91, as MCOimg's text form has it (its v3 reference: the standard
+ * alphabet, the 13/14-bit queue) */
+static void b91(const uint8_t *p, size_t n, char *out, size_t size)
+{
+	static const char a[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&()*+,./:;<=>?@[]^_`{|}~\"";
+	uint32_t q = 0, v;
+	int bits = 0;
+	size_t o = 0, i;
+
+	for (i = 0; i < n && o + 3 < size; i++) {
+		q |= (uint32_t)p[i] << bits;
+		bits += 8;
+		if (bits > 13) {
+			v = q & 8191;
+			if (v > 88) {
+				q >>= 13;
+				bits -= 13;
+			} else {
+				v = q & 16383;
+				q >>= 14;
+				bits -= 14;
+			}
+			out[o++] = a[v % 91];
+			out[o++] = a[v / 91];
+		}
+	}
+	if (bits && o + 3 < size) {
+		out[o++] = a[q % 91];
+		if (bits > 7 || q > 90)
+			out[o++] = a[q / 91];
+	}
+	out[o] = 0;
+}
+
+/* Binary channel data (MeshCore's GROUP_DATA), as MCO Advanced lays it out
+ * (its CHANNEL_APP_DATA): under 0x0120, the sender's name (its length a
+ * varuint) and a byte naming what follows; under 0xFFF0, before that, a
+ * name and a legacy image. Its images (MCOimg) are kept in their text form,
+ * as a text message would bring them ("im3:" and v3's app payload in basE91,
+ * "im4:" and v4's body, "im:" and a legacy one), so the page reads both the
+ * same; MCO Advanced's other kinds, and MeshCore Open's, as the placeholder
+ * MCO Advanced keeps for them; anything else isn't for a chat */
+static void on_channel_data(const uint8_t *f, size_t n)
+{
+	char text[MSG_TEXT + 1], name[MAX_NAME + 1] = "";
+	const uint8_t *d = f + 9;
+	uint16_t type;
+	size_t dl, i = 0, nl = 0;
+	int shift = 0;
+	struct msg *m;
+
+	if (n < 9)
+		return;
+	type = f[6] | f[7] << 8;
+	dl = f[8];
+	if (9 + dl > n || (type != 0x0120 && type != 0xfff0 && type != 0x0100))
+		return;
+	if (type != 0x0100) {
+		for (i = 0; i < dl && i < 5; i++) {
+			nl |= (size_t)(d[i] & 0x7f) << shift;
+			shift += 7;
+			if (!(d[i] & 0x80))
+				break;
+		}
+		if (i >= dl || i == 5 || nl > dl - i - 1)
+			return;
+		i++;
+		snprintf(name, sizeof(name), "%.*s", (int)(nl < MAX_NAME ? nl : MAX_NAME), (const char *)d + i);
+		i += nl;
+	}
+	if (type == 0x0100) {
+		snprintf(text, sizeof(text), "mcoapp-unknown:0x0100");
+	} else if (type == 0xfff0) {
+		strcpy(text, "im:");
+		b91(d + i, dl - i, text + 3, sizeof(text) - 3);
+	} else if (i >= dl) {
+		snprintf(text, sizeof(text), "mcoapp-unknown:0x0120");
+	} else if (d[i] == 0x13) {
+		strcpy(text, "im3:");
+		b91(d + i, dl - i, text + 4, sizeof(text) - 4);
+	} else if (d[i] == 0x14) {
+		strcpy(text, "im4:");
+		b91(d + i + 1, dl - i - 1, text + 4, sizeof(text) - 4);
+	} else {
+		snprintf(text, sizeof(text), "mcoapp-unknown:0x0120:%u.%u", d[i] >> 4, d[i] & 15);
+	}
+	m = msg_new();
+	snprintf(m->conv, sizeof(m->conv), "#%u", f[4]);
+	m->snr4 = (int8_t)f[1];
+	m->path = f[5];
+	m->ts = m->rx = time(NULL);
+	snprintf(m->from, sizeof(m->from), "%s", name);
+	snprintf(m->text, sizeof(m->text), "%s", text);
+	classify(m, true);
+	store_msg(m);
+}
+
 static void on_vars(const uint8_t *f, size_t n)
 {
 	char s[MAX_FRAME + 1], *tok, *save;
@@ -1961,7 +2059,9 @@ static void on_frame(const uint8_t *f, size_t n)
 	case OP_SYNC:
 		if (code == RESP_CONTACT_MSG || code == RESP_CONTACT_MSG_V3 ||
 		    code == RESP_CHANNEL_MSG || code == RESP_CHANNEL_MSG_V3 || code == RESP_CHANNEL_DATA) {
-			if (code != RESP_CHANNEL_DATA)
+			if (code == RESP_CHANNEL_DATA)
+				on_channel_data(f, n);
+			else
 				on_message(f, n);
 			/* And the next, until there are none */
 			op_finish(o, NULL);
@@ -3487,9 +3587,22 @@ int main(int argc, char **argv)
 {
 	int c;
 
-	/* The reaction hashes, for its tests: -H mc1 <time> <text>, -H mco <time> <name, or -> <text> */
+	/* For its tests: the reaction hashes (-H mc1 <time> <text>, -H mco <time>
+	 * <name, or -> <text>) and MCOimg's basE91 (-H b91 <hex>) */
 	if (argc >= 2 && !strcmp(argv[1], "-H")) {
 		char h[9];
+
+		if (argc == 4 && !strcmp(argv[2], "b91")) {
+			uint8_t bin[256];
+			char out[400];
+			int bl = unhex(bin, sizeof(bin), argv[3]);
+
+			if (bl < 0)
+				return 2;
+			b91(bin, bl, out, sizeof(out));
+			printf("%s\n", out);
+			return 0;
+		}
 
 		if (argc == 5 && !strcmp(argv[2], "mc1")) {
 			mc1_hash(argv[4], strtoul(argv[3], NULL, 10), h);

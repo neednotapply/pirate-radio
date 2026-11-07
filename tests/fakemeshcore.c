@@ -551,6 +551,30 @@ static void on_control(char *line)
 		snprintf(t, sizeof(t), "Bob: %s", line + 5);
 		queue_channel_msg(0, t);
 		tickle();
+	} else if (!strncmp(line, "data ", 5)) {
+		/* Binary channel data: "data <index> <type, 4 hex> <payload hex>",
+		 * as RESP_CODE_CHANNEL_DATA_RECV brings it (SNR 7.5, no path) */
+		unsigned idx, type, b;
+		char hexs[400];
+		uint8_t *f = queue[nq];
+		size_t k = 0;
+
+		if (sscanf(line + 5, "%u %4x %399s", &idx, &type, hexs) != 3 || nq == 16)
+			return;
+		f[0] = 27;
+		f[1] = 30;
+		f[2] = f[3] = 0;
+		f[4] = idx;
+		f[5] = 0xff;
+		f[6] = type & 0xff;
+		f[7] = type >> 8;
+		while (hexs[2 * k] && hexs[2 * k + 1] && k < 165 && sscanf(hexs + 2 * k, "%2x", &b) == 1) {
+			f[9 + k] = b;
+			k++;
+		}
+		f[8] = k;
+		qlen[nq++] = 9 + k;
+		tickle();
 	} else if (!strcmp(line, "advert")) {
 		add_contact("Carol", 0xd3, 1, 0xff);
 		out(o, contact_frame(o, 0x8a, &contacts[ncontacts - 1]));

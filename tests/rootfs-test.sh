@@ -1905,6 +1905,25 @@ check "meshcore: react: one emoji" [ "$(mce react "{\"id\":$RB,\"emoji\":\"ok\"}
 # (Reacting read the channel, as sending does: news again, for what's kept)
 printf '%s\n' "chan still there?" > "$MC/ctl"
 sleep 2
+# Binary channel data, as MCO Advanced sends its images (MCOimg): kept in
+# their text form, as a text message would bring them; its other kinds, and
+# MeshCore Open's, as MCO Advanced's placeholder; anything else not at all.
+# The payloads and their text are MCO Advanced's own test fixtures
+check "meshcore: MCOimg's basE91, as its fixtures" [ "$(pirate-meshcore -H b91 137a018d0042be01) $(pirate-meshcore -H b91 b82008065340b26602) $(pirate-meshcore -H b91 1340002163a0e43301)" = 'g/5WjAL`NA CC&tj68MFSB TAYL>iBNGbA' ]
+N0=$(mc messages '{"conv":"#0","limit":200}' | jsonfilter -e '@.messages[*].id' | wc -l)
+printf '%s\n' "data 0 0120 04446f7261137a018d0042be01" > "$MC/ctl"
+printf '%s\n' "data 0 fff0 03457665b82008065340b26602" > "$MC/ctl"
+printf '%s\n' "data 0 0120 04446f726114010203" > "$MC/ctl"
+printf '%s\n' "data 0 0120 04446f72613100" > "$MC/ctl"
+printf '%s\n' "data 0 0100 deadbeef" > "$MC/ctl"
+printf '%s\n' "data 0 0130 0102" > "$MC/ctl"
+sleep 3
+check "meshcore: MCOimg v3 as channel data: its im3: text, its sender" [ "$(mc_msg '#0' 'im3:g/5WjAL`NA' from)|$(mc_msg '#0' 'im3:g/5WjAL`NA' snr | awk '{ print $1 + 0 }')" = "Dora|7.5" ]
+check "meshcore: MCOimg v1/v2 as channel data: its im: text" [ "$(mc_msg '#0' 'im:CC&tj68MFSB' from)" = Eve ]
+check "meshcore: MCOimg v4 as channel data: its im4: text" [ "$(mc_msg '#0' 'im4:6FYA' from)" = Dora ]
+check "meshcore: MCO Advanced's other kinds: its placeholder" [ "$(mc_msg '#0' 'mcoapp-unknown:0x0120:3.1' from)" = Dora ]
+check "meshcore: MeshCore Open's: its placeholder" [ -n "$(mc_msg '#0' 'mcoapp-unknown:0x0100' id)" ]
+check "meshcore: channel data not for a chat: nothing" [ "$(mc messages '{"conv":"#0","limit":200}' | jsonfilter -e '@.messages[*].id' | wc -l)" = $((N0 + 5)) ]
 echo "advert" > "$MC/ctl"
 sleep 1
 check "meshcore: an advert: a new contact" [ "$(mc contacts | jsonfilter -e '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|Carol|" ]

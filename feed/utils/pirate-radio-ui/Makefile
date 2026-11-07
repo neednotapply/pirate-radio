@@ -53,6 +53,10 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_DATA) ./files/index.html $(1)/www/index.html
 	$(INSTALL_DATA) ./files/app.js $(1)/www/app.js
 	$(INSTALL_DATA) ./files/style.css $(1)/www/style.css
+	# MCO Advanced's MCOimg decoder (MIT), loaded when the Messenger shows an image
+	$(INSTALL_DIR) $(1)/www/mcoimg
+	$(INSTALL_DATA) ./files/mcoimg/mcoimg-codec.global.js ./files/mcoimg/mcoimg-v3-codec.global.js \
+		./files/mcoimg/mcoimg-browser.global.js ./files/mcoimg/LICENSE $(1)/www/mcoimg/
 	# The version index.html loads app.js and style.css under, so browsers
 	# take the new ones after an update (uhttpd sends no cache headers)
 	cat ./files/app.js ./files/style.css | md5sum | cut -c1-12 > $(1)/www/ui-version

@@ -163,6 +163,9 @@
 		said("#0", "🦜 Polly", "https://giphy.com/gifs/8kejjglzkEprO", 560, 6, 0);
 		said("#0", "Alice", "the route's on the map: https://www.openstreetmap.org/#map=13/37.4220/-122.0840 (via the ridge)", 520, 9.5, 1);
 		said("#0", "Kiwi 🇳🇿", "g:8kejjglzkEprO", 480, -2.5, 3);
+		// MCOimg: a skull and crossbones, 16×20, made by MCO Advanced's own encoder; a v4 drawing
+		said("#0", "🦜 Polly", "im3:qLMcgdEQ`M}.*BtB%BKthdRJGquU?WHO^vW$0%>=|^Lm&%(C", 440, 6.5, 0);
+		said("#0", "Kiwi 🇳🇿", "im4:6FYA", 420, -2.5, 3);
 		said("ca1a1a1a1a1a1", "Alice", "the repeater on the hill is back up", 1800, 10, 1);
 		var readA = mine("ca1a1a1a1a1a1", "great, hearing it at -92", 1700, "delivered", { trip_ms: 850 }).id;
 		mine("cb0b0b0b0b0b0", "still on for saturday?", 3600, "unconfirmed", { flood: true });
@@ -2265,8 +2268,77 @@
 		return mcMediaOf(t);
 	}
 	function mcMediaLabel(text) {
-		var only = mcOnlyMedia(text);
+		var t = String(text || "").trim(), only = mcOnlyMedia(t);
+		if (MC_IMG.test(t)) return "Image";
+		if (mcPlaceholder(t)) return "A message this can't read";
 		return only ? (only.gif ? "GIF" : "Image") : null;
+	}
+
+	/* MCOimg, MCO Advanced's one-packet images: "im3:" (v3), "im:" (v1, v2)
+	   or "im4:" (v4) and its basE91, whole, by text or (the daemon writes it
+	   so) come as channel data. Drawn by MCO Advanced's own decoder
+	   (mcoimg/), loaded the first time one is shown; v4 has no JavaScript
+	   decoder yet, so it's said, not drawn */
+	var MC_IMG = /^im[34]?:[A-Za-z0-9!#$%&()*+,.\/:;<=>?@\[\]^_`{|}~"]+$/;
+	var MC_UIV = (function () {
+		var s = document.currentScript && document.currentScript.src, m = s && /[?&]v=([^&#]+)/.exec(s);
+		return m ? m[1] : "";
+	})();
+	var mcoimgLoad = null, mcoimgDrawn = {};
+	function mcoimgReady() {
+		if (window.MCOImgBrowser && window.MCOImgV3) return Promise.resolve();
+		if (!mcoimgLoad) {
+			mcoimgLoad = ["mcoimg-codec.global.js", "mcoimg-v3-codec.global.js", "mcoimg-browser.global.js"].reduce(function (p, f) {
+				return p.then(function () {
+					return new Promise(function (ok, bad) {
+						var s = document.createElement("script");
+						s.src = "mcoimg/" + f + (MC_UIV ? "?v=" + MC_UIV : "");
+						s.onload = ok;
+						s.onerror = function () { bad(new Error("MCOimg's decoder wouldn't load")); };
+						document.head.appendChild(s);
+					});
+				});
+			}, Promise.resolve());
+			mcoimgLoad.catch(function () { mcoimgLoad = null; });
+		}
+		return mcoimgLoad;
+	}
+	// An image's PNG (made once), and its size from the PNG's header
+	function mcoimgPng(text) {
+		if (!mcoimgDrawn[text]) {
+			var png = window.MCOImgBrowser.textToPngBytes(text);
+			var w = ((png[16] << 24) | (png[17] << 16) | (png[18] << 8) | png[19]) >>> 0;
+			var h = ((png[20] << 24) | (png[21] << 16) | (png[22] << 8) | png[23]) >>> 0;
+			mcoimgDrawn[text] = { url: URL.createObjectURL(window.MCOImgBrowser.pngBytesToBlob(png)), w: w, h: h };
+		}
+		return mcoimgDrawn[text];
+	}
+	// Drawn sharp, at a whole multiple of its size (pixel art), 160px high at most
+	function mcoimgEl(text, failed, swap) {
+		var box = el("span", { class: "mc-mcoimg", title: "MCOimg, MCO Advanced's image" });
+		if (/^im4:/.test(text)) {
+			failed("An MCOimg v4 drawing: not drawn here yet");
+			return null;
+		}
+		box.appendChild(el("span", { class: "mc-mcoimg-wait", text: "image…" }));
+		mcoimgReady().then(function () {
+			var d = mcoimgPng(text), k = Math.max(1, Math.floor(Math.min(160 / d.h, 320 / d.w)));
+			var img = el("img", { class: "mc-mcoimg-img", src: d.url, alt: "an image (MCOimg, " + d.w + "×" + d.h + ")",
+				width: String(d.w * k), height: String(d.h * k) });
+			swap(function () { clear(box).appendChild(img); });
+		}).catch(function () {
+			swap(function () { if (box.parentNode) box.parentNode.removeChild(box); });
+			failed("An MCOimg image this couldn't read");
+		});
+		return box;
+	}
+	// What MCO Advanced keeps for a kind it can't read, as it words it
+	function mcPlaceholder(text) {
+		var m = /^mcoapp-unknown:0x(0120|0100)(?::(\d+)\.(\d+))?$/.exec(String(text || "").trim());
+		if (!m) return null;
+		if (m[1] === "0100") return "A MeshCore Open message in a format this can't read";
+		var kinds = { 1: "an image (MCOimg)", 2: "compressed text (MCMP)", 3: "text (MCOtxt)" };
+		return "MCO Advanced's " + (kinds[m[2]] || "kind " + (m[2] || "?")) + (m[3] != null ? ", version " + m[3] : "") + ", in a form this can't read";
 	}
 	function mcCount(s, c) { return s.split(c).length - 1; }
 	function mcLinkify(text, media) {
@@ -3197,8 +3269,11 @@
 			// Its words, links clickable; images under them (a message that's
 			// only an image: the image, its link back if it won't load)
 			var words = men ? " " + men.rest : rep ? plain(m.text) : m.text, media = [], only = mcOnlyMedia(words);
-			var wordsEl = el("span", { class: "mc-words" + (only ? " mc-hide" : "") }, mcLinkify(words, media));
-			if (only && !media.length) {
+			var trimmed = String(words).trim(), mco = MC_IMG.test(trimmed) ? trimmed : null, ph = mcPlaceholder(trimmed), wordsEl;
+			if (ph) wordsEl = el("span", { class: "mc-words mc-ph", text: ph });
+			else if (mco) wordsEl = el("span", { class: "mc-words mc-hide" });
+			else wordsEl = el("span", { class: "mc-words" + (only ? " mc-hide" : "") }, mcLinkify(words, media));
+			if (!ph && !mco && only && !media.length) {
 				// meshcore-open's "g:ID": its page's link, should the GIF not load
 				media.push(only);
 				clear(wordsEl).appendChild(document.createTextNode("GIF: "));
@@ -3213,6 +3288,11 @@
 				var embeds = el("div", { class: "mc-embeds" });
 				media.forEach(function (x) { embeds.appendChild(mcEmbed(x, function () { wordsEl.classList.remove("mc-hide"); })); });
 				body.appendChild(embeds);
+			}
+			// An MCOimg: drawn; one this can't draw, said in words, not basE91
+			if (mco) {
+				var pic = mcoimgEl(mco, function (why) { wordsEl.textContent = why; wordsEl.className = "mc-words mc-ph"; }, keepBottom);
+				if (pic) body.appendChild(el("div", { class: "mc-embeds" }, pic));
 			}
 			var chips = reactsEl(m);
 			if (chips) body.appendChild(chips);
@@ -3339,6 +3419,12 @@
 			thread.forEach(function (m) { appendMsg(m, prev); prev = m; });
 		}
 		function nearBottom() { return threadBody.scrollHeight - threadBody.scrollTop - threadBody.clientHeight < 90; }
+		// A change that grows a message (an image drawn): at the newest still, if it was
+		function keepBottom(fn) {
+			var near = nearBottom();
+			fn();
+			if (near) toBottom();
+		}
 		function toBottom() {
 			threadBody.scrollTop = threadBody.scrollHeight;
 			newBelow = 0;

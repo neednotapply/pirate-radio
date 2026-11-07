@@ -400,6 +400,13 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   message that's only an image shows only the image. The images come
   straight from the internet to the browser viewing the page (with no
   referrer): with no connection, or the image gone, the link stays.
+- **MCOimg**, MCO Advanced's one-packet images (the meshcore-open fork's
+  pixel art: `im3:` for v3, `im:` for v1 and v2, by a text message or as a
+  channel's binary data), drawn with MCO Advanced's own decoder, sharp, at
+  a whole multiple of their size. v4 drawings (`im4:`) have no JavaScript
+  decoder yet: they say so. MCO Advanced's other kinds of channel data
+  (its compressed text, MCMP and MCOtxt) show as the placeholder MCO
+  Advanced shows for a kind it can't read.
 - **Channels** (# for public and #hashtag ones, a lock for private ones):
   add a #hashtag one (its key comes from its name), a private one (a random
   key) or one whose key you were given; a channel's gear shows its key, to
@@ -420,7 +427,10 @@ app, as MeshCore's is on a phone, laid out as Discord is:
 USB, after MeshCore's documentation and firmware (both MIT; the code here is
 Pirate Radio's own). Its reactions follow MeshCore One's documented format
 and meshcore-open's; meshcore-open's table of reaction emoji
-(`src/mco_emoji.h`) is its own, MIT. Messages are kept on the router in
+(`src/mco_emoji.h`) is its own, MIT. A channel's binary data (MeshCore's
+GROUP_DATA) is read as MCO Advanced lays it out (its `CHANNEL_APP_DATA`):
+an MCOimg kept in its text form, so the page draws it as it would a text
+message's. Messages are kept on the router in
 `/etc/pirate-meshcore/messages`, through a flash that keeps settings, as the
 radio passes each on once. It waits while no radio is plugged in, and gpsd
 leaves its serial port alone. MeshCore reports no satellites or fix, so a
@@ -495,13 +505,15 @@ Tested in this repository's tests and builds:
   delivery and its absence, a retry, replies sent and received (MeshCore's
   app's and MeshCore Open's), reactions (MeshCore One's and meshcore-open's
   hashes against their own examples, reactions come, found and kept, one
-  sent, none counted as news), hashtag, private and keyed channels,
+  sent, none counted as news), MCOimg come as channel data (MCO
+  Advanced's fixtures: v3, v1/v2, v4, its other kinds, MeshCore Open's, and
+  data that isn't a chat's), hashtag, private and keyed channels,
   adverts, its name, its GPS and the survey taking its position, contacts'
   routes, traces along them (to a person and to a repeater), a route found
   and kept, telemetry and its absence, removal, the messages kept through a
   restart, and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 659
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 666
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
@@ -574,3 +586,6 @@ and the scripts are MIT (ports of DreamPi's modem code and Dreamcast Now
 config server, MIT, © Luke Benstead); `src/dcnet.c` is Flycast's DCNet
 client, GPL-2.0-or-later. `feed/utils/pirate-meshcore/src/mco_emoji.h` is
 meshcore-open's table of reaction emoji, MIT, © 2025 zjs81.
+`feed/utils/pirate-radio-ui/files/mcoimg/` is MCO Advanced's MCOimg decoder
+(from HDDen/meshcore-open, its README there says from where exactly), MIT,
+© 2025 zjs81.

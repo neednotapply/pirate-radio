@@ -742,6 +742,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .mc-embed { display: block; max-width: 100%; border-radius: 6px; overflow: hidden; background: var(--inset); line-height: 0; }
 .mc-img { display: block; height: 200px; width: auto; max-width: min(100%, 420px); object-fit: contain; }
 .mc-embed:hover .mc-img { filter: brightness(1.06); }
+/* MCOimg: pixel art, drawn sharp at a whole multiple of its size */
+.mc-mcoimg { display: inline-block; line-height: 0; border-radius: 4px; overflow: hidden; background: var(--inset); }
+.mc-mcoimg-img { display: block; image-rendering: crisp-edges; image-rendering: pixelated; }
+.mc-mcoimg-wait { display: inline-block; padding: 6px 10px; font-size: 12px; line-height: 1.4; color: var(--faint); }
+.mc-words.mc-ph { font-style: italic; color: var(--muted); }
 
 /* Reactions: a chip each emoji under its message, how many, yours lit;
    + (on hover) or the toolbar's face for a picker */
