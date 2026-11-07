@@ -22,9 +22,11 @@ SHADOW=${PIRATE_SHADOW:-/etc/shadow}
 UBUS=${PIRATE_UBUS:-ubus}
 
 cmd_status() {
-	local host model fw up load mt mf ma fst fsf online
+	local host model fw up load mt mf ma fst fsf online lan
 
 	host=$(cat /proc/sys/kernel/hostname 2>/dev/null)
+	# Its address on its own network (its Wi-Fi and LAN jacks): where its page is
+	lan=$($UBUS call network.interface.lan status 2>/dev/null | jsonfilter -e '@["ipv4-address"][0].address' 2>/dev/null)
 	model=$(cat /tmp/sysinfo/model 2>/dev/null)
 	fw=$(. /etc/openwrt_release 2>/dev/null; printf '%s' "$DISTRIB_DESCRIPTION")
 	up=$(cut -d. -f1 /proc/uptime 2>/dev/null)
@@ -53,6 +55,7 @@ cmd_status() {
 	json_add_int free "${fsf:-0}"
 	json_close_object
 	json_add_boolean online "$online"
+	json_add_string lan_ip "${lan:-}"
 	json_dump
 }
 

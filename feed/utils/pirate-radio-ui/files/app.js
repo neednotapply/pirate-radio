@@ -653,7 +653,7 @@
 			hostname: "pirate-radio", model: "GL.iNet GL-AR750S (NAND)", firmware: "OpenWrt 25.12.6",
 			uptime: 48212, load: "0.42",
 			memory: { total: 124416, free: 38160, available: 51232 },
-			flash: { total: 98304, free: 72960 }, online: true
+			flash: { total: 98304, free: 72960 }, online: true, lan_ip: "192.168.8.1"
 		},
 		"pirate.router:clients": {
 			clients: [
@@ -5082,10 +5082,26 @@
 		if (ev.key === "Escape" && document.body.classList.contains("menu-open")) menu(false);
 	});
 
+	// The line under the name in the sidebar: the router's address on its own
+	// network (where this page is), as it has it now; until it says, the
+	// address this browser used. Asked once signed in, at most once a minute
+	var addrAsked = 0;
+	function showAddr() {
+		var a = $("devaddr");
+		if (!a) return;   // (an index.html from before, still in the browser's cache)
+		if (!a.textContent) a.textContent = location.hostname;
+		if (Date.now() - addrAsked < 60000) return;
+		addrAsked = Date.now();
+		call("pirate.router", "status").then(function (s) {
+			if (s && s.lan_ip) a.textContent = s.lan_ip;
+		}).catch(function () {});
+	}
+
 	function setTab(id) {
 		id = ALIASES[id] || id;
 		current = id;
 		VIEW.classList.remove("view-app");   // the Messenger's: the whole window
+		showAddr();
 		renderTabs();
 		try { location.hash = id; } catch (e) {}
 		if (id === "dashboard") return loadDashboard();

@@ -593,6 +593,13 @@ check "router: ACL is valid JSON" jsonfilter -i /usr/share/rpcd/acl.d/pirate-rou
 check "router: rpcd plugin offers status, clients, adblock" sh -c '"'"$RR"'" list | jsonfilter -e "@.status" >/dev/null && "'"$RR"'" list | jsonfilter -e "@.clients" >/dev/null && "'"$RR"'" list | jsonfilter -e "@.adblock" >/dev/null'
 check "router: status has a positive memory total" sh -c '[ "$(pirate-router status | jsonfilter -e "@.memory.total")" -gt 0 ]'
 check "router: status online is a boolean" sh -c 'pirate-router status | jsonfilter -e "@.online" | grep -qxE "true|false"'
+# (Its address on its own network, as netifd has its LAN: the sidebar shows it)
+cat > "$T/ubus-lan" <<-'EOF'
+	#!/bin/sh
+	[ "$*" = "call network.interface.lan status" ] && echo '{"up":true,"ipv4-address":[{"address":"10.69.4.20","mask":24}]}'
+EOF
+chmod +x "$T/ubus-lan"
+check "router: status has the LAN's address" [ "$(PIRATE_UBUS="$T/ubus-lan" pirate-router status | jsonfilter -e '@.lan_ip')" = 10.69.4.20 ]
 printf '%s\n' '1700000000 b8:27:eb:aa:bb:cc 192.168.1.10 raspberrypi *' '1700000000 3c:22:fb:12:34:56 192.168.1.23 * *' > "$T/leases"
 PIRATE_LEASES="$T/leases" pirate-router clients > "$T/clients.out"
 check "router: clients parsed from the leases (unknown host -> -)" sh -c "[ \"\$(jsonfilter -i $T/clients.out -e '@.clients[0].host') \$(jsonfilter -i $T/clients.out -e '@.clients[0].ip') \$(jsonfilter -i $T/clients.out -e '@.clients[1].host')\" = 'raspberrypi 192.168.1.10 -' ]"
