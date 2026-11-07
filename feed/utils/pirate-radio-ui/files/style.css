@@ -142,10 +142,7 @@ body {
 	cursor: pointer;
 }
 .menu-btn:hover { border-color: var(--line-3); color: var(--hi); }
-.top-title { font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
-	transition: opacity .15s ease-out; }
-/* Only once the page's own title is out of sight (it says it first) */
-.title-off .top-title { opacity: 0; visibility: hidden; transition: opacity .15s ease-out, visibility 0s linear .15s; }
+.top-title { font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 /* ---- pills & badges ---- */
@@ -183,17 +180,15 @@ body {
 
 /* ---- main view ---- */
 .view { padding: 6px 28px 56px; max-width: 1180px; }
-.view-head { margin: 0 0 16px; }
+/* A page's group and what it's for, on a line (its title is the strip's) */
+.view-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; margin: 4px 0 16px; }
 .eyebrow {
 	font-size: 11px;
 	font-weight: 600;
 	text-transform: uppercase;
 	letter-spacing: .09em;
 	color: var(--accent);
-	margin-bottom: 2px;
 }
-.view-title { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; }
-.view-head h2 { font-size: 22px; font-weight: 600; margin: 0; color: var(--hi); letter-spacing: .1px; }
 .view-head .sub { color: var(--muted); font-size: 13px; }
 
 /* ---- grid of tiles ---- */
@@ -915,7 +910,6 @@ a { color: var(--link); }
 	.top-title { flex-shrink: 0; max-width: 40vw; }
 	.top-right .pill { max-width: 46vw; }
 	.view { padding: 16px 16px 48px; }
-	.view-head h2 { font-size: 20px; }
 	.view.view-app { padding: 0; }
 	.mc-app { grid-template-columns: 1fr; height: calc(100vh - 49px); height: calc(100dvh - 49px); min-height: 0; border: 0; border-radius: 0; }
 	.mc-side { border-right: 0; }
