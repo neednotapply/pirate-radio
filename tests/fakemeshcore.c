@@ -529,8 +529,19 @@ static void on_frame(const uint8_t *f, size_t n)
 static void on_control(char *line)
 {
 	uint8_t o[200];
+	char *r, *w;
 
 	line[strcspn(line, "\n")] = 0;
+	/* A line down, in a message (a reaction's), written as \n */
+	for (r = w = line; *r; r++, w++) {
+		if (r[0] == '\\' && r[1] == 'n') {
+			*w = '\n';
+			r++;
+		} else {
+			*w = *r;
+		}
+	}
+	*w = 0;
 	if (!strncmp(line, "msg ", 4)) {
 		queue_contact_msg(line + 4);
 		tickle();

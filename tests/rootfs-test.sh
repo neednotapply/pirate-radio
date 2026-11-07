@@ -1877,6 +1877,34 @@ check "meshcore: a reply with a time: to the one then" [ "$(mc_msg '#0' "@[Pirat
 echo "chan @[Nobody] hello?" > "$MC/ctl"
 sleep 2
 check "meshcore: a mention of no one here: no reply" [ -z "$(mc_msg '#0' '@[Nobody] hello?' reply)" ]
+# Reactions, as MeshCore One sends them ("@[Name]emoji", the message's hash
+# a line down) and meshcore-open ("r:hash:ii"): the hashes as theirs (their
+# own examples), one come and found its message, one sent
+check "meshcore: reaction hashes, as MeshCore One's" [ "$(pirate-meshcore -H mc1 1704067200 Hello) $(pirate-meshcore -H mc1 1760000000 'café 👍 ok') $(pirate-meshcore -H mc1 1704067200 '👍')" = "b45pc4ek 8b5qzwf6 z5kxjbn0" ]
+check "meshcore: reaction hashes, as meshcore-open's" [ "$(pirate-meshcore -H mco 1700000000 Bob hello) $(pirate-meshcore -H mco 1700000000 - hi) $(pirate-meshcore -H mco 1704067200 A 'abcd😀')" = "e779 b5bd 917f" ]
+RT=$(mc_msg '#0' 'anyone about' ts)
+RH=$(pirate-meshcore -H mc1 "$RT" 'anyone about')
+U1=$(mc channels | jsonfilter -e '@.channels[0].unread')
+printf '%s\n' "chan @[Bob]👍\\n$RH" > "$MC/ctl"
+MH=$(pirate-meshcore -H mco "$RT" Bob 'anyone about')
+printf '%s\n' "chan r:$MH:05" > "$MC/ctl"
+sleep 2
+check "meshcore: a reaction comes: to its message" [ "$(mc messages '{"conv":"#0"}' | jsonfilter -e "@.messages[@.emoji='👍'].react")" = "$RB" ]
+check "meshcore: a reaction comes: not a reply" [ -z "$(mc messages '{"conv":"#0"}' | jsonfilter -e "@.messages[@.emoji='👍'].reply")" ]
+check "meshcore: meshcore-open's: its emoji, its message" [ "$(mc_msg '#0' "r:$MH:05" emoji)|$(mc_msg '#0' "r:$MH:05" react)" = "🔥|$RB" ]
+check "meshcore: reactions aren't news" [ "$(mc channels | jsonfilter -e '@.channels[0].unread')" = "$U1" ]
+TA=$(mc_msg ca1a1a1a1a1a1 'hi alice' ts)
+printf '%s\n' "msg ❤️\\n$(pirate-meshcore -H mc1 "$TA" 'hi alice')" > "$MC/ctl"
+sleep 2
+check "meshcore: a reaction comes, to ours, between two" [ "$(mc messages '{"conv":"ca1a1a1a1a1a1"}' | jsonfilter -e "@.messages[@.emoji='❤️'].react")" = "$(mc_msg ca1a1a1a1a1a1 'hi alice' id)" ]
+check "meshcore: react" mc_ok react "{\"id\":$RB,\"emoji\":\"🎉\"}"
+check "meshcore: react: as MeshCore One's, on the air" sh -c "grep -qxF 'chan 0 @[Bob]🎉' '$MC/fake.log' && grep -qxF '$RH' '$MC/fake.log'"
+check "meshcore: react: kept as one, to its message" [ "$(mc messages '{"conv":"#0"}' | jsonfilter -e "@.messages[@.emoji='🎉'].react")" = "$RB" ]
+check "meshcore: react, between two" sh -c "'$FZ_UBUS' -s '$MC/ubus.sock' -t 30 call pirate.meshcore react '{\"id\":$(mc_msg ca1a1a1a1a1a1 'hello router' id),\"emoji\":\"👍\"}' | jsonfilter -e '@.ok' | grep -qx true && grep -qxF 'send a1a1a1a1a1a1 0 👍' '$MC/fake.log'"
+check "meshcore: react: one emoji" [ "$(mce react "{\"id\":$RB,\"emoji\":\"ok\"}")" = "emoji: one emoji" ]
+# (Reacting read the channel, as sending does: news again, for what's kept)
+printf '%s\n' "chan still there?" > "$MC/ctl"
+sleep 2
 echo "advert" > "$MC/ctl"
 sleep 1
 check "meshcore: an advert: a new contact" [ "$(mc contacts | jsonfilter -e '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|Carol|" ]
@@ -1954,6 +1982,7 @@ check "meshcore: kept: delivered stays delivered" [ "$(mc_msg ca1a1a1a1a1a1 'hi 
 check "meshcore: kept: something unread, to keep" [ "$U0" -gt 0 ]
 check "meshcore: kept: what was read" [ "$(mc channels | jsonfilter -e '@.channels[0].unread')" = "$U0" ]
 check "meshcore: kept: what a reply answers" [ "$(mc_msg '#0' '@[Bob] right here' reply)" = "$RB" ]
+check "meshcore: kept: what a reaction is to" [ "$(mc messages '{"conv":"#0"}' | jsonfilter -e "@.messages[@.emoji='👍'].react")" = "$RB" ]
 # Unplugged
 kill "$MC_FAKE"
 check "meshcore: unplugged: absent" mc_wait '@.state' absent

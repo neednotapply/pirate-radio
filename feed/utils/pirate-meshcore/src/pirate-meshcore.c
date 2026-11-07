@@ -49,6 +49,8 @@
 #include <libubox/utils.h>
 #include <libubus.h>
 
+#include "mco_emoji.h"
+
 /* Adafruit's nRF52 bootloader's USB vendor: LilyGo's T-Echo, RAK's 4631 */
 #define MC_VID "239a"
 
@@ -258,6 +260,8 @@ struct msg {
 	char from[MAX_NAME + 1];    /* in a channel, who sent it */
 	char text[MAX_TEXT + 1];
 	uint32_t reply;             /* the message it answers ("@[Name] " first), or 0 */
+	char emoji[33];             /* a reaction's emoji: this is one */
+	uint32_t react;             /* a reaction's message, or 0 (not here, or not yet) */
 };
 
 struct conv_read {
@@ -467,7 +471,9 @@ static void put_msg_line(FILE *f, const struct msg *m)
 	put_esc(f, m->from);
 	fputc('\t', f);
 	put_esc(f, m->text);
-	fprintf(f, "\t%u\n", m->reply);
+	fprintf(f, "\t%u\t%u\t", m->reply, m->react);
+	put_esc(f, m->emoji);
+	fputc('\n', f);
 }
 
 /* A reply, as MeshCore's apps write one: "@[Name] " first. MeshCore's own
@@ -604,6 +610,330 @@ static void store_status(const struct msg *m)
 	store_line("s\t%u\t%s\t%u\t%u\t%u\n", m->id, m->status, m->trip, m->ack, m->attempt);
 }
 
+/* ---------- reactions ----------
+ *
+ * MeshCore has none in its protocol: its apps send one as a message.
+ * MeshCore One's: "@[Name]emoji" and, on the next line, a hash of the
+ * message reacted to (in a channel; "emoji@[Name]" before its 1.4.1),
+ * "emoji" and the hash between two. The hash: SHA-256 of the message's
+ * text (a channel message's after its "Name:", spaces cut from its ends)
+ * and its sender's time (4 bytes, little-endian), the first 5 bytes in
+ * Crockford's base 32. meshcore-open's: "r:hash:ii", ii its table's emoji,
+ * the hash the low 16 bits of a string hash (Dart's, over UTF-16) of the
+ * time, the sender's name (in a channel) and the text's first 5 UTF-16
+ * units. Written from their descriptions; the table is meshcore-open's. */
+
+struct reaction {
+	bool mco;                   /* meshcore-open's */
+	char emoji[33];
+	char name[MAX_NAME + 1];    /* in a channel, MeshCore One's: whose message ("": anyone's) */
+	char hash[9];               /* MeshCore One's: 8 base 32; meshcore-open's: 4 hex */
+};
+
+/* The next character's code point and its length in bytes (bad UTF-8: one byte, U+FFFD) */
+static int utf8_next(const uint8_t *p, uint32_t *cp)
+{
+	int n = *p < 0x80 ? 1 : (*p & 0xe0) == 0xc0 ? 2 : (*p & 0xf0) == 0xe0 ? 3 : (*p & 0xf8) == 0xf0 ? 4 : 0;
+	int i;
+
+	if (!n) {
+		*cp = 0xfffd;
+		return 1;
+	}
+	*cp = n == 1 ? *p : *p & (0x7f >> n);
+	for (i = 1; i < n; i++) {
+		if ((p[i] & 0xc0) != 0x80) {
+			*cp = 0xfffd;
+			return 1;
+		}
+		*cp = *cp << 6 | (p[i] & 0x3f);
+	}
+	return n;
+}
+
+/* One emoji, as a reaction's must be: a picture (U+2000 up, or a keycap or
+ * a symbol with its emoji selector), and what joins to it, no more */
+static bool reaction_emoji(const char *s)
+{
+	const uint8_t *p = (const uint8_t *)s;
+	uint32_t cp, first = 0, prev = 0;
+	bool sel = false;
+	int n = 0;
+
+	if (!*p || strlen(s) > 32)
+		return false;
+	while (*p) {
+		p += utf8_next(p, &cp);
+		if (cp == 0xfffd || cp < 0x21)
+			return false;
+		if (!n++) {
+			first = cp;
+		} else if (cp == 0xfe0f || cp == 0x20e3) {
+			sel = true;
+		} else if (!(cp == 0xfe0e || cp == 0x200d || (cp >= 0x1f3fb && cp <= 0x1f3ff) ||
+			     (cp >= 0xe0020 && cp <= 0xe007f) || (prev == 0x200d && cp >= 0x2000) ||
+			     (n == 2 && first >= 0x1f1e6 && first <= 0x1f1ff && cp >= 0x1f1e6 && cp <= 0x1f1ff))) {
+			return false;
+		}
+		prev = cp;
+	}
+	return first >= 0x2000 || sel;
+}
+
+static void mc1_hash(const char *text, uint32_t ts, char out[9])
+{
+	static const char b32[] = "0123456789abcdefghjkmnpqrstvwxyz";
+	uint8_t b[MAX_TEXT + 8], d[32];
+	size_t n = strnlen(text, MAX_TEXT);
+	uint64_t v = 0;
+	int i;
+
+	memcpy(b, text, n);
+	wr32(b + n, ts);
+	sha256(b, n + 4, d);
+	for (i = 0; i < 5; i++)
+		v = v << 8 | d[i];
+	for (i = 7; i >= 0; i--, v >>= 5)
+		out[i] = b32[v & 31];
+	out[8] = 0;
+}
+
+/* Dart's string hash (one at a time, over UTF-16), as meshcore-open uses it */
+static uint32_t oaat(uint32_t h, uint32_t unit)
+{
+	h += unit;
+	h += h << 10;
+	return h ^ h >> 6;
+}
+
+static uint32_t oaat_utf16(uint32_t h, const char *s, int max)
+{
+	const uint8_t *p = (const uint8_t *)s;
+	uint32_t cp;
+	int n = 0;
+
+	while (*p && (max < 0 || n < max)) {
+		p += utf8_next(p, &cp);
+		if (cp >= 0x10000) {
+			h = oaat(h, 0xd800 + ((cp - 0x10000) >> 10));
+			if (++n == max)
+				break;
+			h = oaat(h, 0xdc00 + ((cp - 0x10000) & 0x3ff));
+		} else {
+			h = oaat(h, cp);
+		}
+		n++;
+	}
+	return h;
+}
+
+static uint16_t mco_hash(uint32_t ts, const char *name, const char *text)
+{
+	char num[12];
+	uint32_t h;
+
+	snprintf(num, sizeof(num), "%u", ts);
+	h = oaat_utf16(0, num, -1);
+	if (name)
+		h = oaat_utf16(h, name, -1);
+	h = oaat_utf16(h, text, 5);
+	h += h << 3;
+	h ^= h >> 11;
+	h += h << 15;
+	h &= 0x3fffffff;
+	return (h ? h : 1) & 0xffff;
+}
+
+static bool is_hex(const char *s, int n)
+{
+	int i;
+
+	for (i = 0; i < n; i++)
+		if (!isxdigit((unsigned char)s[i]) || isupper((unsigned char)s[i]))
+			return false;
+	return true;
+}
+
+/* A reaction, if this message's text is one */
+static bool parse_reaction(const char *text, bool channel, struct reaction *r)
+{
+	const char *nl, *tail, *at, *close, *e;
+	size_t hl, i, n = strlen(text);
+
+	memset(r, 0, sizeof(*r));
+	if (n == 9 && !strncmp(text, "r:", 2) && text[6] == ':' && is_hex(text + 2, 4) && is_hex(text + 7, 2)) {
+		unsigned idx = strtoul(text + 7, NULL, 16);
+
+		if (idx >= sizeof(mco_emoji) / sizeof(mco_emoji[0]))
+			return false;
+		r->mco = true;
+		memcpy(r->hash, text + 2, 4);
+		snprintf(r->emoji, sizeof(r->emoji), "%s", mco_emoji[idx]);
+		return true;
+	}
+	nl = strrchr(text, '\n');
+	/* Its newline come back a space, from a channel's echo of it */
+	if (!nl && channel && strstr(text, "@["))
+		nl = strrchr(text, ' ');
+	if (!nl || strlen(nl + 1) != 8)
+		return false;
+	tail = nl + 1;
+	for (i = 0; i < 8; i++) {
+		char c = tolower((unsigned char)tail[i]);
+
+		if (!isdigit((unsigned char)c) && !(c >= 'a' && c <= 'z' && c != 'u'))
+			return false;
+		r->hash[i] = c == 'o' ? '0' : c == 'i' || c == 'l' ? '1' : c;
+	}
+	hl = nl - text;
+	for (at = text; at + 1 < nl && (at[0] != '@' || at[1] != '['); at++)
+		;
+	if (at + 1 >= nl) {
+		/* No name: between two (or a channel's for anyone's) */
+		if (hl >= sizeof(r->emoji))
+			return false;
+		memcpy(r->emoji, text, hl);
+	} else if (!channel) {
+		return false;
+	} else if (at == text) {
+		/* "@[Name]emoji": the name to its last "]" */
+		for (close = nl - 1; close > at + 1 && *close != ']'; close--)
+			;
+		if (*close != ']' || close - (at + 2) > MAX_NAME || nl - close - 1 >= (long)sizeof(r->emoji))
+			return false;
+		memcpy(r->name, at + 2, close - (at + 2));
+		memcpy(r->emoji, close + 1, nl - close - 1);
+	} else {
+		/* "emoji@[Name]", before MeshCore One's 1.4.1 */
+		e = nl - 1;
+		if (*e != ']' || e - (at + 2) > MAX_NAME || at - text >= (long)sizeof(r->emoji))
+			return false;
+		memcpy(r->name, at + 2, e - (at + 2));
+		memcpy(r->emoji, text, at - text);
+	}
+	return reaction_emoji(r->emoji) && (!channel || !r->name[0] || strlen(r->name) == strnlen(r->name, MAX_NAME));
+}
+
+/* The text a hash is of: a channel message's with spaces and tabs cut from its ends */
+static void hash_text(const struct msg *t, bool trim, char *out, size_t size)
+{
+	const char *s = t->text, *e = s + strlen(s);
+
+	if (trim) {
+		while (*s == ' ' || *s == '\t')
+			s++;
+		while (e > s && (e[-1] == ' ' || e[-1] == '\t'))
+			e--;
+	}
+	snprintf(out, size, "%.*s", (int)(e - s), s);
+}
+
+/* A message's hashes, as reactions to it would have them: worked out once */
+struct thash {
+	char mc1[9], mc1_trim[9];   /* MeshCore One's (between two, untrimmed and trimmed) */
+	char mco[5];                /* meshcore-open's */
+};
+
+static void msg_hashes(const struct msg *t, struct thash *h)
+{
+	bool ch = t->conv[0] == '#';
+	char body[MAX_TEXT + 1];
+
+	hash_text(t, ch, body, sizeof(body));
+	mc1_hash(body, t->ts, h->mc1);
+	hash_text(t, true, body, sizeof(body));
+	mc1_hash(body, t->ts, h->mc1_trim);
+	snprintf(h->mco, sizeof(h->mco), "%04x", mco_hash(t->ts, ch ? t->from : NULL, t->text));
+}
+
+static bool hashes_match(const struct reaction *r, const struct msg *t, const struct thash *h)
+{
+	if (t->emoji[0])
+		return false;
+	if (r->mco)
+		return !strcmp(h->mco, r->hash);
+	if (t->conv[0] == '#' && r->name[0] && strcmp(r->name, t->from))
+		return false;
+	return !strcmp(h->mc1, r->hash) || !strcmp(h->mc1_trim, r->hash);
+}
+
+static bool reaction_matches(const struct reaction *r, const struct msg *t)
+{
+	struct thash h;
+
+	if (t->emoji[0])
+		return false;
+	msg_hashes(t, &h);
+	return hashes_match(r, t, &h);
+}
+
+/* The message a reaction is to: the newest of its conversation's to match
+ * (of its last 600: reactions are to what's recent) */
+static uint32_t react_target(const struct msg *m, const struct reaction *r)
+{
+	int i, seen = 0;
+
+	for (i = (int)(m - msgs) - 1; i >= 0 && seen < 600; i--) {
+		if (strcmp(msgs[i].conv, m->conv))
+			continue;
+		seen++;
+		if (reaction_matches(r, &msgs[i]))
+			return msgs[i].id;
+	}
+	return 0;
+}
+
+/* A message come: reactions here before it, waiting for it (on a mesh,
+ * a reaction can come before what it's to) */
+static void react_pending(const struct msg *t, bool keep)
+{
+	struct reaction r;
+	struct thash h;
+	bool hashed = false;
+	int i, seen = 0;
+
+	if (t->emoji[0])
+		return;
+	for (i = (int)(t - msgs) - 1; i >= 0 && seen < 500; i--) {
+		struct msg *m = &msgs[i];
+
+		if (strcmp(m->conv, t->conv))
+			continue;
+		seen++;
+		if (!m->emoji[0] || m->react || !parse_reaction(m->text, m->conv[0] == '#', &r))
+			continue;
+		if (!hashed) {
+			msg_hashes(t, &h);
+			hashed = true;
+		}
+		if (!hashes_match(&r, t, &h))
+			continue;
+		m->react = t->id;
+		m->seq = ++seq;
+		if (keep)
+			store_line("x\t%u\t%u\n", m->id, t->id);
+	}
+}
+
+/* A message come or kept: a reaction (and to what), or a reply (to what),
+ * and the reactions it was waiting for */
+static void classify(struct msg *m, bool keep)
+{
+	struct reaction r;
+
+	if (!m->out && parse_reaction(m->text, m->conv[0] == '#', &r)) {
+		snprintf(m->emoji, sizeof(m->emoji), "%s", r.emoji);
+		m->reply = 0;
+		m->react = react_target(m, &r);
+		return;
+	}
+	if (!m->emoji[0]) {
+		if (!m->out)
+			m->reply = reply_target(m);
+		react_pending(m, keep);
+	}
+}
+
 static struct msg *msg_new(void)
 {
 	struct msg *m;
@@ -623,7 +953,7 @@ static struct msg *msg_new(void)
 
 static void store_load(void)
 {
-	char line[1024], *f[16], *s;
+	char line[1024], *f[18], *s;
 	FILE *fp = fopen(opt_store, "r");
 	int n;
 
@@ -632,7 +962,7 @@ static void store_load(void)
 	while (fgets(line, sizeof(line), fp)) {
 		line[strcspn(line, "\n")] = 0;
 		store_lines++;
-		for (n = 0, s = line; n < 16; n++) {
+		for (n = 0, s = line; n < 18; n++) {
 			f[n] = s;
 			s = strchr(s, '\t');
 			if (!s) {
@@ -660,11 +990,17 @@ static void store_load(void)
 			unesc(f[14]);
 			snprintf(m->from, sizeof(m->from), "%s", f[13]);
 			snprintf(m->text, sizeof(m->text), "%s", f[14]);
-			/* What it answers: kept, or (a store from before replies) worked out */
+			/* What it answers, what it reacts to: kept, or (a store from
+			 * before them) worked out as it would be now */
 			if (n >= 16)
 				m->reply = strtoul(f[15], NULL, 10);
-			else if (!m->out)
-				m->reply = reply_target(m);
+			if (n >= 18) {
+				m->react = strtoul(f[16], NULL, 10);
+				unesc(f[17]);
+				snprintf(m->emoji, sizeof(m->emoji), "%s", f[17]);
+			} else {
+				classify(m, false);
+			}
 			/* Sent and never heard of again: not now, either */
 			if (m->out && (!strcmp(m->status, "queued") || !strcmp(m->status, "sent")))
 				snprintf(m->status, sizeof(m->status), "%s", "unconfirmed");
@@ -687,6 +1023,12 @@ static void store_load(void)
 
 			if (u)
 				*u = strtoul(f[2], NULL, 10);
+		} else if (f[0][0] == 'x' && n >= 3) {
+			/* A reaction's message, come after it */
+			struct msg *m = msg_by_id(strtoul(f[1], NULL, 10));
+
+			if (m && m->emoji[0])
+				m->react = strtoul(f[2], NULL, 10);
 		}
 	}
 	fclose(fp);
@@ -997,7 +1339,7 @@ static void on_message(const uint8_t *f, size_t n)
 			memmove(m->text, sep + 2, strlen(sep + 2) + 1);
 		}
 	}
-	m->reply = reply_target(m);
+	classify(m, true);
 	store_msg(m);
 }
 
@@ -1964,7 +2306,7 @@ static void refresh_cb(struct uloop_timeout *t)
 
 enum {
 	A_TO, A_TEXT, A_ID, A_CONV, A_SINCE, A_BEFORE, A_LIMIT, A_NAME, A_ENABLED, A_FLOOD,
-	A_KEY, A_INDEX, A_SECRET, A_REPLY,
+	A_KEY, A_INDEX, A_SECRET, A_REPLY, A_EMOJI,
 	__A_MAX
 };
 
@@ -1984,6 +2326,7 @@ static const struct blobmsg_policy pol_all[__A_MAX] = {
 	[A_INDEX] = { "index", BLOBMSG_TYPE_UNSPEC },
 	[A_SECRET] = { "secret", BLOBMSG_TYPE_UNSPEC },
 	[A_REPLY] = { "reply", BLOBMSG_TYPE_UNSPEC },
+	[A_EMOJI] = { "emoji", BLOBMSG_TYPE_UNSPEC },
 };
 static struct blob_attr *tb[__A_MAX];
 
@@ -1992,6 +2335,7 @@ static const struct blobmsg_policy p_send[] = {
 	{ "to", BLOBMSG_TYPE_STRING }, { "text", BLOBMSG_TYPE_STRING }, { "reply", BLOBMSG_TYPE_INT32 },
 };
 static const struct blobmsg_policy p_id[] = { { "id", BLOBMSG_TYPE_INT32 } };
+static const struct blobmsg_policy p_react[] = { { "id", BLOBMSG_TYPE_INT32 }, { "emoji", BLOBMSG_TYPE_STRING } };
 static const struct blobmsg_policy p_messages[] = {
 	{ "conv", BLOBMSG_TYPE_STRING }, { "before", BLOBMSG_TYPE_INT32 }, { "limit", BLOBMSG_TYPE_INT32 },
 };
@@ -2107,9 +2451,14 @@ static void conv_stats(void)
 				continue;
 			snprintf(cstat[ncstat].conv, 16, "%s", m->conv);
 			cstat[ncstat].unread = 0;
-			cstat[ncstat].last = m->rx ? m->rx : m->ts;
+			cstat[ncstat].last = 0;
 			ncstat++;
 		}
+		/* A reaction is neither news nor the conversation's last word */
+		if (m->emoji[0])
+			continue;
+		if (!cstat[j].last)
+			cstat[j].last = m->rx ? m->rx : m->ts;
 		u = read_upto(m->conv, false);
 		if (!m->out && m->id > (u ? *u : 0))
 			cstat[j].unread++;
@@ -2347,8 +2696,14 @@ static void add_msg(struct blob_buf *b, const struct msg *m)
 	if (m->from[0])
 		blobmsg_add_string(b, "from", m->from);
 	blobmsg_add_string(b, "text", m->text);
+	/* A reaction: its emoji, and its message once that's here */
+	if (m->emoji[0]) {
+		blobmsg_add_string(b, "emoji", m->emoji);
+		if (m->react)
+			blobmsg_add_u32(b, "react", m->react);
+	}
 	/* A reply: what it answers, if that is still kept */
-	if (m->reply) {
+	if (m->reply && !m->emoji[0]) {
 		const struct msg *r = msg_by_id(m->reply);
 
 		blobmsg_add_u32(b, "reply", m->reply);
@@ -2453,15 +2808,17 @@ static int m_poll(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
  * queued; its status follows (sent, then delivered or unconfirmed). A
  * reply (the id of the message it answers) goes as MeshCore's app sends
  * one, "@[Name] " first. */
+static int send_wire(struct ubus_context *c, struct ubus_request_data *req, const struct contact *ct, int idx,
+		     const char *conv, const char *wire, uint32_t reply, uint32_t react, const char *emoji);
+
 static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		  const char *method, struct blob_attr *msg)
 {
 	const char *to, *text, *err;
 	char wire[MAX_TEXT + MAX_NAME + 8], conv[16], eb[96];
-	uint8_t f[MAX_FRAME], key[PUB_KEY];
+	uint8_t key[PUB_KEY];
 	struct contact *ct = NULL;
-	struct msg *m, *re = NULL;
-	struct op *o;
+	struct msg *re = NULL;
 	size_t tl;
 	int idx = -1, kl, i;
 	int64_t rid;
@@ -2522,6 +2879,19 @@ static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
 			return reply_error(c, req, eb);
 		}
 	}
+	return send_wire(c, req, ct, idx, conv, wire, re ? re->id : 0, 0, NULL);
+}
+
+/* A message (as it goes on the air) to a contact or a channel: kept at
+ * once, queued, its status following; a reply, or a reaction */
+static int send_wire(struct ubus_context *c, struct ubus_request_data *req, const struct contact *ct, int idx,
+		     const char *conv, const char *wire, uint32_t reply, uint32_t react, const char *emoji)
+{
+	uint8_t f[MAX_FRAME];
+	struct msg *m;
+	struct op *o;
+	size_t tl;
+
 	m = msg_new();
 	m->out = true;
 	m->ts = m->rx = time(NULL);
@@ -2529,7 +2899,10 @@ static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
 	snprintf(m->from, sizeof(m->from), "%s", self.name);
 	snprintf(m->conv, sizeof(m->conv), "%s", conv);
 	snprintf(m->text, sizeof(m->text), "%s", wire);
-	m->reply = re ? re->id : 0;
+	m->reply = reply;
+	m->react = react;
+	if (emoji)
+		snprintf(m->emoji, sizeof(m->emoji), "%s", emoji);
 	tl = strlen(m->text);
 	if (ct) {
 		f[0] = CMD_SEND_TXT_MSG;
@@ -2566,6 +2939,50 @@ static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
 	blobmsg_add_u32(&rb, "seq", seq);
 	ubus_send_reply(c, req, rb.head);
 	return UBUS_STATUS_OK;
+}
+
+/* React to a message, as MeshCore One does: in a channel "@[Name]emoji"
+ * and, on the next line, the message's hash; between two, "emoji" and
+ * its hash (meshcore-open shows these too) */
+static int m_react(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		   const char *method, struct blob_attr *msg)
+{
+	char wire[MAX_TEXT + 1], body[MAX_TEXT + 1], h[9];
+	const char *emoji, *err;
+	struct contact *ct = NULL;
+	struct msg *t;
+	int64_t id;
+	int idx = -1, i;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (!arg_num(A_ID, &id) || id <= 0 || !(t = msg_by_id(id)) || t->emoji[0])
+		return reply_error(c, req, "id: a message (not a reaction)");
+	emoji = arg_str(A_EMOJI);
+	if (!emoji || !reaction_emoji(emoji))
+		return reply_error(c, req, "emoji: one emoji");
+	hash_text(t, t->conv[0] == '#', body, sizeof(body));
+	mc1_hash(body, t->ts, h);
+	if (t->conv[0] == '#') {
+		idx = atoi(t->conv + 1);
+		for (i = 0; i < nchannels && channels[i].idx != idx; i++)
+			;
+		if (i == nchannels)
+			return reply_error(c, req, "that channel is gone");
+		if (!t->from[0])
+			return reply_error(c, req, "that message came with no name to react to");
+		snprintf(wire, sizeof(wire), "@[%s]%s\n%s", t->from, emoji, h);
+	} else {
+		uint8_t key[6];
+
+		unhex(key, sizeof(key), t->conv + 1);
+		if (!(ct = contact_by_prefix(key, 6)))
+			return reply_error(c, req, "that contact is gone");
+		snprintf(wire, sizeof(wire), "%s\n%s", emoji, h);
+	}
+	return send_wire(c, req, ct, idx, t->conv, wire, 0, t->id, emoji);
 }
 
 /* Send one again that wasn't confirmed: the same message (time and text),
@@ -3028,6 +3445,7 @@ static const struct ubus_method methods[] = {
 	UBUS_METHOD("poll", m_poll, p_since),
 	UBUS_METHOD("send", m_send, p_send),
 	UBUS_METHOD("resend", m_resend, p_id),
+	UBUS_METHOD("react", m_react, p_react),
 	UBUS_METHOD("read", m_read, p_conv),
 	UBUS_METHOD("advert", m_advert, p_advert),
 	UBUS_METHOD("set_name", m_set_name, p_name),
@@ -3069,6 +3487,21 @@ int main(int argc, char **argv)
 {
 	int c;
 
+	/* The reaction hashes, for its tests: -H mc1 <time> <text>, -H mco <time> <name, or -> <text> */
+	if (argc >= 2 && !strcmp(argv[1], "-H")) {
+		char h[9];
+
+		if (argc == 5 && !strcmp(argv[2], "mc1")) {
+			mc1_hash(argv[4], strtoul(argv[3], NULL, 10), h);
+			printf("%s\n", h);
+			return 0;
+		}
+		if (argc == 6 && !strcmp(argv[2], "mco")) {
+			printf("%04x\n", mco_hash(strtoul(argv[3], NULL, 10), strcmp(argv[4], "-") ? argv[4] : NULL, argv[5]));
+			return 0;
+		}
+		return 2;
+	}
 	while ((c = getopt(argc, argv, "d:s:m:u:p:a:")) != -1) {
 		switch (c) {
 		case 'p':

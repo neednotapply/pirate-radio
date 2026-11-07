@@ -720,6 +720,34 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .mc-cstatus { padding-top: 4px; }
 .mc-cstatus:empty { display: none; }
 
+/* Reactions: a chip each emoji under its message, how many, yours lit;
+   + (on hover) or the toolbar's face for a picker */
+.mc-reacts { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
+.mc-react {
+	appearance: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px;
+	background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 12px; color: var(--txt);
+	font: inherit; font-size: 12px; line-height: 1; cursor: pointer;
+}
+.mc-react:hover { border-color: var(--line-3); background: #262a2f; }
+.mc-react.mine { background: rgba(224, 160, 64, .14); border-color: rgba(224, 160, 64, .55); cursor: default; }
+.mc-remoji { font-size: 15px; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--sans); }
+.mc-rcount { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.mc-react.mine .mc-rcount { color: var(--accent); }
+.mc-react-add { color: var(--muted); font-size: 14px; opacity: 0; }
+.mc-row:hover .mc-react-add, .mc-row.mc-sel .mc-react-add, .mc-react-add:focus-visible { opacity: 1; }
+.mc-act-react { font-size: 15px; padding: 1px 8px; }
+.mc-pop.picker { width: auto; }
+.mc-pickwrap { padding: 10px 12px 12px; }
+.mc-pickhead { margin-bottom: 8px; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 240px; }
+.mc-picker { display: grid; grid-template-columns: repeat(6, 38px); gap: 4px; }
+.mc-pop.sheet .mc-picker { grid-template-columns: repeat(6, 1fr); }
+.mc-pick-e {
+	appearance: none; height: 38px; background: none; border: 0; border-radius: 6px; cursor: pointer;
+	font-size: 21px; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--sans);
+}
+.mc-pick-e:hover, .mc-pick-e:focus-visible { background: var(--panel-2); }
+.mc-pick-in { width: 100%; height: 30px; margin-top: 8px; }
+
 /* Who: a face or name to click, anywhere, for their profile */
 .mc-pick { cursor: pointer; }
 .mc-author.mc-pick:hover, .mc-author.mc-pick:focus-visible { text-decoration: underline; }

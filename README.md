@@ -384,6 +384,16 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   telemetry* (their battery, and their position and sensors if they share
   them with you); *Message*, *Mention* (`@[Name]` in the composer),
   *Remove*. Someone in a channel who isn't a contact can be mentioned.
+- **Reactions**, as Discord's: a chip each emoji under the message it's
+  to, how many, who on hover, yours lit; click one to add yours, or the
+  face on a message's toolbar for a picker (or any emoji typed). MeshCore
+  has none in its protocol: its apps send a reaction as a message.
+  MeshCore One's (`@[Name]👍` and, a line down, an 8-character hash of the
+  message: its text and its sender's time, through SHA-256, in Crockford's
+  base 32) are read and sent; meshcore-open's (`r:hash:index`, into its
+  table of emoji) are read. The router finds each one's message, keeps
+  one that comes before its message until that does (as MeshCore One
+  does), and counts none as news.
 - **Channels** (# for public and #hashtag ones, a lock for private ones):
   add a #hashtag one (its key comes from its name), a private one (a random
   key) or one whose key you were given; a channel's gear shows its key, to
@@ -402,7 +412,9 @@ app, as MeshCore's is on a phone, laid out as Discord is:
 
 `pirate-meshcore` (its own package) speaks MeshCore's companion protocol over
 USB, after MeshCore's documentation and firmware (both MIT; the code here is
-Pirate Radio's own). Messages are kept on the router in
+Pirate Radio's own). Its reactions follow MeshCore One's documented format
+and meshcore-open's; meshcore-open's table of reaction emoji
+(`src/mco_emoji.h`) is its own, MIT. Messages are kept on the router in
 `/etc/pirate-meshcore/messages`, through a flash that keeps settings, as the
 radio passes each on once. It waits while no radio is plugged in, and gpsd
 leaves its serial port alone. MeshCore reports no satellites or fix, so a
@@ -475,13 +487,15 @@ Tested in this repository's tests and builds:
   build's silence, connecting, its details, contacts and channels, the
   messages it kept and those that come, sending to contacts and channels,
   delivery and its absence, a retry, replies sent and received (MeshCore's
-  app's and MeshCore Open's), hashtag, private and keyed channels,
+  app's and MeshCore Open's), reactions (MeshCore One's and meshcore-open's
+  hashes against their own examples, reactions come, found and kept, one
+  sent, none counted as news), hashtag, private and keyed channels,
   adverts, its name, its GPS and the survey taking its position, contacts'
   routes, traces along them (to a person and to a repeater), a route found
   and kept, telemetry and its absence, removal, the messages kept through a
   restart, and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 646
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 659
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
@@ -552,4 +566,5 @@ GPL-2.0. Each packaged program keeps its own licence (in its Makefile's
 `PKG_LICENSE`). In `feed/net/dreampi/`, `src/dreampi.c`, `src/dcnow-config.c`
 and the scripts are MIT (ports of DreamPi's modem code and Dreamcast Now
 config server, MIT, © Luke Benstead); `src/dcnet.c` is Flycast's DCNet
-client, GPL-2.0-or-later.
+client, GPL-2.0-or-later. `feed/utils/pirate-meshcore/src/mco_emoji.h` is
+meshcore-open's table of reaction emoji, MIT, © 2025 zjs81.

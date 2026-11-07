@@ -141,7 +141,19 @@
 		said("#0", "🦜 Polly", "morning all", 2400, 6.25, 0);
 		var ridge = said("#0", "🦜 Polly", "the repeater on the ridge is back", 2370, 6, 0);
 		said("#0", "🦜 Polly", "hearing it at -88 from town", 2340, 5.75, 0);
-		said("#0", "Kiwi 🇳🇿", "@[🦜 Polly] nice, it reaches the harbour too", 2100, -2.5, 3).reply = ridge.id;
+		var kiwi = said("#0", "Kiwi 🇳🇿", "@[🦜 Polly] nice, it reaches the harbour too", 2100, -2.5, 3);
+		kiwi.reply = ridge.id;
+		// Reactions, as MeshCore One sends them (their hashes stand-ins here)
+		function reacted(to, from, emoji, ago) {
+			var me = from === null, ch = to.conv.charAt(0) === "#";
+			return add({ conv: to.conv, out: me, from: me ? mc.name : from, text: (ch ? "@[" + to.from + "]" : "") + emoji + "\nb45pc4ek",
+				emoji: emoji, react: to.id, ts: now - ago, rx: now - ago, status: me ? "sent" : undefined });
+		}
+		reacted(ridge, "Bob", "👍", 2330);
+		reacted(ridge, "Alice", "👍", 2320);
+		reacted(ridge, "Alice", "👍", 2318);   // passed on twice: one
+		reacted(ridge, null, "❤️", 2300);
+		reacted(kiwi, "🦜 Polly", "😂", 2050);
 		mine("#0", "great news", 1500, "sent");
 		var drive = mine("#0", "I'll drive up on saturday and check its battery", 1480, "sent");
 		var alice = said("#0", "Alice", "@[" + mc.name + "] count me in", 1200, 9.5, 1);
@@ -161,7 +173,7 @@
 	function demoMcConv(c) {
 		var unread = 0, last = 0, upto = DEMO_MC.read[c.conv] || 0;
 		DEMO_MC.msgs.forEach(function (m) {
-			if (m.conv !== c.conv) return;
+			if (m.conv !== c.conv || m.emoji) return;   // a reaction is no news
 			last = m.rx || m.ts;
 			if (!m.out && m.id > upto) unread++;
 		});
@@ -239,6 +251,16 @@
 					m.rx = m.ts;
 					list.push(m);
 				}
+				// Now and then, reactions to something said lately
+				if (list.length > 4 && rnd(5) === 0) {
+					var to = list[list.length - 1 - rnd(4)], nr = 1 + rnd(3);
+					if (to.emoji) to = list[list.length - 1];
+					for (k = 0; k < nr && !to.emoji; k++) {
+						var rp = people[rnd(people.length)], em = ["👍", "❤️", "😂", "🔥", "👀", "🙏"][rnd(6)];
+						list.push({ conv: conv, out: false, from: rp.name, emoji: em, rto: to, ts: t + 30 + k * 7, rx: t + 30 + k * 7,
+							text: (conv.charAt(0) === "#" ? "@[" + to.from + "]" : "") + em + "\nb45pc4ek" });
+					}
+				}
 			}
 			gen = gen.concat(list);
 		}
@@ -253,6 +275,8 @@
 		all.forEach(function (m) {
 			if (m.re) { m.reply = m.re.id; delete m.re; }
 			else if (m.reply && oldIds[m.reply] && oldIds[m.reply] !== m) m.reply = oldIds[m.reply].id;
+			if (m.rto) { m.react = m.rto.id; delete m.rto; }
+			else if (m.react && oldIds[m.react]) m.react = oldIds[m.react].id;
 		});
 		// Read up to a few from the end, here and there: news to show
 		mc.read = {};
@@ -751,6 +775,16 @@
 					DEMO_MC.add({ conv: m.conv, out: false, from: "Alice", text: "got it 👍", ts: t, rx: t, snr: 9.5, hops: 1 });
 				}, 2500);
 			}, 2200);
+			return { ok: true, id: m.id, seq: DEMO_MC.seq };
+		},
+		"pirate.meshcore:react": function (p) {
+			var t = DEMO_MC.msgs.filter(function (x) { return x.id === p.id && !x.emoji; })[0];
+			if (!t) return { error: "id: a message (not a reaction)" };
+			if (!p.emoji || /^[\x20-\x7e]*$/.test(p.emoji) || p.emoji.length > 16) return { error: "emoji: one emoji" };
+			var now = Math.floor(Date.now() / 1000), ch = t.conv.charAt(0) === "#";
+			var m = DEMO_MC.add({ conv: t.conv, out: true, from: DEMO_MC.name, text: (ch ? "@[" + t.from + "]" : "") + p.emoji + "\nb45pc4ek",
+				emoji: p.emoji, react: t.id, ts: now, rx: now, status: "sent" });
+			DEMO_MC.read[m.conv] = m.id;
 			return { ok: true, id: m.id, seq: DEMO_MC.seq };
 		},
 		"pirate.meshcore:resend": function (p) {
@@ -2237,6 +2271,11 @@
 		var count = el("span", { class: "mc-count" });
 		var sendBtn = el("button", { type: "button", class: "mc-send", title: "Send (Enter)", "aria-label": "Send", onclick: send }, mcIcon("send"));
 		var sendStatus = el("div", { class: "status mc-cstatus" });
+		// The composer's word (an error sending, say): gone when there's none
+		function sayStatus(text, kind) {
+			sendStatus.textContent = text;
+			sendStatus.className = "status mc-cstatus" + (kind ? " " + kind : "");
+		}
 		var replyBar = el("div", { class: "mc-replybar" });
 		replyBar.hidden = true;
 		var vThread = el("div", { class: "mc-view" }, threadHead,
@@ -2251,6 +2290,7 @@
 		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, timer = null;
 		var mode = null, open = null, page = null;      // a thread (its conv), a page, or a note
 		var thread = [], byId = {}, shown = {}, more = false, loadingOlder = false, unreadFrom = 0, newBelow = 0, jumpWas = "";
+		var rmsgs = {}, reacts = {};   // the thread's reactions; by the message each is to, emoji, who
 		var replyTo = null, radioLine = null, radioStatus = null, contactsFill = null;
 		var cv = { kind: "all", q: "", sort: "recent", n: 100 };   // the contacts page: which, found how, in what order, how many
 		var collapsed = {};
@@ -2680,11 +2720,13 @@
 		var popAnchor = null;
 		function closeProfile() {
 			pop.hidden = true;
+			pop.classList.remove("picker");
 			clear(pop);
 			popAnchor = null;
 		}
 		function openProfile(t, anchor) {
 			popAnchor = anchor;
+			pop.classList.remove("picker");
 			clear(pop).appendChild(profileEl(t));
 			pop.hidden = false;
 			placePop();
@@ -3065,9 +3107,11 @@
 					mcFace(rep.name, rep.out, "xxs"), rn,
 					el("span", { class: "mc-rtext" + (rep.text == null ? " gone" : ""), text: rep.text == null ? "a message not kept here" : rep.text || " " })));
 			}
-			// Reply: on hover (a tap, on a phone)
+			// React, Reply: on hover (a tap, on a phone)
 			if (m.out || m.from || m.conv.charAt(0) !== "#")
 				row.appendChild(el("div", { class: "mc-acts" },
+					el("button", { type: "button", class: "mc-act mc-act-react", title: "Add a reaction", "aria-label": "Add a reaction",
+						onclick: function (ev) { ev.stopPropagation(); openPicker(m, this); } }, "☺"),
 					el("button", { type: "button", class: "mc-act", title: "Reply", onclick: function (ev) { ev.stopPropagation(); startReply(m); } }, "↩ Reply")));
 			var face = head ? mcFace(who, m.out) : null;
 			if (face) { face.classList.add("mc-pick"); face.setAttribute("data-pick", "1"); }
@@ -3083,8 +3127,55 @@
 				men ? " " + men.rest : rep ? plain(m.text) : m.text,
 				m.out ? statusEl(m) : null,
 				!head && sig ? el("span", { class: "mc-sig mc-hover", text: sig }) : null));
+			var chips = reactsEl(m);
+			if (chips) body.appendChild(chips);
 			row.appendChild(body);
 			return row;
+		}
+
+		/* Reactions, as Discord shows them: a chip each emoji under the
+		   message, how many, who on hover, yours lit; a click adds yours */
+		var QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "👏", "🎉", "👀", "💯", "✅"];
+		function reactsEl(m) {
+			var r = reacts[m.id];
+			if (!r) return null;
+			var box = el("div", { class: "mc-reacts" });
+			Object.keys(r).forEach(function (e) {
+				var who = r[e], keys = Object.keys(who), mine = keys.some(function (k) { return who[k].out; });
+				var names = keys.map(function (k) { return who[k].out ? "you" : who[k].name; });
+				box.appendChild(el("button", { type: "button", class: "mc-react" + (mine ? " mine" : ""),
+					title: names.join(", ") + (mine ? "" : " · click to react too"), "aria-label": e + ": " + names.join(", "),
+					onclick: function (ev) { ev.stopPropagation(); if (!mine) react(m, e); } },
+					el("span", { class: "mc-remoji", text: e }), el("span", { class: "mc-rcount", text: String(keys.length) })));
+			});
+			box.appendChild(el("button", { type: "button", class: "mc-react mc-react-add", title: "Add a reaction", "aria-label": "Add a reaction",
+				onclick: function (ev) { ev.stopPropagation(); openPicker(m, this); } }, "+"));
+			return box;
+		}
+		function react(m, e) {
+			sayStatus("");
+			call("pirate.meshcore", "react", { id: m.id, emoji: e }).then(function (r) {
+				if (r.error) sayStatus(r.error, "err");
+				else poll();
+			}).catch(function (e2) { if (!failed(e2)) sayStatus(String(e2.message || e2), "err"); });
+		}
+		// The picker: the ones most used, or any emoji of yours
+		function openPicker(m, anchor) {
+			popAnchor = anchor;
+			clear(pop);
+			pop.classList.add("picker");
+			var grid = el("div", { class: "mc-picker" });
+			QUICK.forEach(function (e) {
+				grid.appendChild(el("button", { type: "button", class: "mc-pick-e", title: e, text: e, onclick: function () { closeProfile(); react(m, e); } }));
+			});
+			var other = el("input", { class: "inp mc-pick-in", type: "text", placeholder: "or type one", "aria-label": "An emoji of your own", maxlength: "16" });
+			other.addEventListener("keydown", function (ev) {
+				if (ev.key === "Enter" && other.value.trim()) { ev.preventDefault(); var e = other.value.trim(); closeProfile(); react(m, e); }
+			});
+			pop.appendChild(el("div", { class: "mc-pickwrap" }, el("div", { class: "mc-pickhead", text: "React to " + sender(m) }), grid, other));
+			pop.hidden = false;
+			placePop();
+			if (!TOUCH) grid.firstChild.focus({ preventScroll: true });
 		}
 		// A sender's face or name, or a mention: their profile
 		function picked(ev) {
@@ -3112,10 +3203,33 @@
 			if (row) row.classList.toggle("mc-sel");
 		});
 
+		// The thread's messages; its reactions apart, by the message each is to
+		// (one whose message isn't here waits, unshown, as MeshCore One has it)
 		function setThread(list) {
-			thread = list;
+			thread = [];
 			byId = {};
-			list.forEach(function (m) { byId[m.id] = m; });
+			rmsgs = {};
+			list.forEach(function (m) {
+				if (m.emoji) rmsgs[m.id] = m;
+				else { thread.push(m); byId[m.id] = m; }
+			});
+			gatherReacts();
+		}
+		function gatherReacts() {
+			reacts = {};
+			Object.keys(rmsgs).forEach(function (id) {
+				var m = rmsgs[id];
+				if (!m.react) return;
+				var r = reacts[m.react] || (reacts[m.react] = {}), e = r[m.emoji] || (r[m.emoji] = {});
+				// One a person, an emoji: a reaction passed on twice is one
+				e[m.out ? "\u0000you" : sender(m)] = { name: m.out ? (st && st.name) || "You" : sender(m), out: !!m.out };
+			});
+		}
+		function allMsgs() { return thread.concat(Object.keys(rmsgs).map(function (id) { return rmsgs[id]; })); }
+		function rerender(t) {
+			var i = thread.indexOf(t), node = msgEl(t, startsGroup(thread[i - 1], t));
+			if (shown[t.id]) threadBody.replaceChild(node, shown[t.id]);
+			shown[t.id] = node;
 		}
 		// Where the news starts: the first of the last so many that came
 		function firstUnread(u) {
@@ -3167,7 +3281,7 @@
 				loadingOlder = false;
 				if (!alive() || !isOpen(conv)) return false;
 				var older = r.messages || [], h = threadBody.scrollHeight, top = threadBody.scrollTop;
-				setThread(older.concat(thread));
+				setThread(older.concat(allMsgs()));
 				more = !!r.more && older.length > 0;
 				renderThread();
 				threadBody.scrollTop = threadBody.scrollHeight - h + top;
@@ -3177,14 +3291,23 @@
 		// Into the open thread: a new one at the end (under its day), a changed
 		// one (its delivery) where it is
 		function placeMsg(m) {
-			var old = byId[m.id], node;
+			var old = byId[m.id];
+			// A reaction: its message's chips afresh (if its message is here)
+			if (m.emoji) {
+				var was = rmsgs[m.id], nearR = nearBottom();
+				rmsgs[m.id] = m;
+				if (was && was.react === m.react) return;
+				gatherReacts();
+				if (m.react && byId[m.react]) {
+					rerender(byId[m.react]);
+					if (nearR) toBottom();
+				}
+				return;
+			}
 			if (old) {
-				var i = thread.indexOf(old);
-				thread[i] = m;
+				thread[thread.indexOf(old)] = m;
 				byId[m.id] = m;
-				node = msgEl(m, startsGroup(thread[i - 1], m));
-				if (shown[m.id]) threadBody.replaceChild(node, shown[m.id]);
-				shown[m.id] = node;
+				rerender(m);
 				return;
 			}
 			var near = nearBottom(), prev = thread[thread.length - 1];
@@ -3210,7 +3333,7 @@
 			setThread([]);
 			shown = {}; more = false; unreadFrom = 0; newBelow = 0;
 			jumpBtn.hidden = true; jumpWas = "";
-			line(sendStatus, "");
+			sayStatus("");
 			clear(threadBody).appendChild(el("div", { class: "mc-none muted", text: "Loading…" }));
 			call("pirate.meshcore", "messages", { conv: conv, limit: Math.min(200, Math.max(100, u + 30)) }).then(function (r) {
 				if (!alive() || !isOpen(conv)) return;
@@ -3242,23 +3365,23 @@
 			var text = input.value.trim(), to = open;
 			if (!to || !text || mode !== "thread") return;
 			sendBtn.disabled = true;
-			line(sendStatus, "");
+			sayStatus("");
 			var p = { to: to, text: text };
 			if (replyTo) p.reply = replyTo.id;
 			call("pirate.meshcore", "send", p).then(function (r) {
-				if (r.error) { line(sendStatus, r.error, "err"); updateCount(); return; }
+				if (r.error) { sayStatus(r.error, "err"); updateCount(); return; }
 				input.value = "";
 				grow();
 				cancelReply();
 				updateCount();
 				poll();
-			}).catch(function (e) { if (!failed(e)) line(sendStatus, String(e.message || e), "err"); updateCount(); });
+			}).catch(function (e) { if (!failed(e)) sayStatus(String(e.message || e), "err"); updateCount(); });
 		}
 		function resend(m) {
 			call("pirate.meshcore", "resend", { id: m.id }).then(function (r) {
-				if (r.error) line(sendStatus, r.error, "err");
+				if (r.error) sayStatus(r.error, "err");
 				poll();
-			}).catch(function (e) { if (!failed(e)) line(sendStatus, String(e.message || e), "err"); });
+			}).catch(function (e) { if (!failed(e)) sayStatus(String(e.message || e), "err"); });
 		}
 
 		/* Keeping up: everything, then what changed every few seconds */
