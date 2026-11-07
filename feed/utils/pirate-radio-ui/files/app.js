@@ -415,6 +415,31 @@
 			password: DEMO_USB.password, host: "PirateRadio", http_port: 8082, card: DEMO_USB.card, card_in: true, drives: drives };
 	}
 
+	/* The Phone page's demo: a Pixel whose USB mode can be switched, with a
+	   few files and every mode supported so the page can be seen whole. */
+	var DEMO_PHONE = { present: true, mode: "charge", tetherUp: false, webcamOn: false };
+	var DEMO_PHONE_FILES = {
+		"/sdcard": [{ name: "DCIM", dir: true }, { name: "Download", dir: true }, { name: "Music", dir: true },
+			{ name: "Pictures", dir: true }, { name: "readme.txt", size: 1234 }],
+		"/sdcard/DCIM": [{ name: "Camera", dir: true }],
+		"/sdcard/DCIM/Camera": [{ name: "PXL_20261101_120000.jpg", size: 3812456 }, { name: "PXL_20261102_party.mp4", size: 48213556 }],
+		"/sdcard/Download": [{ name: "pirate-radio.bin", size: 9123456 }, { name: "song.flac", size: 28217344 }],
+		"/sdcard/Music": [{ name: "mixtape.mp3", size: 7340032 }],
+		"/sdcard/Pictures": []
+	};
+	function demoPhone() {
+		return {
+			adb_installed: true, present: DEMO_PHONE.present,
+			vendor_id: "18d1", product_id: "4ee7", vendor: "Google",
+			adb: { usb: "device", wifi: "device", ready: true },
+			model: "Pixel 6a", android: "17", battery: 84,
+			functions: DEMO_PHONE.mode === "charge" ? "" : DEMO_PHONE.mode, mode: DEMO_PHONE.mode,
+			supports: { tether: true, midi: true, webcam: true },
+			tether: DEMO_PHONE.tetherUp ? { up: true, iface: "usb0", wan_ip: "192.168.42.101" } : undefined,
+			webcam_stream: DEMO_PHONE.webcamOn ? { running: true, port: 8083 } : undefined
+		};
+	}
+
 	/* The Flipper page's demo: a few files, and a menu on its screen */
 	var DEMO_FZ = { seq: 1, item: 0 };
 	var DEMO_FZ_FILES = {
@@ -552,6 +577,26 @@
 			DEMO_USB.password = !!p.password;
 			return demoUsb();
 		},
+		"pirate.phone:status": demoPhone,
+		"pirate.phone:set_mode": function (p) {
+			DEMO_PHONE.mode = p.mode === "ncm" ? "tether" : p.mode;
+			if (DEMO_PHONE.mode !== "tether") DEMO_PHONE.tetherUp = false;
+			if (DEMO_PHONE.mode !== "webcam") DEMO_PHONE.webcamOn = false;
+			return demoPhone();
+		},
+		"pirate.phone:adb_wifi": function () { return { ok: true, ip: "10.69.4.175" }; },
+		"pirate.phone:files": function (p) {
+			var path = p.path || "/sdcard", e = DEMO_PHONE_FILES[path];
+			if (!e) return { error: "no such folder" };
+			return { path: path, entries: e.map(function (x) { return { dir: !!x.dir, size: x.size || 0, name: x.name }; }) };
+		},
+		"pirate.phone:pull": function (p) {
+			var n = String(p.path || "").split("/").pop();
+			return { ok: true, name: n, url: "data:text/plain,demo%20download", size: 123456 };
+		},
+		"pirate.phone:tether": function (p) { DEMO_PHONE.tetherUp = p.action === "up"; return demoPhone(); },
+		"pirate.phone:webcam": function (p) { DEMO_PHONE.webcamOn = p.action === "start"; return { ok: true, port: 8083, path: "/stream" }; },
+		"pirate.phone:midi": function () { return { ports: [{ name: "midiC1D0" }] }; },
 		"pirate.recon:dashboard": {
 			uplink: { ssid: "NoInternetHere-5", iface: "phy0-sta0",
 				subnet: "192.168.1.0/24", gateway: "192.168.1.1", online: true },
@@ -4528,6 +4573,257 @@
 		status();
 	}
 
+	/* ---------- Phone (an Android phone on the USB port; pirate.phone) ---------- */
+
+	var PH_TIMER = null;
+	// The phone's USB modes, in menu order: [id, label, set_mode arg, status.mode values it matches]
+	var PH_MODES = [
+		["charge", "No data", "charge", ["charge", "unknown"]],
+		["mtp", "File transfer", "mtp", ["mtp", "file"]],
+		["ptp", "Photos (PTP)", "ptp", ["ptp"]],
+		["tether", "Tethering", "tether", ["tether"]],
+		["midi", "MIDI", "midi", ["midi"]],
+		["webcam", "Webcam", "webcam", ["webcam"]]
+	];
+
+	function renderPhone() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Phone", "an Android phone on the USB port — switch and use its USB modes"));
+
+		var idPanel = panel("Phone");
+		var idWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		idPanel.appendChild(idWrap);
+
+		var modePanel = panel("USB mode");
+		var modeRow = el("div", { class: "toolbar mode-row" });
+		var modeStatus = el("span", { class: "status" });
+		var modeNote = el("p", { class: "descr" });
+		modePanel.appendChild(modeRow); modePanel.appendChild(modeStatus); modePanel.appendChild(modeNote);
+
+		var usePanel = panel(null);
+		usePanel.style.marginTop = "14px";
+
+		VIEW.appendChild(idPanel); VIEW.appendChild(modePanel); VIEW.appendChild(usePanel);
+
+		var shownKey = "", lastMode = "\x00", adbWifiStatus = null, fbPath = "/sdcard";
+
+		function say(line, text, kind) {
+			line.className = "status" + (kind === "err" ? " err" : kind === "ok" ? " ok-text" : "");
+			line.textContent = text || "";
+		}
+		function failed(e) { if (String(e.message || e) === "unauthorized") { onError(e); return true; } return false; }
+		function ready(s) { return s.present && s.adb && s.adb.ready; }
+		function modeLabel(mode) {
+			for (var i = 0; i < PH_MODES.length; i++) if (PH_MODES[i][3].indexOf(mode) >= 0) return PH_MODES[i][1];
+			return mode || "unknown";
+		}
+
+		function status() {
+			return call("pirate.phone", "status").then(show).catch(function (e) {
+				if (failed(e)) return;
+				var msg = String(e.message || e);
+				if (msg === "ubus status 4") msg = "The Phone backend (pirate.phone) isn't on this router yet — update the UI package.";
+				clear(idWrap).appendChild(alertEl("warn", msg));
+			});
+		}
+
+		function show(s) {
+			var key = JSON.stringify(s);
+			if (key !== shownKey) { shownKey = key; renderId(s); renderModeRow(s); }
+			if (s.mode !== lastMode) { lastMode = s.mode; renderUse(s); }
+		}
+
+		function renderId(s) {
+			clear(idWrap);
+			if (!s.present) {
+				idWrap.appendChild(alertEl("info", "No phone on the USB port. Plug an Android phone into the Slate."));
+				idWrap.appendChild(el("p", { class: "descr", text:
+					"Turn on USB debugging (Settings → System → Developer options) so the Slate can switch its USB mode and reach its files." }));
+				if (s.adb_installed === false) idWrap.appendChild(el("p", { class: "descr", text: "adb is not installed on this router." }));
+				return;
+			}
+			idWrap.appendChild(el("div", { class: "drive-head" },
+				el("strong", { text: s.model || ((s.vendor || "Phone") + " device") }),
+				badge(modeLabel(s.mode), "sec-ok"),
+				s.android ? badge("Android " + s.android, "sec-neutral") : null,
+				typeof s.battery === "number" ? badge(s.battery + "%", s.battery < 20 ? "sec-warn" : "sec-neutral") : null));
+			var a = s.adb || {}, kind = "", txt;
+			if (a.wifi === "device") { txt = "USB debugging: over Wi-Fi — switching modes won't drop it."; kind = "ok"; }
+			else if (a.usb === "device") { txt = "USB debugging: over USB."; }
+			else if (a.usb === "unauthorized" || a.wifi === "unauthorized") { txt = "USB debugging: waiting for you to allow it on the phone (check the Allow dialog)."; kind = "warn"; }
+			else { txt = "USB debugging is off or not authorized — turn it on to switch modes and read files."; kind = "warn"; }
+			var row = el("div", { class: "toolbar" }, el("span", { class: "status" + (kind === "ok" ? " ok-text" : kind === "warn" ? " err" : ""), text: txt }));
+			if (a.usb === "device" && a.wifi !== "device") row.appendChild(btn("Use adb over Wi-Fi", { onclick: function () { adbWifi(true); } }));
+			if (a.wifi === "device") row.appendChild(btn("Turn off Wi-Fi adb", { cls: "reset", onclick: function () { adbWifi(false); } }));
+			idWrap.appendChild(row);
+			adbWifiStatus = el("span", { class: "status" });
+			idWrap.appendChild(adbWifiStatus);
+		}
+
+		function adbWifi(on) {
+			if (adbWifiStatus) say(adbWifiStatus, on ? "moving adb to Wi-Fi…" : "turning off Wi-Fi adb…");
+			call("pirate.phone", "adb_wifi", { enabled: on }).then(function (r) {
+				if (r.error) { if (adbWifiStatus) say(adbWifiStatus, r.error, "err"); return; }
+				if (adbWifiStatus) say(adbWifiStatus, on ? ("adb now on Wi-Fi" + (r.ip ? " (" + r.ip + ")" : "")) : "Wi-Fi adb off", "ok");
+				status();
+			}).catch(function (e) { if (!failed(e) && adbWifiStatus) say(adbWifiStatus, String(e.message || e), "err"); });
+		}
+
+		function renderModeRow(s) {
+			clear(modeRow);
+			var ok = ready(s);
+			PH_MODES.forEach(function (m) {
+				var on = m[3].indexOf(s.mode) >= 0;
+				var b = btn(m[1], { primary: on, onclick: function () { switchMode(m[2]); } });
+				b.disabled = !ok;
+				modeRow.appendChild(b);
+			});
+			modeNote.textContent = !s.present ? ""
+				: ok ? "Switching asks the phone to change its USB function. Over Wi-Fi adb it is seamless; over USB the phone re-prompts for debugging each time."
+				: "Authorize USB debugging to switch modes.";
+		}
+
+		function switchMode(fn) {
+			say(modeStatus, "switching…");
+			call("pirate.phone", "set_mode", { mode: fn }).then(function (s) {
+				if (s.error) return say(modeStatus, s.error, "err");
+				say(modeStatus, "now in " + modeLabel(s.mode) + " mode", "ok");
+				show(s);
+			}).catch(function (e) { if (!failed(e)) say(modeStatus, String(e.message || e), "err"); });
+		}
+
+		function renderUse(s) {
+			clear(usePanel);
+			if (!s.present) return;
+			var mode = s.mode;
+			if (mode === "mtp" || mode === "ptp" || mode === "file") return renderFiles(s);
+			if (mode === "tether") return renderTether(s);
+			if (mode === "webcam") return renderWebcam(s);
+			if (mode === "midi") return renderMidi(s);
+			usePanel.appendChild(el("h3", { class: "sub-h", text: "Charging only" }));
+			usePanel.appendChild(el("p", { class: "descr", text: "The data lines are idle. Pick a mode above to browse files, share the phone's internet, stream its camera, or use it as a MIDI device." }));
+		}
+
+		/* ---- files (over adb) ---- */
+		function renderFiles(s) {
+			usePanel.appendChild(el("h3", { class: "sub-h", text: (s.mode === "ptp" ? "Photos" : "Files") + " on the phone" }));
+			if (!ready(s)) { usePanel.appendChild(el("p", { class: "descr", text: "Authorize USB debugging to browse the phone's files." })); return; }
+			var crumbs = el("div", { class: "crumbs" });
+			var listWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+			var fstatus = el("span", { class: "status" });
+			usePanel.appendChild(crumbs); usePanel.appendChild(listWrap); usePanel.appendChild(fstatus);
+			loadDir(fbPath && fbPath.indexOf("/sdcard") === 0 ? fbPath : "/sdcard", crumbs, listWrap, fstatus);
+		}
+		function crumbLink(label, path, c, l, f) {
+			return el("a", { href: "#", class: "lnk", text: label, onclick: function (ev) { ev.preventDefault(); loadDir(path, c, l, f); } });
+		}
+		function loadDir(path, crumbs, listWrap, fstatus) {
+			fbPath = path;
+			clear(crumbs).appendChild(crumbLink("phone", "/sdcard", crumbs, listWrap, fstatus));
+			var rel = path.replace(/^\/sdcard\/?/, ""), p = "/sdcard";
+			if (rel) rel.split("/").forEach(function (seg) { p += "/" + seg; crumbs.appendChild(document.createTextNode(" / ")); crumbs.appendChild(crumbLink(seg, p, crumbs, listWrap, fstatus)); });
+			clear(listWrap).appendChild(el("div", { class: "muted", text: "Loading…" }));
+			call("pirate.phone", "files", { path: path }).then(function (r) {
+				if (r.error) { clear(listWrap).appendChild(alertEl("warn", r.error)); return; }
+				var ents = (r.entries || []).slice().sort(function (x, y) {
+					if (x.dir !== y.dir) return x.dir ? -1 : 1;
+					return x.name.toLowerCase() < y.name.toLowerCase() ? -1 : 1;
+				});
+				var rows = ents.map(function (e) {
+					var base = path.replace(/\/$/, "") + "/" + e.name;
+					var nameCell = e.dir
+						? el("a", { href: "#", class: "lnk", text: e.name + "/", onclick: function (ev) { ev.preventDefault(); loadDir(base, crumbs, listWrap, fstatus); } })
+						: el("span", { text: e.name });
+					return [nameCell, e.dir ? "" : gb(e.size),
+						e.dir ? "" : btn("Download", { cls: "small", onclick: function () { pull(base, e.name, fstatus); } })];
+				});
+				clear(listWrap).appendChild(rows.length ? tableEl(["Name", "Size", ""], rows) : el("div", { class: "muted", text: "empty" }));
+				if (r.truncated) listWrap.appendChild(el("div", { class: "muted", text: "Showing the first " + (r.count || rows.length) + " — open a subfolder to narrow it down." }));
+			}).catch(function (e) { if (!failed(e)) clear(listWrap).appendChild(alertEl("warn", String(e.message || e))); });
+		}
+		function pull(path, name, fstatus) {
+			say(fstatus, "downloading " + name + "…");
+			call("pirate.phone", "pull", { path: path }).then(function (r) {
+				if (r.error || !r.ok) return say(fstatus, r.error || "couldn't read that file", "err");
+				var a = el("a", { href: r.url, download: r.name || name });
+				document.body.appendChild(a); a.click(); document.body.removeChild(a);
+				say(fstatus, "downloaded " + (r.name || name) + " (" + gb(r.size) + ")", "ok");
+			}).catch(function (e) { if (!failed(e)) say(fstatus, String(e.message || e), "err"); });
+		}
+
+		/* ---- tethering ---- */
+		function renderTether(s) {
+			usePanel.appendChild(el("h3", { class: "sub-h", text: "USB tethering" }));
+			if (!s.supports || !s.supports.tether) {
+				usePanel.appendChild(alertEl("warn", "The phone is tethering, but this firmware can't use it yet. Reflash with the updated image (it adds kmod-usb-net-cdc-ncm) and this becomes a one-tap uplink."));
+				return;
+			}
+			var tstatus = el("span", { class: "status" }), t = s.tether || {};
+			if (t.up) {
+				usePanel.appendChild(el("p", { class: "descr", text: "The router is using the phone's internet (" + (t.iface || "") + (t.wan_ip ? ", " + t.wan_ip : "") + ")." }));
+				usePanel.appendChild(el("div", { class: "toolbar" }, btn("Stop using it", { cls: "reset", onclick: function () { tether("down", tstatus); } }), tstatus));
+			} else {
+				usePanel.appendChild(el("p", { class: "descr", text: "Route the router's traffic out through the phone's connection." }));
+				usePanel.appendChild(el("div", { class: "toolbar" }, btn("Use the phone's internet", { primary: true, onclick: function () { tether("up", tstatus); } }), tstatus));
+			}
+		}
+		function tether(act, tstatus) {
+			say(tstatus, act === "up" ? "bringing the uplink up…" : "stopping…");
+			call("pirate.phone", "tether", { action: act }).then(function (s) {
+				if (s.error) return say(tstatus, s.error, "err");
+				lastMode = "\x00"; show(s);
+			}).catch(function (e) { if (!failed(e)) say(tstatus, String(e.message || e), "err"); });
+		}
+
+		/* ---- webcam ---- */
+		function renderWebcam(s) {
+			usePanel.appendChild(el("h3", { class: "sub-h", text: "Webcam" }));
+			if (!s.supports || !s.supports.webcam) {
+				usePanel.appendChild(alertEl("warn", "The phone is in webcam mode, but this firmware can't use it yet. Reflash with the updated image (kmod-video-uvc + ustreamer) to stream it here."));
+				return;
+			}
+			var wstatus = el("span", { class: "status" });
+			var w = s.webcam_stream || {}, host = location.hostname || "pirateradio.local";
+			usePanel.appendChild(el("div", { class: "toolbar" },
+				w.running ? btn("Stop", { cls: "reset", onclick: function () { webcam("stop", wstatus); } })
+						: btn("Start the stream", { primary: true, onclick: function () { webcam("start", wstatus); } }),
+				wstatus));
+			if (w.running) usePanel.appendChild(el("div", { class: "cam-wrap" },
+				el("img", { class: "cam", src: "http://" + host + ":" + (w.port || 8081) + "/stream", alt: "phone camera" })));
+		}
+		function webcam(act, wstatus) {
+			say(wstatus, act === "start" ? "starting the stream…" : "stopping…");
+			call("pirate.phone", "webcam", { action: act }).then(function (r) {
+				if (r.error) return say(wstatus, r.error, "err");
+				lastMode = "\x00"; status();
+			}).catch(function (e) { if (!failed(e)) say(wstatus, String(e.message || e), "err"); });
+		}
+
+		/* ---- MIDI ---- */
+		function renderMidi(s) {
+			usePanel.appendChild(el("h3", { class: "sub-h", text: "MIDI" }));
+			if (!s.supports || !s.supports.midi) {
+				usePanel.appendChild(alertEl("warn", "The phone is in MIDI mode, but this firmware has no USB-audio driver yet. Reflash with the updated image (kmod-usb-audio) to see the MIDI port."));
+				return;
+			}
+			var wrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+			usePanel.appendChild(wrap);
+			call("pirate.phone", "midi").then(function (r) {
+				clear(wrap);
+				var ports = r.ports || [];
+				wrap.appendChild(ports.length ? tableEl(["MIDI port"], ports.map(function (p) { return [p.name]; }))
+					: el("div", { class: "muted", text: r.note || "no MIDI port" }));
+			}).catch(function (e) { if (!failed(e)) clear(wrap).appendChild(alertEl("warn", String(e.message || e))); });
+		}
+
+		if (PH_TIMER) clearInterval(PH_TIMER);
+		PH_TIMER = setInterval(function () {
+			if (current !== "phone") { clearInterval(PH_TIMER); PH_TIMER = null; return; }
+			status();
+		}, 5000);
+		status();
+	}
+
 	/* ---------- Flipper (a Flipper Zero on the USB port; pirate-flipper) ---------- */
 
 	var FZ_TIMER = null, FZ_RUN = 0;
@@ -5033,7 +5329,7 @@
 		["Radio", [["receivers", "Receivers"], ["sensors", "Sensors"]]],
 		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshakes"]]],
 		["Network", [["uplink", "Uplink"], ["clients", "Clients"], ["hosts", "Hosts"], ["capture", "Capture"]]],
-		["USB devices", [["drives", "Drives"], ["flipper", "Flipper"], ["dreampi", "DreamPi"]]],
+		["USB devices", [["drives", "Drives"], ["phone", "Phone"], ["flipper", "Flipper"], ["dreampi", "DreamPi"]]],
 		["System", [["status", "Status"], ["access", "Access"], ["terminal", "Terminal"], ["firmware", "Firmware"]]]
 	];
 	// Pages that were renamed, for old links
@@ -5118,6 +5414,7 @@
 		if (id === "terminal") return renderTerminal();
 		if (id === "dreampi") return renderDreampi();
 		if (id === "drives") return renderDrives();
+		if (id === "phone") return renderPhone();
 		if (id === "flipper") return renderFlipper();
 		if (id === "capture") return renderCapture();
 		if (id === "handshake") return renderHandshake();

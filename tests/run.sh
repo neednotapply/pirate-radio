@@ -80,6 +80,11 @@ chmod 755 "$ov/usr/sbin/pirate-gps" "$ov/etc/init.d/pirate-gps"
 cp "$u/usr/sbin/pirate-dreampi" "$ov/usr/sbin/"
 cp "$u/usr/libexec/rpcd/pirate.dreampi" "$ov/usr/libexec/rpcd/"
 cp "$u/usr/share/rpcd/acl.d/pirate-dreampi.json" "$ov/usr/share/rpcd/acl.d/"
+# The Phone page's backend (an Android phone on the USB port)
+cp "$u/usr/sbin/pirate-phone" "$ov/usr/sbin/"
+cp "$u/usr/libexec/rpcd/pirate.phone" "$ov/usr/libexec/rpcd/"
+cp "$u/usr/share/rpcd/acl.d/pirate-phone.json" "$ov/usr/share/rpcd/acl.d/"
+chmod 755 "$ov/usr/sbin/pirate-phone" "$ov/usr/libexec/rpcd/pirate.phone"
 # The Access and Terminal pages' backend
 cp "$u/usr/sbin/pirate-access" "$ov/usr/sbin/"
 cp "$u/usr/libexec/rpcd/pirate.access" "$ov/usr/libexec/rpcd/"

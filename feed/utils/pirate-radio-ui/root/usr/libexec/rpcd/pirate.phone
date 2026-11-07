@@ -1,0 +1,72 @@
+#!/bin/sh
+# rpcd plugin for the Pirate Radio web UI's Phone page: an Android phone on the
+# router's USB port. A thin wrapper over the pirate-phone tool.
+#
+#   ubus call pirate.phone status
+#   ubus call pirate.phone set_mode '{"mode":"mtp"}'
+#   ubus call pirate.phone adb_wifi '{"enabled":true}'
+#   ubus call pirate.phone files '{"path":"/sdcard/DCIM"}'
+#   ubus call pirate.phone pull '{"path":"/sdcard/DCIM/Camera/x.jpg"}'
+#   ubus call pirate.phone tether '{"action":"up"}'
+#   ubus call pirate.phone webcam '{"action":"start","res":"1280x720"}'
+#   ubus call pirate.phone midi
+
+. /usr/share/libubox/jshn.sh
+
+TOOL=${PIRATE_PHONE:-/usr/sbin/pirate-phone}
+
+run_set_mode() {
+	local input mode
+	read -r input; json_load "$input"; json_get_var mode mode
+	"$TOOL" set_mode "$mode"
+}
+
+run_adb_wifi() {
+	local input enabled ip
+	read -r input; json_load "$input"
+	json_get_var enabled enabled
+	json_get_var ip ip
+	"$TOOL" adb_wifi "$([ "$enabled" = 1 ] || [ "$enabled" = true ] && echo 1 || echo 0)" "$ip"
+}
+
+run_files() {
+	local input path
+	read -r input; json_load "$input"; json_get_var path path
+	"$TOOL" files "$path"
+}
+
+run_pull() {
+	local input path
+	read -r input; json_load "$input"; json_get_var path path
+	"$TOOL" pull "$path"
+}
+
+run_tether() {
+	local input action
+	read -r input; json_load "$input"; json_get_var action action
+	"$TOOL" tether "$action"
+}
+
+run_webcam() {
+	local input action res
+	read -r input; json_load "$input"; json_get_var action action; json_get_var res res
+	"$TOOL" webcam "$action" "$res"
+}
+
+case "$1" in
+list)
+	echo '{ "status": {}, "set_mode": { "mode": "str" }, "adb_wifi": { "enabled": true, "ip": "str" }, "files": { "path": "str" }, "pull": { "path": "str" }, "tether": { "action": "str" }, "webcam": { "action": "str", "res": "str" }, "midi": {} }'
+	;;
+call)
+	case "$2" in
+	status)   "$TOOL" status ;;
+	set_mode) run_set_mode ;;
+	adb_wifi) run_adb_wifi ;;
+	files)    run_files ;;
+	pull)     run_pull ;;
+	tether)   run_tether ;;
+	webcam)   run_webcam ;;
+	midi)     "$TOOL" midi ;;
+	esac
+	;;
+esac

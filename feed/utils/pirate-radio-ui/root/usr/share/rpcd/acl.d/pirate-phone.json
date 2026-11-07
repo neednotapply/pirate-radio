@@ -1,0 +1,15 @@
+{
+	"pirate-phone": {
+		"description": "Grant access to an Android phone on the USB port: its USB mode, its files, tethering, webcam and MIDI",
+		"read": {
+			"ubus": {
+				"pirate.phone": [ "status", "files", "midi" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.phone": [ "set_mode", "adb_wifi", "pull", "tether", "webcam" ]
+			}
+		}
+	}
+}

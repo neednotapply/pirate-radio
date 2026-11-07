@@ -1,0 +1,33 @@
+#!/bin/sh
+# pirate-phone-dl: serve a file the Phone page staged with `pirate-phone pull`.
+# The browser GETs /cgi-bin/pirate-phone-dl?f=<name>; this streams the staged
+# copy from $STAGE and nothing else. The name is a bare basename (no slashes,
+# no "..") and must already exist in the staging directory, so this cannot
+# reach any other path. The portal is LAN-only; a pull overwrites the staging
+# directory each time, so only the file the user just asked for is present.
+#
+# Served by uhttpd at /cgi-bin/pirate-phone-dl.
+
+STAGE=${PIRATE_PHONE_STAGE:-/tmp/pirate-phone}
+
+# The query string: f=<name>. Parameter expansion, not echo|sed: the staged
+# names `pirate-phone pull` writes can start with "-", which echo mangles.
+# They are already limited to [A-Za-z0-9._-], so there is nothing to decode.
+case "$QUERY_STRING" in *f=*) q=${QUERY_STRING#*f=}; name=${q%%&*} ;; *) name="" ;; esac
+# Only a basename of those tame characters — no path, no traversal
+case "$name" in
+	*/* | *..* | "") name="" ;;
+	*[!A-Za-z0-9._-]*) name="" ;;
+esac
+
+if [ -z "$name" ] || [ ! -f "$STAGE/$name" ]; then
+	printf 'Status: 404 Not Found\r\nContent-Type: text/plain\r\n\r\nnot found\n'
+	exit 0
+fi
+
+size=$(wc -c < "$STAGE/$name" 2>/dev/null)
+printf 'Content-Type: application/octet-stream\r\n'
+printf 'Content-Disposition: attachment; filename="%s"\r\n' "$name"
+[ -n "$size" ] && printf 'Content-Length: %s\r\n' "$size"
+printf '\r\n'
+cat "$STAGE/$name"

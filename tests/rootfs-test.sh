@@ -2046,6 +2046,91 @@ if [ "$FAIL" != 0 ]; then
 fi
 kill "$MC_DAEMON" "$MC_UBUSD" 2> /dev/null
 
+echo "# phone (an Android phone on the USB port; pirate-phone)"
+PH="$T/phone"
+mkdir -p "$PH/bin"
+export PH_LOG="$PH/calls.log"
+: > "$PH_LOG"
+
+# Fake sysfs: a phone in a file-transfer composition (MTP still-image + ADB).
+# USB interfaces are children of the device node, as in real sysfs.
+PS="$PH/sys/bus/usb/devices"
+mkdir -p "$PS/1-1/1-1:1.0" "$PS/1-1/1-1:1.1"
+echo 18d1 > "$PS/1-1/idVendor"; echo 4ee2 > "$PS/1-1/idProduct"
+echo 1 > "$PS/1-1/bConfigurationValue"; echo 2 > "$PS/1-1/bNumInterfaces"
+echo 06 > "$PS/1-1/1-1:1.0/bInterfaceClass"; echo 01 > "$PS/1-1/1-1:1.0/bInterfaceSubClass"; echo 01 > "$PS/1-1/1-1:1.0/bInterfaceProtocol"
+printf MTP > "$PS/1-1/1-1:1.0/interface"
+echo ff > "$PS/1-1/1-1:1.1/bInterfaceClass"; echo 42 > "$PS/1-1/1-1:1.1/bInterfaceSubClass"; echo 01 > "$PS/1-1/1-1:1.1/bInterfaceProtocol"
+# cdc_ncm "loaded", so tethering shows as supported; nothing else is
+mkdir -p "$PH/sys/module/cdc_ncm"
+
+# A second sysfs: a phone in USB-tethering (CDC NCM + CDC Data + ADB)
+PS2="$PH/sys2/bus/usb/devices"
+mkdir -p "$PS2/2-1/2-1:1.0" "$PS2/2-1/2-1:1.1" "$PS2/2-1/2-1:1.2"
+echo 18d1 > "$PS2/2-1/idVendor"; echo 4ef3 > "$PS2/2-1/idProduct"
+echo 1 > "$PS2/2-1/bConfigurationValue"; echo 3 > "$PS2/2-1/bNumInterfaces"
+echo ff > "$PS2/2-1/2-1:1.0/bInterfaceClass"; echo 42 > "$PS2/2-1/2-1:1.0/bInterfaceSubClass"; echo 01 > "$PS2/2-1/2-1:1.0/bInterfaceProtocol"
+echo 02 > "$PS2/2-1/2-1:1.1/bInterfaceClass"; echo 0d > "$PS2/2-1/2-1:1.1/bInterfaceSubClass"; echo 00 > "$PS2/2-1/2-1:1.1/bInterfaceProtocol"
+echo 0a > "$PS2/2-1/2-1:1.2/bInterfaceClass"; echo 00 > "$PS2/2-1/2-1:1.2/bInterfaceSubClass"; echo 01 > "$PS2/2-1/2-1:1.2/bInterfaceProtocol"
+
+# A fake adb: a ready Wi-Fi transport, the few props/commands the tool asks,
+# and a directory listing with a space in a name and a subfolder.
+cat > "$PH/bin/adb" <<'EOF'
+#!/bin/sh
+echo "adb $*" >> "${PH_LOG:-/dev/null}"
+[ "$1" = devices ] && { printf '10.0.0.9:5555\tdevice\n'; exit 0; }
+cmd=
+while [ $# -gt 0 ]; do case "$1" in shell|exec-out) shift; cmd=$1; break ;; esac; shift; done
+case "$cmd" in
+	"svc usb getFunctions") echo mtp ;;
+	"getprop ro.product.model") echo "Pixel 6a" ;;
+	"getprop ro.build.version.release") echo 17 ;;
+	"dumpsys battery") echo "  level: 84" ;;
+	"ls -lA "*) printf 'total 8\n-rw-rw---- 1 u0 media_rw 46159 2024-11-11 13:52 my notes.txt\ndrwxrwx--- 2 u0 media_rw 3452 2026-01-01 00:00 DCIM\n-rw-rw---- 1 u0 media_rw 28206 2024-11-11 13:39 song.mp3\n' ;;
+esac
+exit 0
+EOF
+chmod +x "$PH/bin/adb"
+# A fake adb with no device, to test the sysfs-only path
+cat > "$PH/bin/adb-none" <<'EOF'
+#!/bin/sh
+[ "$1" = devices ] && echo "List of devices attached"
+exit 0
+EOF
+chmod +x "$PH/bin/adb-none"
+
+phn() { PIRATE_SYSFS="$PH/sys" PIRATE_PHONE_ADB="$PH/bin/adb" pirate-phone "$@"; }
+phn status > "$PH/status.json"
+check "phone: a phone is present" [ "$(jsonfilter -i "$PH/status.json" -e '@.present')" = true ]
+check "phone: vendor named from the id" [ "$(jsonfilter -i "$PH/status.json" -e '@.vendor')" = Google ]
+check "phone: model from adb" [ "$(jsonfilter -i "$PH/status.json" -e '@.model')" = "Pixel 6a" ]
+check "phone: battery from adb" [ "$(jsonfilter -i "$PH/status.json" -e '@.battery')" = 84 ]
+check "phone: adb is ready" [ "$(jsonfilter -i "$PH/status.json" -e '@.adb.ready')" = true ]
+check "phone: mode is authoritative from adb (mtp)" [ "$(jsonfilter -i "$PH/status.json" -e '@.mode')" = mtp ]
+check "phone: tethering shows supported (cdc_ncm present)" [ "$(jsonfilter -i "$PH/status.json" -e '@.supports.tether')" = true ]
+check "phone: MIDI shows unsupported (no snd-usb-audio)" [ "$(jsonfilter -i "$PH/status.json" -e '@.supports.midi')" = false ]
+
+phn files /sdcard > "$PH/ls.json"
+check "phone: a folder lists its entries" [ "$(jsonfilter -i "$PH/ls.json" -e '@.entries[*].name' | wc -l)" = 3 ]
+check "phone: a name with a space survives" grep -q "my notes.txt" "$PH/ls.json"
+check "phone: a directory is flagged" [ "$(jsonfilter -i "$PH/ls.json" -e '@.entries[@.name="DCIM"].dir')" = true ]
+check "phone: a file keeps its size" [ "$(jsonfilter -i "$PH/ls.json" -e '@.entries[@.name="song.mp3"].size')" = 28206 ]
+
+check "phone: mode read from sysfs when adb is off (file)" [ "$(PIRATE_SYSFS="$PH/sys" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.mode')" = file ]
+check "phone: tethering composition read from sysfs" [ "$(PIRATE_SYSFS="$PH/sys2" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.mode')" = tether ]
+check "phone: no phone -> present false" [ "$(PIRATE_SYSFS="$T" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.present')" = false ]
+
+# A function isn't visible inside sh -c, so these inline the fake environment
+# (no spaces in the paths). The pipelines need a sub-shell.
+PHX="PIRATE_SYSFS=$PH/sys PIRATE_PHONE_ADB=$PH/bin/adb"
+check "phone: an unknown mode is refused" sh -c "$PHX pirate-phone set_mode nope | jsonfilter -e '@.error' | grep -q 'unknown mode'"
+: > "$PH_LOG"
+phn set_mode webcam > /dev/null
+check "phone: switching to webcam asks adb for uvc" grep -q "setFunctions uvc" "$PH_LOG"
+check "phone: switching to tethering asks adb for ncm" sh -c "$PHX pirate-phone set_mode tether >/dev/null; grep -q 'setFunctions ncm' '$PH_LOG'"
+check "phone: a file path outside shared storage is refused" sh -c "$PHX pirate-phone pull /etc/passwd | jsonfilter -e '@.error' | grep -q 'not allowed'"
+check "phone: a bad folder path is refused" sh -c "$PHX pirate-phone files /etc | jsonfilter -e '@.error' | grep -q 'not allowed'"
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" = 0 ]

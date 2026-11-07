@@ -1,0 +1,499 @@
+#!/bin/sh
+# pirate-phone: an Android phone plugged into the router's USB port, for the
+# Pirate Radio web UI's Phone page. It tells the phone's USB mode apart (the
+# "USB controlled by" options: charging, file transfer, PTP, tethering, MIDI,
+# webcam), switches between them, and makes each one useful on the router.
+# Prints one JSON object per subcommand (the reply the pirate.phone rpcd
+# plugin returns).
+#
+# USB debugging (adb) does the driving: it reads and sets the phone's USB
+# function and reaches its files. Because switching the function tears the USB
+# adb interface down and re-prompts, adb is best run over Wi-Fi (adb_wifi),
+# which survives mode changes. Everything the phone exposes on the USB bus is
+# still recognised from sysfs without adb, so an undebugged phone is at least
+# named and its mode shown.
+#
+#   pirate-phone status
+#   pirate-phone set_mode <charge|mtp|ptp|tether|ncm|rndis|midi|webcam>
+#   pirate-phone adb_wifi <0|1> [ip]       adb over Wi-Fi on/off
+#   pirate-phone files [path]              a folder on the phone (default /sdcard)
+#   pirate-phone pull <path>               stage a file for download; prints its URL
+#   pirate-phone tether <up|down>          the phone's data as a WAN uplink
+#   pirate-phone webcam <start|stop> [res] stream the phone's camera (UVC)
+#   pirate-phone midi                      the phone's MIDI port, if any
+
+. /usr/share/libubox/jshn.sh
+
+SYSFS=${PIRATE_SYSFS:-/sys}
+ADB=${PIRATE_PHONE_ADB:-adb}
+export HOME="${PIRATE_PHONE_HOME:-/root}"
+STAGE=${PIRATE_PHONE_STAGE:-/tmp/pirate-phone}
+USTREAM=${PIRATE_PHONE_USTREAMER:-ustreamer}
+WEBCAM_PORT=${PIRATE_PHONE_WEBCAM_PORT:-8083}   # 8080/8081/8082/8433 are taken
+WEBCAM_PID=/var/run/pirate-phone-webcam.pid
+WEBCAM_LOG=/var/run/pirate-phone-webcam.log
+TETHER_IF_STATE=/var/run/pirate-phone-tether.if
+
+# Android gadget functions, by the phone's product id (Google/Pixel). Used
+# only to name the file mode (mtp vs ptp) when adb can't be asked.
+# 4ee1 charge 4ee2 mtp 4ee6 ptp 4ee7 charge+adb 4ee2 mtp+adb ...
+
+# ---- adb plumbing -----------------------------------------------------------
+
+# The transports adb can see, newline separated as "<serial> <state> <kind>"
+# (kind: wifi for an ip:port serial, usb otherwise). State is device,
+# unauthorized, offline, ...
+adb_transports() {
+	"$ADB" devices 2>/dev/null | sed -n 's/\([^ 	]*\)[ 	][ 	]*\([a-z]*\)$/\1 \2/p' | while read -r serial state; do
+		case "$serial" in
+		*:*) echo "$serial $state wifi" ;;
+		*)   echo "$serial $state usb" ;;
+		esac
+	done
+}
+
+# The serial to drive the phone with: a ready Wi-Fi transport first (it
+# survives USB mode switches), then a ready USB one. Empty if none is ready.
+adb_target() {
+	adb_transports | awk '$2=="device" && $3=="wifi" {print $1; found=1; exit} END{if(!found) exit 1}' && return 0
+	adb_transports | awk '$2=="device" && $3=="usb" {print $1; exit}'
+}
+
+# adb_sh <serial> <shell command>: run a command on the phone
+adb_sh() { "$ADB" -s "$1" shell "$2" 2>/dev/null; }
+
+# ---- the phone on the USB bus (from sysfs, no adb) --------------------------
+
+# Phone vendor ids we name; detection does not depend on the list (an ADB
+# interface or an MTP/PTP/NCM/MIDI/UVC interface is enough).
+vendor_name() {
+	case "$1" in
+	18d1) echo "Google" ;;      04e8) echo "Samsung" ;;
+	22b8) echo "Motorola" ;;    2717) echo "Xiaomi" ;;
+	2a70) echo "OnePlus" ;;     22d9) echo "Oppo" ;;
+	12d1) echo "Huawei" ;;      0fce) echo "Sony" ;;
+	1004) echo "LG" ;;          0bb4) echo "HTC" ;;
+	2916) echo "Nothing" ;;     05c6) echo "Qualcomm" ;;
+	*) echo "" ;;
+	esac
+}
+
+# Find the phone's sysfs device node. Sets PH_NODE, PH_VID, PH_PID and the
+# interface class list PH_IFACES ("c/s/p" per line). Returns 1 if no phone.
+PH_NODE=''; PH_VID=''; PH_PID=''; PH_IFACES=''
+find_phone() {
+	local d vid pid i cls sub pro hit
+	PH_NODE=''; PH_VID=''; PH_PID=''; PH_IFACES=''
+	for d in "$SYSFS"/bus/usb/devices/*/; do
+		[ -f "$d/idVendor" ] || continue
+		case "$d" in *:*) continue ;; esac
+		vid=$(cat "$d/idVendor"); pid=$(cat "$d/idProduct")
+		hit=; PH_IFACES=
+		for i in "$d"*:*; do
+			[ -f "$i/bInterfaceClass" ] || continue
+			cls=$(cat "$i/bInterfaceClass"); sub=$(cat "$i/bInterfaceSubClass"); pro=$(cat "$i/bInterfaceProtocol")
+			PH_IFACES="$PH_IFACES$cls/$sub/$pro
+"
+			# An Android phone's giveaways: the ADB interface (ff/42/01),
+			# MTP/PTP still image (06/01), CDC NCM (02/0d), MIDI (01/03) or
+			# UVC video (0e/..).
+			case "$cls/$sub/$pro" in
+			ff/42/01|06/01/*|01/03/*) hit=1 ;;
+			02/0d/*|0e/0[12]/*) hit=1 ;;
+			esac
+		done
+		[ -n "$hit" ] || [ -n "$(vendor_name "$vid")" ] || continue
+		PH_NODE=${d%/}; PH_NODE=${PH_NODE##*/}; PH_VID=$vid; PH_PID=$pid
+		return 0
+	done
+	return 1
+}
+
+# The USB mode from the interface classes (works without adb).
+mode_from_ifaces() {
+	local ncm='' img='' midi='' uvc='' adb='' other=''
+	while IFS= read -r c; do
+		[ -n "$c" ] || continue
+		case "$c" in
+		ff/42/01) adb=1 ;;
+		06/01/*) img=1 ;;
+		02/0d/*|02/02/*|0a/00/*|e0/01/03) ncm=1 ;;
+		01/01/*|01/03/*) midi=1 ;;
+		0e/*) uvc=1 ;;
+		09/*) ;;
+		*) other=1 ;;
+		esac
+	done <<-EOF
+		$PH_IFACES
+	EOF
+	if [ -n "$ncm" ]; then echo tether
+	elif [ -n "$uvc" ]; then echo webcam
+	elif [ -n "$midi" ]; then echo midi
+	elif [ -n "$img" ]; then echo file
+	elif [ -n "$adb" ] && [ -z "$other" ]; then echo charge
+	else echo unknown
+	fi
+}
+
+# What this kernel can actually do with each mode (are the kmods/devices here?)
+have_module() { [ -d "$SYSFS/module/$1" ] || grep -q "^$1 " /proc/modules 2>/dev/null; }
+
+# ---- status -----------------------------------------------------------------
+
+cmd_status() {
+	local target state mode fmode model android batt bstat usbkind wifikind ip
+	local hasadb=0 video=0 midi=0
+
+	json_init
+
+	command -v "$ADB" >/dev/null 2>&1 && hasadb=1
+	json_add_boolean adb_installed "$hasadb"
+
+	if ! find_phone; then
+		json_add_boolean present 0
+		# A Wi-Fi adb transport can linger after the phone is unplugged
+		json_dump
+		return
+	fi
+	json_add_boolean present 1
+	json_add_string vendor_id "$PH_VID"
+	json_add_string product_id "$PH_PID"
+	json_add_string vendor "$(vendor_name "$PH_VID")"
+
+	mode=$(mode_from_ifaces)
+
+	# adb transports
+	json_add_object adb
+	usbkind=$(adb_transports | awk '$3=="usb"{print $2; exit}')
+	wifikind=$(adb_transports | awk '$3=="wifi"{print $2; exit}')
+	json_add_string usb "${usbkind:-none}"
+	json_add_string wifi "${wifikind:-none}"
+	target=$(adb_target)
+	json_add_boolean ready "$([ -n "$target" ] && echo 1 || echo 0)"
+	json_close_object
+
+	# With adb we can be authoritative about the mode and read the phone
+	if [ -n "$target" ]; then
+		fmode=$(adb_sh "$target" "svc usb getFunctions")
+		case "$fmode" in
+		*mtp*) mode=mtp ;;
+		*ptp*) mode=ptp ;;
+		*ncm*|*rndis*) mode=tether ;;
+		*midi*) mode=midi ;;
+		*uvc*) mode=webcam ;;
+		"") [ "$mode" = file ] && mode=mtp || true ;;
+		esac
+		model=$(adb_sh "$target" "getprop ro.product.model")
+		android=$(adb_sh "$target" "getprop ro.build.version.release")
+		batt=$(adb_sh "$target" "dumpsys battery" | sed -n 's/.*level: \([0-9]*\).*/\1/p' | head -n 1)
+		json_add_string model "$model"
+		json_add_string android "$android"
+		[ -n "$batt" ] && json_add_int battery "$batt"
+		json_add_string functions "$fmode"
+	fi
+	json_add_string mode "$mode"
+
+	# What the running image can do with the kmod-backed modes
+	json_add_object supports
+	if have_module cdc_ncm; then json_add_boolean tether 1; else json_add_boolean tether 0; fi
+	if have_module snd_usb_audio; then json_add_boolean midi 1; else json_add_boolean midi 0; fi
+	{ have_module uvcvideo && [ -e /dev/video0 ]; } && video=1
+	json_add_boolean webcam "$video"
+	json_close_object
+
+	# Live state of the kmod-backed modes
+	if [ -s "$TETHER_IF_STATE" ]; then
+		json_add_object tether
+		json_add_boolean up 1
+		json_add_string iface "$(cat "$TETHER_IF_STATE")"
+		json_add_string wan_ip "$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+		json_close_object
+	fi
+	if [ -s "$WEBCAM_PID" ] && kill -0 "$(cat "$WEBCAM_PID")" 2>/dev/null; then
+		json_add_object webcam_stream
+		json_add_boolean running 1
+		json_add_int port "$WEBCAM_PORT"
+		json_close_object
+	fi
+
+	json_dump
+}
+
+# ---- switching the USB mode -------------------------------------------------
+
+fn_for_mode() {
+	case "$1" in
+	charge) echo "" ;;
+	mtp|file) echo mtp ;;
+	ptp) echo ptp ;;
+	tether|ncm) echo ncm ;;
+	rndis) echo rndis ;;
+	midi) echo midi ;;
+	webcam) echo uvc ;;
+	*) return 1 ;;
+	esac
+}
+
+cmd_set_mode() {
+	local mode="$1" fn target
+	json_init
+	if ! fn=$(fn_for_mode "$mode"); then
+		json_add_string error "unknown mode: $mode"; json_dump; return
+	fi
+	target=$(adb_target)
+	if [ -z "$target" ]; then
+		json_add_string error "USB debugging is needed to switch the phone's mode (enable it, or turn on adb over Wi-Fi)"
+		json_dump; return
+	fi
+	"$ADB" -s "$target" shell "svc usb setFunctions $fn" >/dev/null 2>&1
+	# Give the phone a moment to re-enumerate before we read it back
+	sleep 3
+	cmd_status
+}
+
+# ---- adb over Wi-Fi ---------------------------------------------------------
+
+# The phone's address on a network the router shares (its lease), so we can
+# reach adb over Wi-Fi.
+phone_ip() {
+	local mac
+	# From a USB transport, ask the phone itself
+	mac=$(adb_transports | awk '$3=="usb" && $2=="device"{print $1; exit}')
+	if [ -n "$mac" ]; then
+		"$ADB" -s "$mac" shell "ip -4 -o addr show wlan0" 2>/dev/null | sed -n 's#.*inet \([0-9.]*\)/.*#\1#p' | head -n 1
+	fi
+}
+
+cmd_adb_wifi() {
+	local on="$1" ip="$2" usb
+	json_init
+	if [ "$on" = 0 ]; then
+		ip=$(adb_transports | awk '$3=="wifi"{print $1; exit}')
+		[ -n "$ip" ] && "$ADB" disconnect "$ip" >/dev/null 2>&1
+		"$ADB" usb >/dev/null 2>&1
+		json_add_boolean ok 1
+		json_dump
+		return
+	fi
+	usb=$(adb_transports | awk '$3=="usb" && $2=="device"{print $1; exit}')
+	if [ -z "$usb" ]; then
+		json_add_string error "plug in with USB debugging authorized first"
+		json_dump; return
+	fi
+	[ -n "$ip" ] || ip=$(phone_ip)
+	if [ -z "$ip" ]; then
+		json_add_string error "couldn't find the phone's Wi-Fi address; join it to this router's Wi-Fi"
+		json_dump; return
+	fi
+	"$ADB" -s "$usb" tcpip 5555 >/dev/null 2>&1
+	sleep 3
+	"$ADB" connect "$ip:5555" >/dev/null 2>&1
+	sleep 1
+	json_add_boolean ok 1
+	json_add_string ip "$ip"
+	json_dump
+}
+
+# ---- files (over adb) -------------------------------------------------------
+
+# A path on the phone we are willing to touch: under shared storage, no tricks.
+safe_path() {
+	case "$1" in
+	/sdcard|/sdcard/*|/storage/*) ;;
+	*) return 1 ;;
+	esac
+	case "$1" in *..*|*"'"*|*'"'*|*'`'*) return 1 ;; esac
+	case "$1" in *[![:print:]]*) return 1 ;; esac
+	return 0
+}
+
+cmd_files() {
+	local path="${1:-/sdcard}" target
+	target=$(adb_target)
+	if [ -z "$target" ]; then json_init; json_add_string error "USB debugging is needed to read the phone's files"; json_dump; return; fi
+	if ! safe_path "$path"; then json_init; json_add_string error "that path is not allowed"; json_dump; return; fi
+	# A single `ls -lA` on the phone (one process — a per-file stat loop is far
+	# too slow on a folder with thousands of files), turned straight into JSON
+	# by awk. jshn is pure shell, so building the array with json_add_* takes
+	# tens of seconds for a folder of a thousand-plus entries on this CPU;
+	# awk emits it in one pass instead. The name is everything past the date
+	# and time columns, so spaces in names survive (a tab or newline in a name,
+	# which Android shared storage disallows, is the only thing that would
+	# confuse it); backslashes and quotes are escaped for JSON. The list is
+	# capped so a huge folder can't blow past ubus's reply size.
+	"$ADB" -s "$target" exec-out "ls -lA '$path' 2>/dev/null" 2>/dev/null | awk -v path="$path" -v max=500 '
+		function esc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
+		BEGIN { printf "{ \"path\": \"%s\", \"entries\": [", esc(path); n = 0; trunc = 0 }
+		NR == 1 && $1 == "total" { next }
+		NF >= 8 {
+			t = substr($1, 1, 1); size = $5 + 0;
+			name = $8; for (i = 9; i <= NF; i++) name = name " " $i;
+			p = index(name, " -> "); if (p > 0) name = substr(name, 1, p - 1);
+			if (name == "" || name == "." || name == "..") next;
+			if (n >= max) { trunc = 1; next }
+			printf "%s{ \"dir\": %s, \"size\": %d, \"name\": \"%s\" }", (n ? ", " : ""), \
+				(t == "d" ? "true" : "false"), (t == "d" ? 0 : size), esc(name);
+			n++;
+		}
+		END { printf "], \"count\": %d, \"truncated\": %s }\n", n, (trunc ? "true" : "false") }'
+}
+
+cmd_pull() {
+	local path="$1" target base safe got
+	json_init
+	target=$(adb_target)
+	if [ -z "$target" ]; then json_add_string error "USB debugging is needed"; json_dump; return; fi
+	if ! safe_path "$path"; then json_add_string error "that path is not allowed"; json_dump; return; fi
+	base=${path##*/}
+	# A tame name for the staged copy the download CGI will serve. printf, not
+	# echo: echo would append a newline (tr turns it into a trailing "_") and
+	# mangles a name that starts with "-".
+	safe=$(printf '%s' "$base" | tr -c 'A-Za-z0-9._-' '_')
+	[ -n "$safe" ] || safe='file'
+	mkdir -p "$STAGE"
+	rm -f "$STAGE"/*
+	"$ADB" -s "$target" pull "$path" "$STAGE/$safe" >/dev/null 2>&1
+	if [ -f "$STAGE/$safe" ]; then
+		got=$(wc -c < "$STAGE/$safe")
+		json_add_boolean ok 1
+		json_add_string name "$base"
+		json_add_string url "/cgi-bin/pirate-phone-dl?f=$safe"
+		json_add_int size "${got:-0}"
+	else
+		json_add_boolean ok 0
+		json_add_string error "couldn't read that file"
+	fi
+	json_dump
+}
+
+# ---- tethering: the phone as a WAN uplink -----------------------------------
+
+# The network interface the phone's NCM/RNDIS gadget made (usb0, eth1, ...):
+# the one bound to the cdc_ncm/rndis/cdc_ether driver.
+tether_iface() {
+	local n drv
+	for n in "$SYSFS"/class/net/*/; do
+		[ -e "$n/device/driver" ] || continue
+		drv=$(readlink "$n/device/driver"); drv=${drv##*/}
+		case "$drv" in cdc_ncm|rndis_host|cdc_ether|cdc_eem) basename "$n"; return 0 ;; esac
+	done
+	return 1
+}
+
+cmd_tether() {
+	local act="$1" iface
+	json_init
+	if [ "$act" = down ]; then
+		ifdown phone >/dev/null 2>&1
+		uci -q delete network.phone
+		uci -q delete firewall."$(uci show firewall 2>/dev/null | sed -n "s/firewall\.\(@zone\[[0-9]*\]\)\.name='wan'/\1/p" | head -n 1)" >/dev/null 2>&1
+		uci -q commit network
+		rm -f "$TETHER_IF_STATE"
+		json_add_boolean ok 1
+		json_dump
+		return
+	fi
+	iface=$(tether_iface)
+	if [ -z "$iface" ]; then
+		json_add_string error "no phone network interface — put the phone in USB tethering, and the image needs kmod-usb-net-cdc-ncm"
+		json_dump; return
+	fi
+	uci set network.phone=interface
+	uci set network.phone.proto=dhcp
+	uci set network.phone.device="$iface"
+	uci commit network
+	# Put it in the wan firewall zone so it is treated as untrusted uplink
+	fw_add_wan phone
+	ifup phone >/dev/null 2>&1
+	echo "$iface" > "$TETHER_IF_STATE"
+	sleep 3
+	cmd_status
+}
+
+# Add a logical interface to the 'wan' firewall zone (idempotent)
+fw_add_wan() {
+	local z
+	z=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'$/\1/p" | head -n 1)
+	[ -n "$z" ] || return 0
+	uci -q get "firewall.$z.network" | grep -qw "$1" && return 0
+	uci add_list "firewall.$z.network=$1"
+	uci commit firewall
+	/etc/init.d/firewall reload >/dev/null 2>&1
+}
+
+# ---- webcam: stream the phone's camera (UVC) --------------------------------
+
+cmd_webcam() {
+	local act="$1" res="${2:-640x480}"
+	json_init
+	if [ "$act" = stop ]; then
+		[ -s "$WEBCAM_PID" ] && kill "$(cat "$WEBCAM_PID")" 2>/dev/null
+		rm -f "$WEBCAM_PID"
+		json_add_boolean ok 1
+		json_dump
+		return
+	fi
+	if [ ! -e /dev/video0 ]; then
+		json_add_string error "no camera device — put the phone in Webcam mode, and the image needs kmod-video-uvc"
+		json_dump; return
+	fi
+	command -v "$USTREAM" >/dev/null 2>&1 || { json_add_string error "ustreamer is not installed"; json_dump; return; }
+	[ -s "$WEBCAM_PID" ] && kill "$(cat "$WEBCAM_PID")" 2>/dev/null
+	# No forced --format: ustreamer picks a capture format the UVC gadget
+	# offers (Android's may be YUYV, not MJPEG) and serves MJPEG either way.
+	# --resolution is a best effort; if the device rejects it ustreamer falls
+	# back. Errors go to a log the status can show.
+	"$USTREAM" --device /dev/video0 --host 0.0.0.0 --port "$WEBCAM_PORT" \
+		--resolution "$res" --drop-same-frames 30 > "$WEBCAM_LOG" 2>&1 &
+	echo $! > "$WEBCAM_PID"
+	sleep 1
+	# If it died at once (unsupported resolution/format, port in use), say so
+	if ! kill -0 "$(cat "$WEBCAM_PID" 2>/dev/null)" 2>/dev/null; then
+		rm -f "$WEBCAM_PID"
+		json_add_string error "the camera stream didn't start: $(tail -n 1 "$WEBCAM_LOG" 2>/dev/null)"
+		json_dump; return
+	fi
+	json_add_boolean ok 1
+	json_add_int port "$WEBCAM_PORT"
+	json_add_string path "/stream"
+	json_dump
+}
+
+# ---- MIDI: detect the phone's MIDI port -------------------------------------
+
+cmd_midi() {
+	local p found=0
+	json_init
+	json_add_array ports
+	for p in "$SYSFS"/class/sound/midiC*; do
+		[ -e "$p" ] || continue
+		found=1
+		json_add_object ""
+		json_add_string name "$(basename "$p")"
+		json_close_object
+	done
+	json_close_array
+	if [ "$found" = 0 ]; then
+		if have_module snd_usb_audio; then
+			json_add_string note "no MIDI port — put the phone in MIDI mode"
+		else
+			json_add_string note "the image needs kmod-usb-audio for MIDI"
+		fi
+	fi
+	json_dump
+}
+
+case "$1" in
+status)   cmd_status ;;
+set_mode) cmd_set_mode "$2" ;;
+adb_wifi) cmd_adb_wifi "$2" "$3" ;;
+files)    cmd_files "$2" ;;
+pull)     cmd_pull "$2" ;;
+tether)   cmd_tether "$2" ;;
+webcam)   cmd_webcam "$2" "$3" ;;
+midi)     cmd_midi ;;
+*)
+	echo "usage: pirate-phone status | set_mode <mode> | adb_wifi <0|1> [ip] | files [path] | pull <path> | tether <up|down> | webcam <start|stop> [res] | midi" >&2
+	exit 1
+	;;
+esac

@@ -158,7 +158,7 @@ the left (on a phone, the menu button at the top opens them):
 | Radio | Receivers (the SDR jobs and their addresses), Sensors (what rtl_433 has decoded) |
 | Wi-Fi | Survey, Threats, Handshakes |
 | Network | Uplink (the network it joins), Clients (its own network's, and ad blocking), Hosts, Capture |
-| USB devices | Drives, Flipper, DreamPi |
+| USB devices | Drives, Phone, Flipper, DreamPi |
 | System | Status (its system, jacks, radios and slots), Access, Terminal, Firmware |
 
 *Receivers* has the same status as the status page, with every address the
@@ -321,6 +321,35 @@ recordings and captures, Wi-Fi handshakes included, so share it with a share
 password set, or only on a network you trust. Take the card out and it stops
 being shared; put it back and it is shared again once it mounts. (Its files
 are also on port 8081, in the browser.)
+
+**An Android phone:** plug one into the USB port and the **Phone** tab turns
+each of the phone's "USB controlled by" options into something the Slate can
+use. Turn on **USB debugging** (Developer options) and authorize the router;
+`adb` then reads and switches the phone's USB mode and reaches its files. Each
+mode and what the Slate makes of it:
+
+- **File transfer / Android Auto** (MTP) and **PTP** — browse the phone's
+  shared storage (`/sdcard`) and download files, over `adb` (richer than MTP,
+  which OpenWrt has no tooling for).
+- **USB tethering** — the phone becomes a **WAN uplink**: the router routes its
+  traffic out through the phone's connection. Modern Android tethers over
+  **CDC NCM** (not classic RNDIS), so the image carries `kmod-usb-net-cdc-ncm`
+  (and rndis/cdc-ether for other devices).
+- **Webcam** (Android 14+) — the phone's camera, streamed as MJPEG in the
+  browser (`kmod-video-uvc` + ustreamer, on port 8083).
+- **MIDI** — the phone's MIDI port is detected (`kmod-usb-audio`).
+- **No data transfer** — charging only; the phone is still recognised.
+
+Switching the USB function tears down the USB `adb` interface, and Android
+re-prompts for debugging each time. So the tab offers **adb over Wi-Fi**
+(`adb tcpip` to the phone's address on the router's own network): a Wi-Fi adb
+transport rides over the air, not the USB bus, so flipping modes no longer
+drops it. The backend is `pirate-phone` (its rpcd plugin `pirate.phone`);
+`pirate-phone-dl` serves a pulled file; a usb hotplug hook drops the tether
+uplink and webcam stream when the phone is unplugged. The phone is told apart
+from other USB devices by its ADB interface or its MTP/PTP/NCM/MIDI/UVC
+interface, so an undebugged phone is still named and its mode shown, even
+without adb.
 
 **A Flipper Zero:** plug one into the USB port with a data cable (through the
 hub if a drive is in too) and the **Flipper** tab shows it, as qFlipper would
@@ -533,8 +562,14 @@ Tested in this repository's tests and builds:
   traces along them (to a person and to a repeater), a route found and
   kept, telemetry and its absence, removal, the messages kept through a
   restart, and gpsd keeping off its port),
+  an Android phone on the USB port (pirate-phone with a fake adb and sysfs:
+  the phone recognised and its USB mode told apart for each composition —
+  charging, file transfer, PTP, tethering over CDC NCM, MIDI and webcam —
+  authoritative over adb and read from sysfs without it, the file listing
+  keeping spaces in names, a mode switch asking adb for the right function,
+  and the paths outside shared storage it refuses),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 679
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 699
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

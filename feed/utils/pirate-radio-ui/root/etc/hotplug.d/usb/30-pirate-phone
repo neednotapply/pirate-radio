@@ -1,0 +1,22 @@
+#!/bin/sh
+# When the phone leaves the USB port, undo anything the Phone page set up for
+# it: stop the webcam stream and bring the tethering uplink down. Harmless if
+# neither was running. Only fires once no phone is on the bus any more.
+
+[ "$ACTION" = remove ] || exit 0
+
+# Still a phone plugged in? (another device being removed) — then leave be.
+for d in /sys/bus/usb/devices/*/; do
+	[ -f "$d/idVendor" ] || continue
+	case "$d" in *:*) continue ;; esac
+	for i in "$d"*:*; do
+		[ -f "$i/bInterfaceClass" ] || continue
+		case "$(cat "$i/bInterfaceClass")/$(cat "$i/bInterfaceSubClass")" in
+		ff/42|06/01|02/0d|01/03|0e/*) exit 0 ;;
+		esac
+	done
+done
+
+[ -s /var/run/pirate-phone-webcam.pid ] && /usr/sbin/pirate-phone webcam stop >/dev/null 2>&1
+[ -s /var/run/pirate-phone-tether.if ] && /usr/sbin/pirate-phone tether down >/dev/null 2>&1
+exit 0

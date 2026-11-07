@@ -108,6 +108,17 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-dreampi $(1)/usr/sbin/pirate-dreampi
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.dreampi $(1)/usr/libexec/rpcd/pirate.dreampi
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-dreampi.json $(1)/usr/share/rpcd/acl.d/pirate-dreampi.json
+	# Phone page: an Android phone on the USB port. adb (USB debugging) reads
+	# and switches its USB mode and reaches its files; the kmods for tethering
+	# (cdc-ncm), MIDI (usb-audio) and the webcam (video-uvc) ride in the image
+	# (config/packages.txt). pirate-phone-dl streams a pulled file; the usb
+	# hotplug tidies up when the phone leaves.
+	$(INSTALL_BIN) ./root/usr/sbin/pirate-phone $(1)/usr/sbin/pirate-phone
+	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.phone $(1)/usr/libexec/rpcd/pirate.phone
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-phone.json $(1)/usr/share/rpcd/acl.d/pirate-phone.json
+	$(INSTALL_BIN) ./files/pirate-phone-dl $(1)/www/cgi-bin/pirate-phone-dl
+	$(INSTALL_DIR) $(1)/etc/hotplug.d/usb
+	$(INSTALL_DATA) ./root/etc/hotplug.d/usb/30-pirate-phone $(1)/etc/hotplug.d/usb/30-pirate-phone
 	# Flipper page (the pirate-flipper package's daemon does the work; without
 	# it the page says so, rather than being refused)
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-flipper.json $(1)/usr/share/rpcd/acl.d/pirate-flipper.json

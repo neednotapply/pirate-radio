@@ -932,3 +932,10 @@ a { color: var(--link); }
 @media (prefers-reduced-motion: reduce) {
 	.side, .menu-open .side { transition: none; }
 }
+
+/* Phone page */
+.mode-row { flex-wrap: wrap; gap: 8px; }
+.lnk { color: var(--link); text-decoration: none; cursor: pointer; overflow-wrap: anywhere; }
+.lnk:hover { text-decoration: underline; }
+.cam-wrap { margin-top: 12px; border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; background: #000; max-width: 720px; }
+.cam { display: block; width: 100%; height: auto; }
