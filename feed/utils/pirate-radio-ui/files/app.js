@@ -2225,18 +2225,23 @@
 			year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
 	}
 
-	/* Small icons, drawn here (no icon font) */
+	/* Small icons, drawn here (no icon font), or an emoji where a drawing
+	   this small wouldn't read */
 	var MC_ICON = {
 		hash: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M6.4 2 5.2 14M10.8 2 9.6 14M2.6 5.6h11.2M2.2 10.4h11.2" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>',
 		lock: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M5.2 7V5.3a2.8 2.8 0 0 1 5.6 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="3.4" y="7" width="9.2" height="6.8" rx="1.4" fill="currentColor"/></svg>',
-		gear: '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="2.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.6v2.1M8 12.3v2.1M1.6 8h2.1M12.3 8h2.1M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5 5 11M11 5l1.5-1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+		// The emoji: a drawn one at this size looked like a sun
+		gear: "&#x2699;&#xFE0F;",
 		plus: '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
 		people: '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="6" cy="5.4" r="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.6 13.6c.4-2.4 2.2-3.9 4.4-3.9s4 1.5 4.4 3.9M10.6 3.2a2.4 2.4 0 0 1 0 4.5M12.2 9.9c1.3.5 2.1 1.7 2.3 3.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
 		chev: '<svg viewBox="0 0 12 12" width="10" height="10"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 		send: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.2 7.6 13.8 2.4 10.6 13.8 8.1 9.1Z" fill="currentColor"/></svg>',
 		down: '<svg viewBox="0 0 12 12" width="11" height="11"><path d="M6 2v8M2.6 6.6 6 10l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 	};
-	function mcIcon(name, cls) { return el("span", { class: "mc-ic" + (cls ? " " + cls : ""), "aria-hidden": "true", html: MC_ICON[name] }); }
+	function mcIcon(name, cls) {
+		var emoji = MC_ICON[name].charAt(0) !== "<";
+		return el("span", { class: "mc-ic" + (emoji ? " mc-ic-e" : "") + (cls ? " " + cls : ""), "aria-hidden": "true", html: MC_ICON[name] });
+	}
 	// A channel: MeshCore's public one, a #hashtag one (its key from its
 	// name: anyone can join), or private (a key given to those in it)
 	var MC_PUBLIC_KEY = "8b3387e9c5cdea6ac9e5edbaa115cd72";
