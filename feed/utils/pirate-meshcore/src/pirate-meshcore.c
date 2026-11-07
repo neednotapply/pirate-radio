@@ -2909,7 +2909,8 @@ static int m_poll(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
  * reply (the id of the message it answers) goes as MeshCore's app sends
  * one, "@[Name] " first. */
 static int send_wire(struct ubus_context *c, struct ubus_request_data *req, const struct contact *ct, int idx,
-		     const char *conv, const char *wire, uint32_t reply, uint32_t react, const char *emoji);
+		     const char *conv, const char *wire, uint32_t reply, uint32_t react, const char *emoji,
+		     const char *note);
 
 static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		  const char *method, struct blob_attr *msg)
@@ -2979,13 +2980,15 @@ static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
 			return reply_error(c, req, eb);
 		}
 	}
-	return send_wire(c, req, ct, idx, conv, wire, re ? re->id : 0, 0, NULL);
+	return send_wire(c, req, ct, idx, conv, wire, re ? re->id : 0, 0, NULL, NULL);
 }
 
 /* A message (as it goes on the air) to a contact or a channel: kept at
- * once, queued, its status following; a reply, or a reaction */
+ * once, queued, its status following; a reply, or a reaction (and a note
+ * on how it went, for the page) */
 static int send_wire(struct ubus_context *c, struct ubus_request_data *req, const struct contact *ct, int idx,
-		     const char *conv, const char *wire, uint32_t reply, uint32_t react, const char *emoji)
+		     const char *conv, const char *wire, uint32_t reply, uint32_t react, const char *emoji,
+		     const char *note)
 {
 	uint8_t f[MAX_FRAME];
 	struct msg *m;
@@ -3037,25 +3040,63 @@ static int send_wire(struct ubus_context *c, struct ubus_request_data *req, cons
 	blobmsg_add_u8(&rb, "ok", 1);
 	blobmsg_add_u32(&rb, "id", m->id);
 	blobmsg_add_u32(&rb, "seq", seq);
+	if (note)
+		blobmsg_add_string(&rb, "note", note);
 	ubus_send_reply(c, req, rb.head);
 	return UBUS_STATUS_OK;
 }
 
+/* Whether a reaction to this message goes in meshcore-open's form: the
+ * newest reaction its author sent here came in it (meshcore-open before
+ * 9.5.2 reads no other). Between two, the newest in that conversation; in
+ * a channel, the newest from that name, in any channel */
+static bool peer_mco(const struct msg *t)
+{
+	bool ch = t->conv[0] == '#';
+	struct reaction r;
+	int i;
+
+	for (i = (int)nmsgs - 1; i >= 0; i--) {
+		const struct msg *m = &msgs[i];
+
+		if (m->out || !m->emoji[0])
+			continue;
+		if (ch ? m->conv[0] != '#' || strcmp(m->from, t->from) : strcmp(m->conv, t->conv) != 0)
+			continue;
+		return parse_reaction(m->text, m->conv[0] == '#', &r) && r.mco;
+	}
+	return false;
+}
+
+/* An emoji's place in meshcore-open's table (its first), or -1 */
+static int mco_index(const char *e)
+{
+	size_t i;
+
+	for (i = 0; i < sizeof(mco_emoji) / sizeof(mco_emoji[0]); i++)
+		if (!strcmp(mco_emoji[i], e))
+			return (int)i;
+	return -1;
+}
+
 /* React to a message, as MeshCore One does: in a channel "@[Name]emoji"
  * and, on the next line, the message's hash; between two, "emoji" and
- * its hash (meshcore-open shows these too). Between two, only to one of
- * theirs: a reaction there names no one, so meshcore-open (and MCO
- * Advanced) look for it only among the messages they sent, and show one
- * to ours as its text */
+ * its hash (meshcore-open reads these from 9.5.2). To someone whose own
+ * reactions come in meshcore-open's form ("r:hash:index"), in that, if
+ * the emoji is one of its table's: its versions before 9.5.2 read no
+ * other. Between two, only to one of theirs: a reaction there names no
+ * one, so meshcore-open (and MCO Advanced) look for it only among the
+ * messages they sent, and show one to ours as its text */
 static int m_react(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		   const char *method, struct blob_attr *msg)
 {
-	char wire[MAX_TEXT + 1], body[MAX_TEXT + 1], h[9];
+	char wire[MAX_TEXT + 1], body[MAX_TEXT + 1], h[9], note[200] = "";
 	const char *emoji, *err;
 	struct contact *ct = NULL;
 	struct msg *t;
 	int64_t id;
-	int idx = -1, i;
+	int idx = -1, i, ix = -1;
+	bool ch, mco;
 
 	(void)obj; (void)method;
 	parse(msg);
@@ -3063,14 +3104,13 @@ static int m_react(struct ubus_context *c, struct ubus_object *obj, struct ubus_
 		return reply_error(c, req, err);
 	if (!arg_num(A_ID, &id) || id <= 0 || !(t = msg_by_id(id)) || t->emoji[0])
 		return reply_error(c, req, "id: a message (not a reaction)");
-	if (t->out && t->conv[0] != '#')
+	ch = t->conv[0] == '#';
+	if (t->out && !ch)
 		return reply_error(c, req, "id: in a DM, one of their messages (meshcore-open can't show a reaction to your own)");
 	emoji = arg_str(A_EMOJI);
 	if (!emoji || !reaction_emoji(emoji))
 		return reply_error(c, req, "emoji: one emoji");
-	hash_text(t, t->conv[0] == '#', body, sizeof(body));
-	mc1_hash(body, t->ts, h);
-	if (t->conv[0] == '#') {
+	if (ch) {
 		idx = atoi(t->conv + 1);
 		for (i = 0; i < nchannels && channels[i].idx != idx; i++)
 			;
@@ -3078,16 +3118,30 @@ static int m_react(struct ubus_context *c, struct ubus_object *obj, struct ubus_
 			return reply_error(c, req, "that channel is gone");
 		if (!t->from[0])
 			return reply_error(c, req, "that message came with no name to react to");
-		snprintf(wire, sizeof(wire), "@[%s]%s\n%s", t->from, emoji, h);
 	} else {
 		uint8_t key[6];
 
 		unhex(key, sizeof(key), t->conv + 1);
 		if (!(ct = contact_by_prefix(key, 6)))
 			return reply_error(c, req, "that contact is gone");
-		snprintf(wire, sizeof(wire), "%s\n%s", emoji, h);
 	}
-	return send_wire(c, req, ct, idx, t->conv, wire, 0, t->id, emoji);
+	mco = peer_mco(t);
+	if (mco)
+		ix = mco_index(emoji);
+	if (ix >= 0) {
+		snprintf(wire, sizeof(wire), "r:%04x:%02x", mco_hash(t->ts, ch ? t->from : NULL, t->text), ix);
+	} else {
+		hash_text(t, ch, body, sizeof(body));
+		mc1_hash(body, t->ts, h);
+		if (ch)
+			snprintf(wire, sizeof(wire), "@[%s]%s\n%s", t->from, emoji, h);
+		else
+			snprintf(wire, sizeof(wire), "%s\n%s", emoji, h);
+		if (mco)
+			snprintf(note, sizeof(note), "%s isn't one of meshcore-open's emoji: it went in MeshCore One's form, "
+				 "which meshcore-open before 9.5.2 shows as text", emoji);
+	}
+	return send_wire(c, req, ct, idx, t->conv, wire, 0, t->id, emoji, note[0] ? note : NULL);
 }
 
 /* Send one again that wasn't confirmed: the same message (time and text),
