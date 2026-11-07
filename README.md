@@ -358,6 +358,15 @@ app, as MeshCore's is on a phone:
   between days; each message's SNR and hops, and for yours whether it was
   sent, delivered (with the round trip) or not confirmed (*retry* sends it
   again, as the same message).
+- **Replies**, as in a chat app: *Reply* on a message (hover, or tap on a
+  phone) and the composer says whom you're answering; a reply carries the
+  start of what it answers above it (click it to go there), and one to you
+  is lit. MeshCore has no reply in its protocol, so a reply goes as its
+  apps send one, `@[Name] ` first, which every MeshCore app shows. The
+  router keeps which message each of yours answers; for one that comes,
+  it's the newest of that person's before it (as MeshCore's app means it),
+  or, from MeshCore Open (which adds the time, `@[Name#…]`), the one of
+  theirs at that time. `@[Name]` answering nothing here is a mention.
 - **Channels**: add a #hashtag one (its key comes from its name), a private
   one (a random key) or one whose key you were given; see a key to share it;
   remove one.
@@ -444,12 +453,13 @@ Tested in this repository's tests and builds:
   `tests/fakemeshcore`, a companion radio on a pseudo-terminal: a Bluetooth
   build's silence, connecting, its details, contacts and channels, the
   messages it kept and those that come, sending to contacts and channels,
-  delivery and its absence, a retry, hashtag, private and keyed channels,
+  delivery and its absence, a retry, replies sent and received (MeshCore's
+  app's and MeshCore Open's), hashtag, private and keyed channels,
   adverts, its name, its GPS and the survey taking its position, contacts'
   routes and removal, the messages kept through a restart, and gpsd keeping
   off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 618
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 630
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

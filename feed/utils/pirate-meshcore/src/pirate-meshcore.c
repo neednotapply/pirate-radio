@@ -254,6 +254,7 @@ struct msg {
 	int64_t ack_by;
 	char from[MAX_NAME + 1];    /* in a channel, who sent it */
 	char text[MAX_TEXT + 1];
+	uint32_t reply;             /* the message it answers ("@[Name] " first), or 0 */
 };
 
 struct conv_read {
@@ -446,7 +447,67 @@ static void put_msg_line(FILE *f, const struct msg *m)
 	put_esc(f, m->from);
 	fputc('\t', f);
 	put_esc(f, m->text);
-	fputc('\n', f);
+	fprintf(f, "\t%u\n", m->reply);
+}
+
+/* A reply, as MeshCore's apps write one: "@[Name] " first. MeshCore's own
+ * app says only whose message it answers: the newest of theirs before it,
+ * in the same conversation. MeshCore Open adds that message's time, in ms
+ * ("@[Name#1781985208139] "): the one of theirs nearest it. */
+static bool mention(const char *text, char *name, size_t size, int64_t *key_ms)
+{
+	const char *e, *h;
+	size_t l;
+
+	*key_ms = -1;
+	if (strncmp(text, "@[", 2))
+		return false;
+	text += 2;
+	e = strchr(text, ']');
+	if (!e || e == text || e - text > MAX_NAME + 21)
+		return false;
+	l = e - text;
+	for (h = e; h > text && h[-1] >= '0' && h[-1] <= '9'; h--)
+		;
+	if (h > text + 1 && h[-1] == '#' && e - h >= 10 && e - h <= 16) {
+		*key_ms = strtoll(h, NULL, 10);
+		l = h - 1 - text;
+	}
+	if (!l || l > MAX_NAME || l >= size)
+		return false;
+	memcpy(name, text, l);
+	name[l] = 0;
+	return true;
+}
+
+static uint32_t reply_target(const struct msg *m)
+{
+	const struct msg *newest = NULL, *near = NULL;
+	char name[MAX_NAME + 1];
+	int64_t key_ms, d, dn = 0;
+	int i;
+
+	if (!mention(m->text, name, sizeof(name), &key_ms))
+		return 0;
+	for (i = (int)(m - msgs) - 1; i >= 0; i--) {
+		const struct msg *p = &msgs[i];
+
+		if (strcmp(p->conv, m->conv) || strcmp(p->from, name))
+			continue;
+		if (!newest)
+			newest = p;
+		if (key_ms < 0)
+			break;
+		d = llabs((int64_t)p->ts * 1000 - key_ms);
+		if (!near || d < dn) {
+			near = p;
+			dn = d;
+		}
+	}
+	/* A time near none of theirs (clocks differ): the newest, as for the app */
+	if (near && dn <= 120000)
+		return near->id;
+	return newest ? newest->id : 0;
 }
 
 static FILE *store_open(const char *mode)
@@ -579,6 +640,11 @@ static void store_load(void)
 			unesc(f[14]);
 			snprintf(m->from, sizeof(m->from), "%s", f[13]);
 			snprintf(m->text, sizeof(m->text), "%s", f[14]);
+			/* What it answers: kept, or (a store from before replies) worked out */
+			if (n >= 16)
+				m->reply = strtoul(f[15], NULL, 10);
+			else if (!m->out)
+				m->reply = reply_target(m);
 			/* Sent and never heard of again: not now, either */
 			if (m->out && (!strcmp(m->status, "queued") || !strcmp(m->status, "sent")))
 				snprintf(m->status, sizeof(m->status), "%s", "unconfirmed");
@@ -910,6 +976,7 @@ static void on_message(const uint8_t *f, size_t n)
 			memmove(m->text, sep + 2, strlen(sep + 2) + 1);
 		}
 	}
+	m->reply = reply_target(m);
 	store_msg(m);
 }
 
@@ -1520,7 +1587,7 @@ static void refresh_cb(struct uloop_timeout *t)
 
 enum {
 	A_TO, A_TEXT, A_ID, A_CONV, A_SINCE, A_BEFORE, A_LIMIT, A_NAME, A_ENABLED, A_FLOOD,
-	A_KEY, A_INDEX, A_SECRET,
+	A_KEY, A_INDEX, A_SECRET, A_REPLY,
 	__A_MAX
 };
 
@@ -1539,11 +1606,14 @@ static const struct blobmsg_policy pol_all[__A_MAX] = {
 	[A_KEY] = { "key", BLOBMSG_TYPE_UNSPEC },
 	[A_INDEX] = { "index", BLOBMSG_TYPE_UNSPEC },
 	[A_SECRET] = { "secret", BLOBMSG_TYPE_UNSPEC },
+	[A_REPLY] = { "reply", BLOBMSG_TYPE_UNSPEC },
 };
 static struct blob_attr *tb[__A_MAX];
 
 /* What `ubus -v list` shows for each method */
-static const struct blobmsg_policy p_send[] = { { "to", BLOBMSG_TYPE_STRING }, { "text", BLOBMSG_TYPE_STRING } };
+static const struct blobmsg_policy p_send[] = {
+	{ "to", BLOBMSG_TYPE_STRING }, { "text", BLOBMSG_TYPE_STRING }, { "reply", BLOBMSG_TYPE_INT32 },
+};
 static const struct blobmsg_policy p_id[] = { { "id", BLOBMSG_TYPE_INT32 } };
 static const struct blobmsg_policy p_messages[] = {
 	{ "conv", BLOBMSG_TYPE_STRING }, { "before", BLOBMSG_TYPE_INT32 }, { "limit", BLOBMSG_TYPE_INT32 },
@@ -1897,6 +1967,19 @@ static void add_msg(struct blob_buf *b, const struct msg *m)
 	if (m->from[0])
 		blobmsg_add_string(b, "from", m->from);
 	blobmsg_add_string(b, "text", m->text);
+	/* A reply: what it answers, if that is still kept */
+	if (m->reply) {
+		const struct msg *r = msg_by_id(m->reply);
+
+		blobmsg_add_u32(b, "reply", m->reply);
+		if (r) {
+			if (r->from[0])
+				blobmsg_add_string(b, "reply_from", r->from);
+			blobmsg_add_string(b, "reply_text", r->text);
+			if (r->out)
+				blobmsg_add_u8(b, "reply_out", 1);
+		}
+	}
 	if (m->out) {
 		blobmsg_add_string(b, "status", m->status);
 		if (m->trip)
@@ -1987,17 +2070,21 @@ static int m_poll(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
 
 /* Send a message: to a contact (its key, or the start of it: 12 hex
  * digits at least) or a channel ("#" and its index). It is kept at once,
- * queued; its status follows (sent, then delivered or unconfirmed). */
+ * queued; its status follows (sent, then delivered or unconfirmed). A
+ * reply (the id of the message it answers) goes as MeshCore's app sends
+ * one, "@[Name] " first. */
 static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		  const char *method, struct blob_attr *msg)
 {
 	const char *to, *text, *err;
+	char wire[MAX_TEXT + MAX_NAME + 8], conv[16], eb[96];
 	uint8_t f[MAX_FRAME], key[PUB_KEY];
 	struct contact *ct = NULL;
-	struct msg *m;
+	struct msg *m, *re = NULL;
 	struct op *o;
 	size_t tl;
 	int idx = -1, kl, i;
+	int64_t rid;
 
 	(void)obj; (void)method;
 	parse(msg);
@@ -2035,29 +2122,49 @@ static int m_send(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
 		if (!ct)
 			return reply_error(c, req, "to: no such contact");
 	}
+	if (ct)
+		conv_of_key(conv, ct->key);
+	else
+		snprintf(conv, sizeof(conv), "#%d", idx);
+	snprintf(wire, sizeof(wire), "%s", text);
+	if (tb[A_REPLY]) {
+		const char *who;
+
+		if (!arg_num(A_REPLY, &rid) || rid <= 0 || !(re = msg_by_id(rid)) || strcmp(re->conv, conv))
+			return reply_error(c, req, "reply: a message in that conversation");
+		who = re->from[0] ? re->from : (ct && !re->out) ? ct->name : "";
+		if (!who[0])
+			return reply_error(c, req, "reply: that message came with no name to answer");
+		snprintf(wire, sizeof(wire), "@[%s] %s", who, text);
+		tl = strlen(wire);
+		if (tl > 150 || (!ct && tl + strlen(self.name) + 2 > MAX_TEXT)) {
+			snprintf(eb, sizeof(eb), "text: too long, with @[%s] before it", who);
+			return reply_error(c, req, eb);
+		}
+	}
 	m = msg_new();
 	m->out = true;
 	m->ts = m->rx = time(NULL);
 	snprintf(m->status, sizeof(m->status), "%s", "queued");
 	snprintf(m->from, sizeof(m->from), "%s", self.name);
-	memcpy(m->text, text, tl);
-	m->text[tl] = 0;
+	snprintf(m->conv, sizeof(m->conv), "%s", conv);
+	snprintf(m->text, sizeof(m->text), "%s", wire);
+	m->reply = re ? re->id : 0;
+	tl = strlen(m->text);
 	if (ct) {
-		conv_of_key(m->conv, ct->key);
 		f[0] = CMD_SEND_TXT_MSG;
 		f[1] = 0;                 /* plain text */
 		f[2] = 0;                 /* first attempt */
 		wr32(f + 3, m->ts);
 		memcpy(f + 7, ct->key, 6);
-		memcpy(f + 13, text, tl);
+		memcpy(f + 13, m->text, tl);
 		o = op_new(OP_SEND, f, 13 + tl);
 	} else {
-		snprintf(m->conv, sizeof(m->conv), "#%d", idx);
 		f[0] = CMD_SEND_CHANNEL_TXT_MSG;
 		f[1] = 0;
 		f[2] = idx;
 		wr32(f + 3, m->ts);
-		memcpy(f + 7, text, tl);
+		memcpy(f + 7, m->text, tl);
 		o = op_new(OP_SEND_CH, f, 7 + tl);
 	}
 	store_msg(m);

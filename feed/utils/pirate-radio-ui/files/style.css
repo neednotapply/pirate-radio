@@ -552,6 +552,51 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .mc-hover { visibility: hidden; margin-left: 10px; white-space: nowrap; }
 .mc-text { color: var(--txt); line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mc-text .mc-st { margin-left: 8px; font-size: 11px; color: var(--faint); white-space: nowrap; }
+
+/* Replies: what one answers above it, a line from its face up to that
+   one's; replies and mentions of you lit amber; Reply on hover */
+.mc-msgs { position: relative; }
+.mc-row { position: relative; }
+.mc-conn {
+	grid-column: 1; align-self: end; height: 10px; margin: 0 6px 0 30px;
+	border: solid var(--line-3); border-width: 2px 0 0 2px; border-top-left-radius: 7px;
+}
+.mc-rline {
+	grid-column: 2; appearance: none; background: none; border: 0; padding: 0 0 1px; margin: 0;
+	display: flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%;
+	font: inherit; font-size: 12.5px; line-height: 18px; color: var(--muted); text-align: left; cursor: pointer;
+}
+.mc-rline:hover .mc-rtext { color: var(--txt); }
+.mc-rname { flex: none; font-weight: 600; color: hsl(var(--h), 75%, 76%); }
+.mc-rname.deep { color: hsl(var(--h), 92%, 64%); }
+.mc-rname.mine { color: var(--accent); }
+.mc-rtext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-rtext.gone { font-style: italic; color: var(--faint); }
+.mc-av.xxs { width: 16px; height: 16px; font-size: 9px; border-width: 0; }
+.mc-av.xxs.emoji { font-size: 11px; }
+.mc-mention { color: var(--link); background: rgba(159, 188, 216, .12); border-radius: 3px; padding: 0 2px; font-weight: 600; }
+.mc-mention.me { color: var(--accent); background: var(--accent-soft); }
+.mc-row.mc-me { background: rgba(224, 160, 64, .07); box-shadow: inset 2px 0 0 var(--accent); }
+.mc-row.mc-me:hover { background: rgba(224, 160, 64, .1); }
+.mc-row.mc-target { background: rgba(159, 188, 216, .08); box-shadow: inset 2px 0 0 var(--link); }
+.mc-row.mc-flash { animation: mc-flash 1.7s ease-out; }
+@keyframes mc-flash { from { background: rgba(159, 188, 216, .24); } to { background: transparent; } }
+.mc-acts {
+	position: absolute; top: -12px; right: 14px; z-index: 1; display: flex; opacity: 0; pointer-events: none;
+	background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+}
+.mc-row:hover .mc-acts, .mc-row.mc-sel .mc-acts, .mc-acts:focus-within { opacity: 1; pointer-events: auto; }
+.mc-act { appearance: none; background: none; border: 0; border-radius: 3px; color: var(--muted); font: inherit; font-size: 12px; padding: 3px 10px; cursor: pointer; }
+.mc-act:hover, .mc-act:focus-visible { color: var(--hi); background: #2a2e33; }
+.mc-replybar {
+	display: flex; align-items: center; gap: 10px; margin: 0 0 6px; padding: 5px 10px;
+	background: var(--inset); border: 1px solid var(--line-2); border-left: 2px solid var(--link);
+	font-size: 12px; color: var(--muted);
+}
+.mc-rb-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-rb-snip { margin-left: 8px; color: var(--faint); }
+.mc-rb-x { appearance: none; background: none; border: 0; padding: 0 2px; color: var(--muted); font: inherit; cursor: pointer; }
+.mc-rb-x:hover { color: var(--hi); }
 .mc-st.mc-delivered { color: var(--ok); }
 .mc-st.mc-unconfirmed, .mc-st.mc-failed { color: var(--warn); }
 .mc-retry { font-size: 11px; }
@@ -644,6 +689,8 @@ a { color: var(--link); }
 	.mc-day { margin-left: 10px; margin-right: 10px; }
 	.mc-av { width: 34px; height: 34px; font-size: 15px; }
 	.mc-av.emoji { font-size: 19px; }
+	.mc-conn { margin-left: 25px; }
+	.mc-acts { right: 8px; }
 }
 @media (max-width: 520px) {
 	.grid { grid-template-columns: 1fr 1fr; gap: 8px; }

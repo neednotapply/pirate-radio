@@ -1855,6 +1855,28 @@ check "meshcore: a message comes: fetched" sh -c "'$FZ_UBUS' -s '$MC/ubus.sock' 
 echo "chan anyone about" > "$MC/ctl"
 sleep 2
 check "meshcore: a channel's comes" [ "$(mc_msg '#0' 'anyone about' from)" = Bob ]
+# Replies, as MeshCore's apps write them ("@[Name] " first): ours to a
+# message; theirs to the newest of that name's before it, or (MeshCore
+# Open's, with a time) to the one nearest that time
+RB=$(mc_msg '#0' 'anyone about' id)
+check "meshcore: reply" mc_ok send "{\"to\":\"#0\",\"text\":\"right here\",\"reply\":$RB}"
+check "meshcore: reply: the radio told, @[Name] first" grep -qxF 'chan 0 @[Bob] right here' "$MC/fake.log"
+sleep 1
+check "meshcore: reply: to that message" [ "$(mc_msg '#0' '@[Bob] right here' reply)" = "$RB" ]
+check "meshcore: reply: what it answers, with it" [ "$(mc_msg '#0' '@[Bob] right here' reply_from)|$(mc_msg '#0' '@[Bob] right here' reply_text)" = "Bob|anyone about" ]
+check "meshcore: reply: to another conversation's" [ "$(mce send "{\"to\":\"#1\",\"text\":\"x\",\"reply\":$RB}")" = "reply: a message in that conversation" ]
+check "meshcore: reply: too long, with @[Name]" [ "$(mce send "{\"to\":\"a1a1a1a1a1a1\",\"text\":\"$(printf '%0145d' 0)\",\"reply\":$(mc_msg ca1a1a1a1a1a1 'hello router' id)}")" = "text: too long, with @[Alice] before it" ]
+echo "chan @[PirateTest] good to hear" > "$MC/ctl"
+sleep 2
+check "meshcore: a reply comes: to our newest" [ "$(mc_msg '#0' '@[PirateTest] good to hear' reply)" = "$(mc_msg '#0' '@[Bob] right here' id)" ]
+check "meshcore: a reply comes: to ours, it says" [ "$(mc_msg '#0' '@[PirateTest] good to hear' reply_out)" = true ]
+KT=$(( $(mc_msg '#0' 'hello mesh' ts) * 1000 + 417 ))
+echo "chan @[PirateTest#$KT] still on?" > "$MC/ctl"
+sleep 2
+check "meshcore: a reply with a time: to the one then" [ "$(mc_msg '#0' "@[PirateTest#$KT] still on?" reply)|$(mc_msg '#0' "@[PirateTest#$KT] still on?" reply_text)" = "$(mc_msg '#0' 'hello mesh' id)|hello mesh" ]
+echo "chan @[Nobody] hello?" > "$MC/ctl"
+sleep 2
+check "meshcore: a mention of no one here: no reply" [ -z "$(mc_msg '#0' '@[Nobody] hello?' reply)" ]
 echo "advert" > "$MC/ctl"
 sleep 1
 check "meshcore: an advert: a new contact" [ "$(mc contacts | jsonfilter -e '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|Carol|" ]
@@ -1898,6 +1920,7 @@ check "meshcore: remove: no such contact" [ "$(mce contact_remove '{"key":"99999
 check "meshcore: refresh" mc_ok refresh
 # Kept: the messages and what became of them, after a restart
 N=$(mc messages '{"conv":"ca1a1a1a1a1a1"}' | jsonfilter -e '@.messages[*].id' | wc -l)
+U0=$(mc channels | jsonfilter -e '@.channels[0].unread')
 kill "$MC_DAEMON"
 sleep 1
 pirate-meshcore -d "$MC/tty" -m "$MC/messages" -u "$MC/ubus.sock" -p 1000 -a 1500 > "$MC/daemon2.log" 2>&1 &
@@ -1905,7 +1928,9 @@ MC_DAEMON=$!
 check "meshcore: restarted, connects again" mc_wait '@.state' ready 40
 check "meshcore: kept: the messages" [ "$(mc messages '{"conv":"ca1a1a1a1a1a1"}' | jsonfilter -e '@.messages[*].id' | wc -l)" = "$N" ]
 check "meshcore: kept: delivered stays delivered" [ "$(mc_msg ca1a1a1a1a1a1 'hi alice' status)" = delivered ]
-check "meshcore: kept: what was read" [ "$(mc channels | jsonfilter -e '@.channels[0].unread')" = 1 ]
+check "meshcore: kept: something unread, to keep" [ "$U0" -gt 0 ]
+check "meshcore: kept: what was read" [ "$(mc channels | jsonfilter -e '@.channels[0].unread')" = "$U0" ]
+check "meshcore: kept: what a reply answers" [ "$(mc_msg '#0' '@[Bob] right here' reply)" = "$RB" ]
 # Unplugged
 kill "$MC_FAKE"
 check "meshcore: unplugged: absent" mc_wait '@.state' absent

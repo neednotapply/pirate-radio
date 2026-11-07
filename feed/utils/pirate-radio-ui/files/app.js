@@ -134,12 +134,14 @@
 		said("#0", "Bob", "anyone on tonight?", 90000, -5.5, 2);
 		mine("#0", "here, from the van", 89900, "sent");
 		said("#0", "🦜 Polly", "morning all", 2400, 6.25, 0);
-		said("#0", "🦜 Polly", "the repeater on the ridge is back", 2370, 6, 0);
+		var ridge = said("#0", "🦜 Polly", "the repeater on the ridge is back", 2370, 6, 0);
 		said("#0", "🦜 Polly", "hearing it at -88 from town", 2340, 5.75, 0);
-		said("#0", "Kiwi 🇳🇿", "nice, it reaches the harbour too", 2100, -2.5, 3);
+		said("#0", "Kiwi 🇳🇿", "@[🦜 Polly] nice, it reaches the harbour too", 2100, -2.5, 3).reply = ridge.id;
 		mine("#0", "great news", 1500, "sent");
-		mine("#0", "I'll drive up on saturday and check its battery", 1480, "sent");
-		var read0 = said("#0", "Alice", "count me in", 1200, 9.5, 1).id;
+		var drive = mine("#0", "I'll drive up on saturday and check its battery", 1480, "sent");
+		var alice = said("#0", "Alice", "@[" + mc.name + "] count me in", 1200, 9.5, 1);
+		alice.reply = drive.id;
+		var read0 = alice.id;
 		said("#0", "Bob", "same, if the weather holds", 600, -6, 2);
 		said("ca1a1a1a1a1a1", "Alice", "the repeater on the hill is back up", 1800, 10, 1);
 		var readA = mine("ca1a1a1a1a1a1", "great, hearing it at -92", 1700, "delivered", { trip_ms: 850 }).id;
@@ -160,6 +162,15 @@
 		var o = JSON.parse(JSON.stringify(c));
 		o.unread = unread;
 		if (last) o.last_message = last;
+		return o;
+	}
+	// A message as the daemon gives it: a reply with what it answers
+	function demoMcMsg(m) {
+		var o = JSON.parse(JSON.stringify(m)), r;
+		if (m.reply && (r = DEMO_MC.msgs.filter(function (x) { return x.id === m.reply; })[0])) {
+			o.reply_from = r.from; o.reply_text = r.text;
+			if (r.out) o.reply_out = true;
+		}
 		return o;
 	}
 	function demoMcPos() {
@@ -581,11 +592,11 @@
 			return { channels: DEMO_MC.channels.map(demoMcConv), free: free };
 		},
 		"pirate.meshcore:messages": function (p) {
-			return { seq: DEMO_MC.seq, more: false, messages: DEMO_MC.msgs.filter(function (m) { return m.conv === p.conv; }) };
+			return { seq: DEMO_MC.seq, more: false, messages: DEMO_MC.msgs.filter(function (m) { return m.conv === p.conv; }).map(demoMcMsg) };
 		},
 		"pirate.meshcore:poll": function (p) {
 			return { state: "ready", seq: DEMO_MC.seq, meta: false,
-				messages: DEMO_MC.msgs.filter(function (m) { return m.seq > (p.since || 0); }) };
+				messages: DEMO_MC.msgs.filter(function (m) { return m.seq > (p.since || 0); }).map(demoMcMsg) };
 		},
 		"pirate.meshcore:read": function (p) {
 			var last = 0;
@@ -594,8 +605,12 @@
 			return { ok: true };
 		},
 		"pirate.meshcore:send": function (p) {
-			var now = Math.floor(Date.now() / 1000), m = DEMO_MC.add({ conv: p.to.charAt(0) === "#" ? p.to : "c" + p.to.replace(/^c/, "").slice(0, 12),
-				out: true, from: DEMO_MC.name, text: p.text, ts: now, rx: now, status: "queued" });
+			var conv = p.to.charAt(0) === "#" ? p.to : "c" + p.to.replace(/^c/, "").slice(0, 12);
+			var re = p.reply && DEMO_MC.msgs.filter(function (x) { return x.id === p.reply && x.conv === conv; })[0];
+			if (p.reply && !re) return { error: "reply: a message in that conversation" };
+			var now = Math.floor(Date.now() / 1000), m = DEMO_MC.add({ conv: conv,
+				out: true, from: DEMO_MC.name, text: (re ? "@[" + re.from + "] " : "") + p.text, ts: now, rx: now, status: "queued" });
+			if (re) m.reply = re.id;
 			DEMO_MC.read[m.conv] = m.id;
 			setTimeout(function () { m.status = "sent"; m.seq = ++DEMO_MC.seq; }, 600);
 			if (m.conv.charAt(0) === "c") setTimeout(function () {
@@ -2051,7 +2066,9 @@
 		var count = el("span", { class: "status mc-count" });
 		var sendBtn = btn("Send", { primary: true, onclick: send });
 		var sendStatus = el("span", { class: "status" });
-		var composer = el("div", { class: "mc-compose" }, input, el("div", { class: "toolbar" }, sendBtn, count, sendStatus));
+		var replyBar = el("div", { class: "mc-replybar" });
+		replyBar.hidden = true;
+		var composer = el("div", { class: "mc-compose" }, replyBar, input, el("div", { class: "toolbar" }, sendBtn, count, sendStatus));
 		var threadCol = el("div", { class: "mc-thread" }, threadHead, threadBody, composer);
 		var chat = el("div", { class: "mc-chat" }, listCol, threadCol);
 		chatPanel.appendChild(chat);
@@ -2081,6 +2098,7 @@
 		VIEW.appendChild(devPanel); VIEW.appendChild(chatPanel); VIEW.appendChild(chanPanel); VIEW.appendChild(conPanel);
 
 		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, open = null, shown = {}, thread = [], timer = null;
+		var replyTo = null;   // the message the composer answers
 		function alive() { return VIEW.contains(chat); }
 		function failed(e) {
 			if (String(e.message || e) === "unauthorized") { onError(e); return true; }
@@ -2182,9 +2200,12 @@
 					c.unread, mcFace(c.name, false, "sm"));
 			});
 		}
+		// A reply goes with "@[Name] " first, as the daemon writes it: the room that takes
+		function answerName(m) { return m.from || sender(m); }
 		function maxBytes() {
-			if (open && open.charAt(0) === "#") return Math.max(10, 150 - utf8len((st && st.name) || "") - 2);
-			return 150;
+			var n = open && open.charAt(0) === "#" ? Math.max(10, 150 - utf8len((st && st.name) || "") - 2) : 150;
+			if (replyTo) n -= utf8len("@[" + answerName(replyTo) + "] ");
+			return Math.max(1, n);
 		}
 		function updateCount() {
 			var n = utf8len(input.value), m = maxBytes();
@@ -2195,7 +2216,60 @@
 		input.addEventListener("input", updateCount);
 		input.addEventListener("keydown", function (ev) {
 			if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); if (!sendBtn.disabled) send(); }
+			else if (ev.key === "Escape" && replyTo) { ev.preventDefault(); cancelReply(); }
 		});
+
+		/* Replies, as MeshCore's apps write them: "@[Name] " first (MeshCore
+		   Open's with "#" and a time). Which message one answers: ours, as we
+		   sent it; theirs, as the daemon made it out */
+		var MENTION = /^@\[([^\]]+?)(?:#\d{10,16})?\]:?[ \t]*/;
+		function plain(text) { return String(text || "").replace(MENTION, ""); }
+		// A reply answers a message the daemon found; "@[Name]" answering none is a mention
+		function isReply(m) { return !!m.reply; }
+		function answers(m) {
+			var mm = MENTION.exec(m.text || ""), t = null, i, mine = (st && st.name) || "";
+			if (!m.reply) return null;
+			for (i = thread.length - 1; i >= 0 && !t; i--) if (thread[i].id === m.reply) t = thread[i];
+			if (t) return { msg: t, name: sender(t), out: !!t.out, text: plain(t.text) };
+			if (m.reply_text != null)
+				return { name: m.reply_out ? mine || m.reply_from : m.reply_from || (mm && mm[1]) || "someone", out: !!m.reply_out, text: plain(m.reply_text) };
+			return { name: mm ? mm[1] : "someone", out: !!mm && mm[1] === mine, text: null };
+		}
+		function mentionOf(m) {
+			var mm = !m.reply && MENTION.exec(m.text || "");
+			return mm ? { name: mm[1], me: mm[1] === ((st && st.name) || ""), rest: m.text.slice(mm[0].length) } : null;
+		}
+		function startReply(m) {
+			if (replyTo && shown[replyTo.id]) shown[replyTo.id].classList.remove("mc-target");
+			replyTo = m;
+			if (shown[m.id]) shown[m.id].classList.add("mc-target");
+			var nm = el("span", { class: "mc-rname", text: sender(m) });
+			if (m.out) nm.classList.add("mine"); else mcColour(nm, sender(m));
+			clear(replyBar).appendChild(el("span", { class: "mc-rb-text" }, "Replying to ", nm,
+				el("span", { class: "mc-rb-snip", text: plain(m.text) })));
+			replyBar.appendChild(el("button", { type: "button", class: "mc-rb-x", title: "Don't reply (Esc)", "aria-label": "Don't reply", text: "✕", onclick: cancelReply }));
+			replyBar.hidden = false;
+			updateCount();
+			input.focus();
+		}
+		function cancelReply() {
+			if (!replyTo) return;
+			if (shown[replyTo.id]) shown[replyTo.id].classList.remove("mc-target");
+			replyTo = null;
+			replyBar.hidden = true;
+			updateCount();
+		}
+		// To the message a reply answers, if it's among those shown: a flash where it is
+		function jumpTo(id) {
+			var n = shown[id];
+			if (!n) return;
+			threadBody.scrollTop = Math.max(0, n.offsetTop - threadBody.clientHeight / 3);
+			n.classList.remove("mc-flash");
+			void n.offsetWidth;
+			n.classList.add("mc-flash");
+			setTimeout(function () { n.classList.remove("mc-flash"); }, 1700);
+		}
+		var TOUCH = !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
 
 		function statusEl(m) {
 			var s = m.status, t = { queued: "queued", sent: "sent", delivered: "delivered", unconfirmed: "not confirmed", failed: "failed" }[s] || s;
@@ -2211,10 +2285,11 @@
 			return m.from || (m.conv.charAt(0) === "#" ? "someone" : convName(m.conv));
 		}
 		// One sender's messages run together, as a chat app has them: a new
-		// group for another sender, another day, or after a few minutes' quiet
+		// group for another sender, another day, after a few minutes' quiet,
+		// or a reply (it carries what it answers above it)
 		function startsGroup(prev, m) {
 			return !prev || !prev.out !== !m.out || sender(prev) !== sender(m) ||
-				!mcSameDay(prev.ts, m.ts) || Math.abs(m.ts - prev.ts) > 420;
+				!mcSameDay(prev.ts, m.ts) || Math.abs(m.ts - prev.ts) > 420 || isReply(m);
 		}
 		function signal(m) {
 			var s = [];
@@ -2226,8 +2301,31 @@
 		// rest, only their text (the time and signal show on hover)
 		function msgEl(m, head) {
 			var who = sender(m), sig = m.out ? "" : signal(m), when = new Date(m.ts * 1000).toLocaleString();
-			var row = el("div", { class: "mc-row" + (head ? " mc-head" : "") + (m.out ? " out" : ""), "data-id": String(m.id) });
+			var rep = answers(m), men = mentionOf(m);
+			var row = el("div", { class: "mc-row" + (head ? " mc-head" : "") + (m.out ? " out" : "") +
+				(rep ? " mc-reply" : "") + (!m.out && ((rep && rep.out) || (men && men.me)) ? " mc-me" : "") +
+				(replyTo && replyTo.id === m.id ? " mc-target" : ""), "data-id": String(m.id) });
 			if (!m.out) mcColour(row, who);
+			// What it answers, above it: their face, their name, the start of it
+			if (rep) {
+				var rn = el("span", { class: "mc-rname", text: "@" + rep.name });
+				if (rep.out) rn.classList.add("mine"); else mcColour(rn, rep.name);
+				row.appendChild(el("span", { class: "mc-conn", "aria-hidden": "true" }));
+				row.appendChild(el("button", { type: "button", class: "mc-rline", title: rep.msg ? "Show the message it answers" : "",
+					onclick: function () { if (rep.msg) jumpTo(rep.msg.id); } },
+					mcFace(rep.name, rep.out, "xxs"), rn,
+					el("span", { class: "mc-rtext" + (rep.text == null ? " gone" : ""), text: rep.text == null ? "a message not kept here" : rep.text || " " })));
+			}
+			// Reply: on hover (a tap, on a phone), as a chat app has it
+			if (m.out || m.from || m.conv.charAt(0) !== "#")
+				row.appendChild(el("div", { class: "mc-acts" },
+					el("button", { type: "button", class: "mc-act", title: "Reply", onclick: function (ev) { ev.stopPropagation(); startReply(m); } }, "↩ Reply")));
+			if (TOUCH) row.addEventListener("click", function (ev) {
+				if (ev.target.closest("button, a")) return;
+				var was = threadBody.querySelector(".mc-sel");
+				if (was && was !== row) was.classList.remove("mc-sel");
+				row.classList.toggle("mc-sel");
+			});
 			row.appendChild(el("div", { class: "mc-gut" },
 				head ? mcFace(who, m.out) : el("span", { class: "mc-gtime", title: when, text: mcHM(m.ts) })));
 			var body = el("div", { class: "mc-body" });
@@ -2235,7 +2333,9 @@
 				el("span", { class: "mc-author", text: who }),
 				el("span", { class: "mc-when", title: when, text: mcHM(m.ts) }),
 				sig ? el("span", { class: "mc-sig", text: sig }) : null));
-			body.appendChild(el("div", { class: "mc-text" }, m.text,
+			body.appendChild(el("div", { class: "mc-text" },
+				men ? el("span", { class: "mc-mention" + (men.me ? " me" : ""), text: "@" + men.name }) : null,
+				men ? " " + men.rest : rep ? plain(m.text) : m.text,
 				m.out ? statusEl(m) : null,
 				!head && sig ? el("span", { class: "mc-sig mc-hover", text: sig }) : null));
 			row.appendChild(body);
@@ -2263,6 +2363,7 @@
 			if (near || m.out) threadBody.scrollTop = threadBody.scrollHeight;
 		}
 		function openConv(conv) {
+			if (conv !== open) cancelReply();
 			open = conv;
 			shown = {}; thread = [];
 			showList();
@@ -2305,9 +2406,12 @@
 			if (!to || !text) return;
 			sendBtn.disabled = true;
 			line(sendStatus, "");
-			call("pirate.meshcore", "send", { to: to, text: text }).then(function (r) {
+			var p = { to: to, text: text };
+			if (replyTo) p.reply = replyTo.id;
+			call("pirate.meshcore", "send", p).then(function (r) {
 				if (r.error) { line(sendStatus, r.error, "err"); updateCount(); return; }
 				input.value = "";
+				cancelReply();
 				updateCount();
 				poll();
 			}).catch(function (e) { if (!failed(e)) line(sendStatus, String(e.message || e), "err"); updateCount(); });
