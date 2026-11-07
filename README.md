@@ -393,7 +393,10 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   base 32) are read and sent; meshcore-open's (`r:hash:index`, into its
   table of emoji) are read. The router finds each one's message, keeps
   one that comes before its message until that does (as MeshCore One
-  does), and counts none as news.
+  does), and counts none as news. In a DM you react to their messages,
+  not your own: a DM's reaction names no one, so meshcore-open and MCO
+  Advanced look for it only among the messages they sent (one to yours
+  would show there as its text). In a channel, any message.
 - **Links**, clickable; **images** shown under the words, as Discord
   shows them: Giphy's GIFs (a `giphy.com/gifs/…` page, or meshcore-open's
   `g:ID`) and links to an image file (`.gif`, `.png`, `.jpg`, `.webp`…). A
@@ -505,15 +508,16 @@ Tested in this repository's tests and builds:
   delivery and its absence, a retry, replies sent and received (MeshCore's
   app's and MeshCore Open's), reactions (MeshCore One's and meshcore-open's
   hashes against their own examples, reactions come, found and kept, one
-  sent, none counted as news), MCOimg come as channel data (MCO
-  Advanced's fixtures: v3, v1/v2, v4, its other kinds, MeshCore Open's, and
-  data that isn't a chat's), hashtag, private and keyed channels,
+  sent, in a DM only to theirs, none counted as news), MCOimg come as
+  channel data (MCO Advanced's fixtures: v3, v1/v2, v4, its other kinds,
+  MeshCore Open's, and data that isn't a chat's), hashtag, private and
+  keyed channels,
   adverts, its name, its GPS and the survey taking its position, contacts'
   routes, traces along them (to a person and to a repeater), a route found
   and kept, telemetry and its absence, removal, the messages kept through a
   restart, and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 666
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 667
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

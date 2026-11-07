@@ -3043,7 +3043,10 @@ static int send_wire(struct ubus_context *c, struct ubus_request_data *req, cons
 
 /* React to a message, as MeshCore One does: in a channel "@[Name]emoji"
  * and, on the next line, the message's hash; between two, "emoji" and
- * its hash (meshcore-open shows these too) */
+ * its hash (meshcore-open shows these too). Between two, only to one of
+ * theirs: a reaction there names no one, so meshcore-open (and MCO
+ * Advanced) look for it only among the messages they sent, and show one
+ * to ours as its text */
 static int m_react(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		   const char *method, struct blob_attr *msg)
 {
@@ -3060,6 +3063,8 @@ static int m_react(struct ubus_context *c, struct ubus_object *obj, struct ubus_
 		return reply_error(c, req, err);
 	if (!arg_num(A_ID, &id) || id <= 0 || !(t = msg_by_id(id)) || t->emoji[0])
 		return reply_error(c, req, "id: a message (not a reaction)");
+	if (t->out && t->conv[0] != '#')
+		return reply_error(c, req, "id: in a DM, one of their messages (meshcore-open can't show a reaction to your own)");
 	emoji = arg_str(A_EMOJI);
 	if (!emoji || !reaction_emoji(emoji))
 		return reply_error(c, req, "emoji: one emoji");

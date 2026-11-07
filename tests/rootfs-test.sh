@@ -1902,6 +1902,10 @@ check "meshcore: react: as MeshCore One's, on the air" sh -c "grep -qxF 'chan 0 
 check "meshcore: react: kept as one, to its message" [ "$(mc messages '{"conv":"#0"}' | jsonfilter -e "@.messages[@.emoji='🎉'].react")" = "$RB" ]
 check "meshcore: react, between two" sh -c "'$FZ_UBUS' -s '$MC/ubus.sock' -t 30 call pirate.meshcore react '{\"id\":$(mc_msg ca1a1a1a1a1a1 'hello router' id),\"emoji\":\"👍\"}' | jsonfilter -e '@.ok' | grep -qx true && grep -qxF 'send a1a1a1a1a1a1 0 👍' '$MC/fake.log'"
 check "meshcore: react: one emoji" [ "$(mce react "{\"id\":$RB,\"emoji\":\"ok\"}")" = "emoji: one emoji" ]
+# (Between two, only to theirs: meshcore-open looks for a DM's reaction
+# only among what it sent, and would show one to ours as its text)
+NS=$(grep -c '^send ' "$MC/fake.log")
+check "meshcore: react, between two: to theirs only, nothing sent" [ "$(mce react "{\"id\":$(mc_msg ca1a1a1a1a1a1 'hi alice' id),\"emoji\":\"👍\"}")|$(grep -c '^send ' "$MC/fake.log")" = "id: in a DM, one of their messages (meshcore-open can't show a reaction to your own)|$NS" ]
 # (Reacting read the channel, as sending does: news again, for what's kept)
 printf '%s\n' "chan still there?" > "$MC/ctl"
 sleep 2

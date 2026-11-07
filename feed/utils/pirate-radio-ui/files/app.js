@@ -786,8 +786,9 @@
 		"pirate.meshcore:react": function (p) {
 			var t = DEMO_MC.msgs.filter(function (x) { return x.id === p.id && !x.emoji; })[0];
 			if (!t) return { error: "id: a message (not a reaction)" };
-			if (!p.emoji || /^[\x20-\x7e]*$/.test(p.emoji) || p.emoji.length > 16) return { error: "emoji: one emoji" };
 			var now = Math.floor(Date.now() / 1000), ch = t.conv.charAt(0) === "#";
+			if (t.out && !ch) return { error: "id: in a DM, one of their messages (meshcore-open can't show a reaction to your own)" };
+			if (!p.emoji || /^[\x20-\x7e]*$/.test(p.emoji) || p.emoji.length > 16) return { error: "emoji: one emoji" };
 			var m = DEMO_MC.add({ conv: t.conv, out: true, from: DEMO_MC.name, text: (ch ? "@[" + t.from + "]" : "") + p.emoji + "\nb45pc4ek",
 				emoji: p.emoji, react: t.id, ts: now, rx: now, status: "sent" });
 			DEMO_MC.read[m.conv] = m.id;
@@ -3254,8 +3255,8 @@
 			// React, Reply: on hover (a tap, on a phone)
 			if (m.out || m.from || m.conv.charAt(0) !== "#")
 				row.appendChild(el("div", { class: "mc-acts" },
-					el("button", { type: "button", class: "mc-act mc-act-react", title: "Add a reaction", "aria-label": "Add a reaction",
-						onclick: function (ev) { ev.stopPropagation(); openPicker(m, this); } }, "☺"),
+					canReact(m) ? el("button", { type: "button", class: "mc-act mc-act-react", title: "Add a reaction", "aria-label": "Add a reaction",
+						onclick: function (ev) { ev.stopPropagation(); openPicker(m, this); } }, "☺") : null,
 					el("button", { type: "button", class: "mc-act", title: "Reply", onclick: function (ev) { ev.stopPropagation(); startReply(m); } }, "↩ Reply")));
 			var face = head ? mcFace(who, m.out) : null;
 			if (face) { face.classList.add("mc-pick"); face.setAttribute("data-pick", "1"); }
@@ -3303,20 +3304,27 @@
 		/* Reactions, as Discord shows them: a chip each emoji under the
 		   message, how many, who on hover, yours lit; a click adds yours */
 		var QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "👏", "🎉", "👀", "💯", "✅"];
+		// In a channel, any message with a name; in a DM, only theirs: a DM's
+		// reaction names no one, so meshcore-open (and MCO Advanced) look for
+		// it only among the messages they sent, and show one to yours as text
+		function canReact(m) {
+			return m.conv.charAt(0) === "#" ? !!(m.out || m.from) : !m.out;
+		}
 		function reactsEl(m) {
-			var r = reacts[m.id];
+			var r = reacts[m.id], can = canReact(m);
 			if (!r) return null;
 			var box = el("div", { class: "mc-reacts" });
 			Object.keys(r).forEach(function (e) {
 				var who = r[e], keys = Object.keys(who), mine = keys.some(function (k) { return who[k].out; });
 				var names = keys.map(function (k) { return who[k].out ? "you" : who[k].name; });
 				box.appendChild(el("button", { type: "button", class: "mc-react" + (mine ? " mine" : ""),
-					title: names.join(", ") + (mine ? "" : " · click to react too"), "aria-label": e + ": " + names.join(", "),
-					onclick: function (ev) { ev.stopPropagation(); if (!mine) react(m, e); } },
+					title: names.join(", ") + (mine || !can ? "" : " · click to react too"), "aria-label": e + ": " + names.join(", "),
+					onclick: function (ev) { ev.stopPropagation(); if (!mine && can) react(m, e); } },
 					el("span", { class: "mc-remoji", text: e }), el("span", { class: "mc-rcount", text: String(keys.length) })));
 			});
-			box.appendChild(el("button", { type: "button", class: "mc-react mc-react-add", title: "Add a reaction", "aria-label": "Add a reaction",
-				onclick: function (ev) { ev.stopPropagation(); openPicker(m, this); } }, "+"));
+			if (can)
+				box.appendChild(el("button", { type: "button", class: "mc-react mc-react-add", title: "Add a reaction", "aria-label": "Add a reaction",
+					onclick: function (ev) { ev.stopPropagation(); openPicker(m, this); } }, "+"));
 			return box;
 		}
 		function react(m, e) {
