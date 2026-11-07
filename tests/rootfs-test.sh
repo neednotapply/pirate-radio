@@ -190,13 +190,17 @@ check "iq: SigMF datatype cu8 for RTL-SDR" [ "$(jsonfilter -i "$meta" -e '@.glob
 
 echo "# job: survey (hackrf, one sweep every 5 s)"
 : > "$T/calls.log"
+H0=$(date +%Y%m%d-%H)
 set_job survey interval=5
 run_job survey 17
 check "survey: hackrf_sweep arguments" has "$T/calls.log" "hackrf_sweep -f 1:6000 -w 1000000 -l 16 -g 20 -a 0 -P estimate -1"
 n=$(grep -c hackrf_sweep "$T/calls.log")
 check "survey: 3 or 4 sweeps in 17 s ($n)" sh -c "[ $n -ge 3 ] && [ $n -le 4 ]"
-csv=$DATA/survey/$TODAY/sweep-hackrf-$(date +%Y%m%d-%H)00.csv
-check "survey: sweeps appended to the hour's CSV" [ "$(grep -c '^2026' "$csv")" -ge 3 ]
+# (The hour's CSV: the next hour's too, should the job have run into it)
+H1=$(date +%Y%m%d-%H)
+rows=$(cat "$DATA/survey/$TODAY/sweep-hackrf-${H0}00.csv" 2> /dev/null
+	[ "$H1" = "$H0" ] || cat "$DATA/survey/$TODAY/sweep-hackrf-${H1}00.csv" 2> /dev/null)
+check "survey: sweeps appended to the hour's CSV" [ "$(printf '%s\n' "$rows" | grep -c '^2026')" -ge 3 ]
 check "survey: a working sweep's messages stay out of the log" sh -c "! grep -q -e 'call hackrf' -e 'Total sweeps' '$T/survey.out'"
 export MOCK_SWEEP_FAIL="$T/sweep-fail"
 : > "$MOCK_SWEEP_FAIL"
