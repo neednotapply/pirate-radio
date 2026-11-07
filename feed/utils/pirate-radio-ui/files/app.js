@@ -74,6 +74,9 @@
 		if (DEMO) {
 			var d = MOCK[object + ":" + method];
 			if (typeof d === "function") d = d(params || {});
+			// An answer that takes a while, as a radio's request does
+			if (d && typeof d.then === "function")
+				return d.then(function (v) { return JSON.parse(JSON.stringify(v != null ? v : {})); });
 			return Promise.resolve(JSON.parse(JSON.stringify(d != null ? d : {})));
 		}
 		return callm(object, method, params || {});
@@ -110,10 +113,12 @@
 		var mc = {
 			seq: seq, name: "🏴‍☠️ Pirate Radio", gps: false, read: {},
 			contacts: [
-				{ key: key("a1"), conv: "ca1a1a1a1a1a1", name: "Alice", type: "chat", hops: 1, last_advert: now - 900, lat: 37.422, lon: -122.084 },
+				{ key: key("a1"), conv: "ca1a1a1a1a1a1", name: "Alice", type: "chat", hops: 1, path: [{ id: "c2", name: "Hilltop Repeater" }],
+					last_advert: now - 900, lat: 37.4302, lon: -122.0712 },
 				{ key: key("b0"), conv: "cb0b0b0b0b0b0", name: "Bob", type: "chat", flood: true, last_advert: now - 7200 },
-				{ key: key("d4"), conv: "cd4d4d4d4d4d4", name: "🦜 Polly", type: "chat", hops: 0, last_advert: now - 2400 },
-				{ key: key("e5"), conv: "ce5e5e5e5e5e5", name: "Kiwi 🇳🇿", type: "chat", hops: 3, last_advert: now - 2100 },
+				{ key: key("d4"), conv: "cd4d4d4d4d4d4", name: "🦜 Polly", type: "chat", hops: 0, last_advert: now - 2400, lat: 37.4249, lon: -122.0911 },
+				{ key: key("e5"), conv: "ce5e5e5e5e5e5", name: "Kiwi 🇳🇿", type: "chat", hops: 3,
+					path: [{ id: "c2", name: "Hilltop Repeater" }, { id: "4f" }, { id: "9a" }], last_advert: now - 2100 },
 				{ key: key("c2"), conv: "cc2c2c2c2c2c2", name: "Hilltop Repeater", type: "repeater", hops: 0, last_advert: now - 300 }
 			],
 			channels: [
@@ -189,12 +194,30 @@
 			used[s] = 1;
 			return s;
 		}
-		function key(n) { var s = ("00000000000" + n.toString(16)).slice(-12); while (s.length < 64) s += "ab"; return s; }
-		for (i = 0; i < 345; i++) {
-			var type = i < 38 ? "chat" : i < 316 ? "repeater" : "room", kk = key(0x5000 + i);
-			mc.contacts.push({ key: kk, conv: "c" + kk.slice(0, 12), name: type === "repeater" ? "RPT " + name() : name(), type: type,
-				hops: rnd(5), flood: rnd(7) === 0 || undefined, last_advert: now - rnd(86400 * 25) });
+		function key(n) {
+			var s = ("0000000" + (Math.imul(n, 2654435761) >>> 0).toString(16)).slice(-8) + ("000" + n.toString(16)).slice(-4);
+			while (s.length < 64) s += "ab";
+			return s;
 		}
+		var reps = [];
+		for (i = 0; i < 345; i++) {
+			var type = i < 38 ? "chat" : i < 316 ? "repeater" : "room", kk = key(0x5000 + i), flood = rnd(7) === 0;
+			var c = { key: kk, conv: "c" + kk.slice(0, 12), name: type === "repeater" ? "RPT " + name() : name(), type: type,
+				last_advert: now - rnd(86400 * 25) };
+			if (flood) c.flood = true; else c.hops = rnd(5);
+			if (rnd(3) === 0) { c.lat = 37.35 + rnd(2000) / 10000; c.lon = -122.2 + rnd(3000) / 10000; }
+			mc.contacts.push(c);
+			if (type === "repeater") reps.push(c);
+		}
+		// Routes through the repeaters heard
+		mc.contacts.forEach(function (c) {
+			if (!c.hops || c.path) return;
+			c.path = [];
+			for (k = 0; k < c.hops; k++) {
+				var rp = reps[rnd(reps.length)];
+				c.path.push(rnd(5) ? { id: rp.key.slice(0, 2), name: rp.name } : { id: rp.key.slice(0, 2) });
+			}
+		});
 		var CH = ["#sf", "#bayarea", "#emergency", "#weather", "#hiking", "#ham", "#repeaters", "#testing", "#bots", "#alerts",
 			"#earthquake", "#events", "#marine", "#aviation", "#roads", "#fire", "#coffee", "#offgrid", "#solar", "#antennas",
 			"#firmware", "#trading", "#music", "#photos", "#lost-and-found", "#local", "#north", "#south", "#east", "#west",
@@ -238,6 +261,36 @@
 			if (c.conv === "#0") back = 23;
 			if (mine.length) mc.read[c.conv] = mine[Math.max(0, mine.length - 1 - back)].id;
 		});
+	}
+	// A trace, a route found, telemetry: answered a moment later, as a radio's are
+	function demoMcAsk(p, kind) {
+		var c = DEMO_MC.contacts.filter(function (x) { return x.key.indexOf(String(p.key || "")) === 0 || x.conv === p.key; })[0];
+		return new Promise(function (done) {
+			setTimeout(function () { done(demoMcAnswer(c, kind)); }, kind === "trace" ? 900 : 1700);
+		});
+	}
+	function demoMcAnswer(c, kind) {
+		if (!c) return { error: "no such contact" };
+		if (kind === "trace") {
+			var hops = c.path || [], rep = c.type === "repeater";
+			if (c.flood) return { error: "no route known to trace: discover one first" };
+			if (!rep && !hops.length) return { error: "heard directly: there's no repeater between you to trace" };
+			if (c.name === "Kiwi 🇳🇿") return { error: "no answer: the trace didn't come back (a repeater on the way may be out of reach)" };
+			var way = hops.concat(rep ? [{ id: c.key.slice(0, 2), name: c.name }] : []).concat(hops.slice(0, rep ? hops.length : hops.length - 1).reverse());
+			return { ok: true, ms: 640 + way.length * 210, snr_back: 4.75, hops: way.map(function (h, i) {
+				return { id: h.id, name: h.name, snr: Math.round((9.5 - i * 3.25) * 4) / 4 };
+			}) };
+		}
+		if (kind === "discover") {
+			var rpt = DEMO_MC.contacts.filter(function (x) { return x.type === "repeater"; })[0];
+			var path = [{ id: rpt.key.slice(0, 2), name: rpt.name }];
+			c.path = path; c.hops = 1; delete c.flood;
+			return { ok: true, ms: 2300, out: path, "in": path, kept: true };
+		}
+		if (c.type !== "chat" || c.flood) return { error: "no answer: they may not share telemetry with you, or be out of reach" };
+		var r = [{ channel: 1, kind: "voltage", value: 3.98, unit: "V" }, { channel: 1, kind: "temperature", value: 18.5, unit: "°C" }];
+		if (c.lat != null) r.push({ channel: 1, kind: "gps", lat: c.lat + 0.0021, lon: c.lon - 0.0013, alt: 41 });
+		return { ok: true, ms: 1400, readings: r };
 	}
 	// A message as the daemon gives it: a reply with what it answers
 	function demoMcMsg(m) {
@@ -707,6 +760,9 @@
 			setTimeout(function () { m.status = "unconfirmed"; m.seq = ++DEMO_MC.seq; }, 2500);
 			return { ok: true };
 		},
+		"pirate.meshcore:trace": function (p) { return demoMcAsk(p, "trace"); },
+		"pirate.meshcore:discover": function (p) { return demoMcAsk(p, "discover"); },
+		"pirate.meshcore:telemetry": function (p) { return demoMcAsk(p, "telemetry"); },
 		"pirate.meshcore:advert": { ok: true },
 		"pirate.meshcore:set_name": function (p) { DEMO_MC.name = p.name; return { ok: true }; },
 		"pirate.meshcore:gps": function (p) { DEMO_MC.gps = !!p.enabled; return { ok: true }; },
@@ -863,6 +919,7 @@
 		var b = el("button", { type: "button",
 			class: "btn" + (o.primary ? " primary" : "") + (o.cls ? " " + o.cls : ""), text: label });
 		if (o.onclick) b.addEventListener("click", o.onclick);
+		if (o.title) b.title = o.title;
 		return b;
 	}
 	function badge(text, cls) { return el("span", { class: "b " + (cls || ""), text: text }); }
@@ -2306,6 +2363,12 @@
 		// Ctrl+K (or Cmd+K): to the search, as Discord's quick switcher
 		function onKey(ev) {
 			if (!alive()) { document.removeEventListener("keydown", onKey); return; }
+			if (ev.key === "Escape" && !pop.hidden) {
+				var back = popAnchor;
+				closeProfile();
+				if (back && document.contains(back) && back.focus) back.focus();
+				return;
+			}
 			if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === "k" || ev.key === "K")) {
 				ev.preventDefault();
 				app.classList.remove("mc-open");
@@ -2323,6 +2386,7 @@
 		// From a phone's width to a wide one with nothing open: the first channel beside the list
 		function onResize() {
 			if (!alive()) { window.removeEventListener("resize", onResize); return; }
+			placePop();
 			if (mode === "none" && window.innerWidth > 860 && st && st.state === "ready") openFirst();
 		}
 		window.addEventListener("resize", onResize);
@@ -2339,12 +2403,14 @@
 			var g = st.gps || {}, bits = [];
 			if (st.battery_mv) bits.push(battPct(st.battery_mv) + "%");
 			if (g.available) bits.push(!g.enabled ? "GPS off" : g.live ? "GPS fix" : "GPS, no fix");
-			mePanel.appendChild(mcFace(st.name, true));
-			mePanel.appendChild(el("div", { class: "mc-meinfo" },
-				el("div", { class: "mc-mename", text: st.name }),
-				el("div", { class: "mc-mesub" }, bits.join(" · "),
-					st.share_location ? el("span", { class: "mc-mewarn", title: "Its adverts carry where it is",
-						text: (bits.length ? " · " : "") + "sharing location" }) : null)));
+			var meBtn = el("button", { type: "button", class: "mc-mewho", title: "Your profile", onclick: function () { openProfile({ me: true }, meBtn); } },
+				mcFace(st.name, true),
+				el("span", { class: "mc-meinfo" },
+					el("span", { class: "mc-mename", text: st.name }),
+					el("span", { class: "mc-mesub" }, bits.join(" · "),
+						st.share_location ? el("span", { class: "mc-mewarn", title: "Its adverts carry where it is",
+							text: (bits.length ? " · " : "") + "sharing location" }) : null)));
+			mePanel.appendChild(meBtn);
 			mePanel.appendChild(el("button", { type: "button", class: "mc-iconbtn" + (mode === "page" && page === "radio" ? " on" : ""),
 				title: "Your radio", "aria-label": "Your radio: its settings", onclick: function () { openPage("radio"); } }, mcIcon("gear")));
 		}
@@ -2368,6 +2434,7 @@
 		/* Pages beside the list, in the conversation's place */
 		function openPage(p) {
 			cancelReply();
+			closeProfile();
 			mode = "page"; page = p; open = null;
 			if (search.value) search.value = "";
 			app.classList.add("mc-open");
@@ -2454,12 +2521,13 @@
 		}
 		function contactRow(c) {
 			var person = c.type === "chat";
-			return el("div", { class: "mc-crow" },
+			var who = el("button", { type: "button", class: "mc-cwho", title: "Profile", onclick: function () { openProfile({ contact: c }, who); } },
 				person ? mcFace(c.name, false, "sm") : mcTile(c.name, "sm"),
-				el("div", { class: "mc-cmain" },
-					el("div", { class: "mc-cname" }, el("span", { class: "mc-cn", text: c.name }),
+				el("span", { class: "mc-cmain" },
+					el("span", { class: "mc-cname" }, el("span", { class: "mc-cn", text: c.name }),
 						person ? null : el("span", { class: "mc-kind", text: KIND_NAME[c.type] || c.type })),
-					el("div", { class: "mc-csub", text: route(c) + " · " + (c.last_advert ? "heard " + mcAgo(c.last_advert) : "not heard yet") })),
+					el("span", { class: "mc-csub", text: route(c) + " · " + (c.last_advert ? "heard " + mcAgo(c.last_advert) : "not heard yet") })));
+			return el("div", { class: "mc-crow" }, who,
 				el("div", { class: "mc-cacts" },
 					person ? btn("Message", { cls: "small", onclick: function () { openConv(c.conv); } }) : null,
 					c.flood ? null : btn("Forget route", { cls: "small", onclick: function () { contactOp("contact_reset_path", c); } }),
@@ -2602,6 +2670,238 @@
 			}).catch(function (e) { if (!failed(e)) line(status, String(e.message || e), "err"); });
 		}
 
+		/* Profiles, as Discord's popout: a person's (or a repeater's) card from
+		   their face or name, wherever it is: who they are, their route and a
+		   trace along it, where they are, what they share; message or mention
+		   them from it */
+		var pop = el("div", { class: "mc-pop", role: "dialog", "aria-label": "Profile" });
+		pop.hidden = true;
+		app.appendChild(pop);
+		var popAnchor = null;
+		function closeProfile() {
+			pop.hidden = true;
+			clear(pop);
+			popAnchor = null;
+		}
+		function openProfile(t, anchor) {
+			popAnchor = anchor;
+			clear(pop).appendChild(profileEl(t));
+			pop.hidden = false;
+			placePop();
+			var f = pop.querySelector("button");
+			if (f && !TOUCH) f.focus({ preventScroll: true });
+		}
+		// Beside what was clicked, inside the window; on a phone, a sheet from the foot
+		function placePop() {
+			if (pop.hidden) return;
+			if (window.innerWidth <= 860 || !popAnchor) {
+				pop.classList.add("sheet");
+				pop.style.left = pop.style.top = "";
+				return;
+			}
+			pop.classList.remove("sheet");
+			var w = pop.offsetWidth, h = pop.offsetHeight, x, y;
+			if (document.contains(popAnchor)) {
+				var r = popAnchor.getBoundingClientRect();
+				x = r.right + 12;
+				y = r.top - 8;
+				if (x + w > window.innerWidth - 8) x = r.left - w - 12;
+				if (x < 8) x = Math.max(8, Math.min(window.innerWidth - w - 8, r.left));
+			} else {
+				// What it was beside is gone (redrawn): it stays, inside the window
+				x = parseFloat(pop.style.left) || 8;
+				y = parseFloat(pop.style.top) || 8;
+				if (x + w > window.innerWidth - 8) x = window.innerWidth - w - 8;
+			}
+			if (y + h > window.innerHeight - 8) y = window.innerHeight - h - 8;
+			if (y < 8) y = 8;
+			pop.style.left = Math.round(x) + "px";
+			pop.style.top = Math.round(y) + "px";
+		}
+		function onDown(ev) {
+			if (!alive()) { document.removeEventListener("pointerdown", onDown, true); return; }
+			if (!pop.hidden && !pop.contains(ev.target) && !(popAnchor && popAnchor.contains(ev.target))) closeProfile();
+		}
+		document.addEventListener("pointerdown", onDown, true);
+
+		// Who a message's sender is: you; a direct message's contact; in a channel, the contact of that name
+		function contactByName(name) {
+			var best = null;
+			contacts.forEach(function (c) {
+				if (c.name === name && (!best || (c.type === "chat") > (best.type === "chat") ||
+					((c.type === "chat") === (best.type === "chat") && (c.last_advert || 0) > (best.last_advert || 0)))) best = c;
+			});
+			return best;
+		}
+		function targetByName(name) {
+			if (st && name === st.name) return { me: true };
+			var c = contactByName(name);
+			return c ? { contact: c } : { name: name };
+		}
+		function targetOf(m) {
+			if (m.out) return { me: true };
+			if (m.conv.charAt(0) === "c") { var c = contactOf(m.conv); if (c) return { contact: c }; }
+			return targetByName(m.from || sender(m));
+		}
+		function myPos() {
+			var g = st && st.gps;
+			return g && g.lat != null && g.lon != null && (g.lat || g.lon) ? { lat: g.lat, lon: g.lon, live: !!g.live } : null;
+		}
+		// How far, and which way, from one place to another (on a sphere: near enough)
+		function distance(a, b) {
+			var r = Math.PI / 180, dLat = (b.lat - a.lat) * r, dLon = (b.lon - a.lon) * r;
+			var h = Math.pow(Math.sin(dLat / 2), 2) + Math.cos(a.lat * r) * Math.cos(b.lat * r) * Math.pow(Math.sin(dLon / 2), 2);
+			var y = Math.sin(dLon) * Math.cos(b.lat * r);
+			var x = Math.cos(a.lat * r) * Math.sin(b.lat * r) - Math.sin(a.lat * r) * Math.cos(b.lat * r) * Math.cos(dLon);
+			var deg = (Math.atan2(y, x) / r + 360) % 360;
+			return { m: 2 * 6371000 * Math.asin(Math.min(1, Math.sqrt(h))), way: ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8] };
+		}
+		function distText(m) { return m < 1000 ? Math.round(m) + " m" : (m < 10000 ? (m / 1000).toFixed(1) : Math.round(m / 1000)) + " km"; }
+		function fmtMs(ms) { return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s"; }
+		function routeText(c) {
+			if (c.flood) return "No route yet: messages to them go out to the whole mesh";
+			if (!c.hops) return "Direct: heard without a repeater between you";
+			var via = (c.path || []).map(function (h) { return h.name || h.id; });
+			return c.hops + " hop" + (c.hops === 1 ? "" : "s") + (via.length ? ": " + via.join(" → ") : "");
+		}
+		function cardSec(title) { return el("div", { class: "mc-cardsec" }, el("h4", { text: title })); }
+		function snrPill(v) {
+			var q = v >= 5 ? "good" : v >= 0 ? "fair" : v >= -7 ? "weak" : "poor";
+			return el("span", { class: "mc-snr " + q, title: "SNR: how far above the noise it was heard", text: (v > 0 ? "+" : "") + v + " dB" });
+		}
+		// A place: its coordinates, how far from you, a map
+		function posEl(pos, from, me) {
+			var mine = myPos(), d = !me && mine ? distance(mine, pos) : null;
+			var map = "https://www.openstreetmap.org/?mlat=" + pos.lat.toFixed(5) + "&mlon=" + pos.lon.toFixed(5) + "#map=15/" + pos.lat.toFixed(5) + "/" + pos.lon.toFixed(5);
+			return el("div", { class: "mc-cardline" },
+				el("div", {}, el("code", { text: pos.lat.toFixed(5) + ", " + pos.lon.toFixed(5) }),
+					el("a", { class: "mc-maplink", href: map, target: "_blank", rel: "noopener noreferrer", text: "Map ↗" })),
+				el("div", { class: "muted mc-cardmeta", text: (d ? distText(d.m) + " " + d.way + " of you · " : "") + from }));
+		}
+		var TELEM = { voltage: "Battery", percentage: "Battery", temperature: "Temperature", humidity: "Humidity", pressure: "Pressure",
+			altitude: "Altitude", light: "Light", current: "Current", power: "Power", energy: "Energy", distance: "Distance",
+			concentration: "Concentration", direction: "Heading", frequency: "Frequency" };
+		function telemetryEl(r) {
+			var box = el("div", {}), grid = el("div", { class: "mc-telem" }), any = false;
+			(r.readings || []).forEach(function (x) {
+				if (x.kind === "gps") { box.appendChild(posEl({ lat: x.lat, lon: x.lon }, "from their telemetry, just now" + (x.alt ? " · " + Math.round(x.alt) + " m up" : ""))); return; }
+				if (x.value == null) return;
+				any = true;
+				grid.appendChild(el("span", { class: "muted", text: TELEM[x.kind] || x.kind }));
+				grid.appendChild(el("span", { text: (Math.round(x.value * 100) / 100) + (x.unit ? " " + x.unit : "") }));
+			});
+			if (any) box.insertBefore(grid, box.firstChild);
+			if (!box.firstChild) box.appendChild(el("div", { class: "muted mc-cardmeta", text: "They answered, sharing nothing more." }));
+			box.appendChild(el("div", { class: "muted mc-cardmeta", text: "Answered in " + fmtMs(r.ms || 0) + "." }));
+			return box;
+		}
+		function traceEl(r) {
+			var list = el("ol", { class: "mc-trace" });
+			list.appendChild(el("li", {}, el("span", { class: "mc-hopname", text: "You" })));
+			(r.hops || []).forEach(function (h) {
+				list.appendChild(el("li", {}, el("span", { class: "mc-hopname" + (h.name ? "" : " muted"), text: h.name || "unknown repeater" }),
+					el("code", { class: "mc-hopid", text: h.id }), snrPill(h.snr)));
+			});
+			list.appendChild(el("li", {}, el("span", { class: "mc-hopname", text: "You" }), snrPill(r.snr_back)));
+			return el("div", {}, list, el("div", { class: "muted mc-cardmeta",
+				text: "There and back in " + fmtMs(r.ms || 0) + ". Each SNR is how well that one heard the one before it." }));
+		}
+		function discoveredEl(r) {
+			function way(p) { return p && p.length ? p.map(function (h) { return h.name || h.id; }).join(" → ") : "direct"; }
+			return el("div", {},
+				el("div", { class: "mc-cardline", text: "Found in " + fmtMs(r.ms || 0) + (r.kept ? ", and used from now on" : "") + "." }),
+				el("div", { class: "muted mc-cardmeta", text: "There: " + way(r.out) + " · back: " + way(r["in"]) }));
+		}
+		// A trace, a route, telemetry: asked of the radio, the answer in the card when it comes
+		function ask(kind, c, res, b) {
+			var says = { trace: "Tracing the route…", discover: "Asking across the whole mesh for a route…", telemetry: "Asking for their telemetry…" };
+			b.disabled = true;
+			clear(res).appendChild(el("div", { class: "status", text: says[kind] }));
+			placePop();
+			call("pirate.meshcore", kind, { key: c.key }).then(function (r) {
+				b.disabled = false;
+				if (!alive()) return;
+				clear(res);
+				if (r.error) res.appendChild(el("div", { class: "status err", text: r.error }));
+				else if (kind === "trace") res.appendChild(traceEl(r));
+				else if (kind === "discover") { res.appendChild(discoveredEl(r)); refreshLists(); }
+				else res.appendChild(telemetryEl(r));
+				placePop();
+			}).catch(function (e) {
+				b.disabled = false;
+				if (!failed(e)) clear(res).appendChild(el("div", { class: "status err", text: String(e.message || e) }));
+			});
+		}
+		// "@[Name] " where the cursor is, as MeshCore's apps mention someone
+		function mention(name) {
+			var at = "@[" + name + "] ", s = input.selectionStart || 0, e = input.selectionEnd || 0;
+			input.value = input.value.slice(0, s) + at + input.value.slice(e);
+			input.selectionStart = input.selectionEnd = s + at.length;
+			grow(); updateCount();
+			input.focus();
+		}
+		function profileEl(t) {
+			var me = !!t.me, c = t.contact || null, name = me ? (st && st.name) || "You" : c ? c.name : t.name || "someone";
+			var person = me || !c || c.type === "chat", card = el("div", { class: "mc-card" });
+			var banner = el("div", { class: "mc-banner" + (me ? " mine" : "") });
+			if (!me) mcColour(banner, name);
+			card.appendChild(banner);
+			card.appendChild(el("div", { class: "mc-cardface" }, person ? mcFace(name, me, "lg") : mcTile(name, "lg")));
+			var nm = el("div", { class: "mc-cardname" + (me ? " mine" : "") }, el("span", { text: name }));
+			if (!me) mcColour(nm, name);
+			card.appendChild(nm);
+			card.appendChild(el("div", { class: "mc-cardchips" },
+				el("span", { class: "mc-kind", text: me ? "you" : c ? KIND_NAME[c.type] || c.type : "not a contact" }),
+				c && c.last_advert ? el("span", { class: "muted", text: "heard " + mcAgo(c.last_advert) }) : null,
+				me && st && st.battery_mv ? el("span", { class: "muted", text: "battery " + battPct(st.battery_mv) + "%" }) : null));
+			var body = el("div", { class: "mc-cardbody" });
+			card.appendChild(body);
+			var key = me ? st && st.key : c && c.key;
+			if (key) {
+				var k = el("code", { class: "mc-cardkey", title: "Its public key: click for all of it", text: key.slice(0, 16) + "…" }), whole = false;
+				k.addEventListener("click", function () { whole = !whole; k.textContent = whole ? key : key.slice(0, 16) + "…"; placePop(); });
+				body.appendChild(el("div", { class: "mc-cardline" }, k));
+			}
+			if (!me && !c) body.appendChild(el("p", { class: "mc-cardnote muted",
+				text: "Not among your contacts: an advert from them adds them. Until then, there's no messaging them directly." }));
+			// The route, a trace along it, finding one
+			if (c) {
+				var sec = cardSec("Route"), res = el("div", { class: "mc-cardres" }), acts = el("div", { class: "mc-cardacts" });
+				sec.appendChild(el("div", { class: "mc-cardline", text: routeText(c) }));
+				if (!c.flood && (c.type === "repeater" || c.hops > 0))
+					acts.appendChild(btn("Trace route", { cls: "small", onclick: function () { ask("trace", c, res, this); } }));
+				acts.appendChild(btn(c.flood ? "Find a route" : "Find a new route", { cls: "small", onclick: function () { ask("discover", c, res, this); } }));
+				if (!c.flood) acts.appendChild(btn("Forget route", { cls: "small", onclick: function () { contactOp("contact_reset_path", c); closeProfile(); } }));
+				sec.appendChild(acts);
+				sec.appendChild(res);
+				body.appendChild(sec);
+			}
+			// Where they are: from their advert (or your radio's GPS), and asked for now
+			var pos = me ? myPos() : c && c.lat != null ? { lat: c.lat, lon: c.lon } : null;
+			var psec = cardSec("Position");
+			if (pos) psec.appendChild(posEl(pos, me ? (pos.live ? "your radio's GPS, now" : "your radio's GPS, its last fix") : "from their advert, " + mcAgo(c.last_advert), me));
+			else psec.appendChild(el("div", { class: "mc-cardline muted", text: me ? "No GPS position." : person ? "Their adverts carry no position." : "Its adverts carry no position." }));
+			if (me && st && st.share_location) psec.appendChild(el("div", { class: "mc-cardmeta warn-text", text: "Your adverts carry it: everyone on the mesh sees where you are." }));
+			if (c) {
+				var tres = el("div", { class: "mc-cardres" });
+				psec.appendChild(el("div", { class: "mc-cardacts" }, btn("Ask for telemetry", { cls: "small", title: "Their battery, and their position and sensors if they share them with you",
+					onclick: function () { ask("telemetry", c, tres, this); } })));
+				psec.appendChild(tres);
+			}
+			if (me || c) body.appendChild(psec);
+			// To message them, mention them; to remove them
+			var foot = el("div", { class: "mc-cardfoot" });
+			if (c && c.type === "chat") foot.appendChild(btn("Message", { primary: true, onclick: function () { closeProfile(); openConv(c.conv); } }));
+			if (!me && mode === "thread" && open && open.charAt(0) === "#")
+				foot.appendChild(btn("Mention", { onclick: function () { closeProfile(); mention(name); } }));
+			if (me) foot.appendChild(btn("Your radio's settings", { primary: true, onclick: function () { closeProfile(); openPage("radio"); } }));
+			if (c) foot.appendChild(btn("Remove", { cls: "small reset", onclick: function () {
+				if (window.confirm("Remove " + c.name + " from the radio's contacts? An advert from them adds them back.")) { closeProfile(); contactOp("contact_remove", c); }
+			} }));
+			if (foot.firstChild) card.appendChild(foot);
+			return card;
+		}
+
 		/* The open conversation */
 		function showThreadHead() {
 			clear(threadHead);
@@ -2614,8 +2914,9 @@
 				threadHead.appendChild(el("button", { type: "button", class: "mc-iconbtn mc-hbtn", title: "Channel settings", "aria-label": "Channel settings",
 					onclick: function () { openPage("chan:" + ch.index); } }, mcIcon("gear")));
 			} else if (c) {
-				threadHead.appendChild(mcFace(c.name, false, "sm"));
-				threadHead.appendChild(el("strong", { text: c.name }));
+				var who = el("button", { type: "button", class: "mc-hwho", title: "Profile", onclick: function () { openProfile({ contact: c }, who); } },
+					mcFace(c.name, false, "sm"), el("strong", { text: c.name }));
+				threadHead.appendChild(who);
 				threadHead.appendChild(el("span", { class: "mc-hsub muted",
 					text: (c.flood ? "no route yet: messages go out to the whole mesh" : route(c)) + (c.last_advert ? " · heard " + mcAgo(c.last_advert) : "") }));
 			} else threadHead.appendChild(el("strong", { text: open }));
@@ -2762,23 +3063,43 @@
 			if (m.out || m.from || m.conv.charAt(0) !== "#")
 				row.appendChild(el("div", { class: "mc-acts" },
 					el("button", { type: "button", class: "mc-act", title: "Reply", onclick: function (ev) { ev.stopPropagation(); startReply(m); } }, "↩ Reply")));
+			var face = head ? mcFace(who, m.out) : null;
+			if (face) { face.classList.add("mc-pick"); face.setAttribute("data-pick", "1"); }
 			row.appendChild(el("div", { class: "mc-gut" },
-				head ? mcFace(who, m.out) : el("span", { class: "mc-gtime", title: when, text: mcHM(m.ts) })));
+				face || el("span", { class: "mc-gtime", title: when, text: mcHM(m.ts) })));
 			var body = el("div", { class: "mc-body" });
 			if (head) body.appendChild(el("div", { class: "mc-who" },
-				el("span", { class: "mc-author", text: who }),
+				el("span", { class: "mc-author mc-pick", "data-pick": "1", role: "button", tabindex: "0", title: "Profile", text: who }),
 				el("span", { class: "mc-when", title: when, text: mcHM(m.ts) }),
 				sig ? el("span", { class: "mc-sig", text: sig }) : null));
 			body.appendChild(el("div", { class: "mc-text" },
-				men ? el("span", { class: "mc-mention" + (men.me ? " me" : ""), text: "@" + men.name }) : null,
+				men ? el("span", { class: "mc-mention" + (men.me ? " me" : ""), "data-mention": men.name, role: "button", tabindex: "0", text: "@" + men.name }) : null,
 				men ? " " + men.rest : rep ? plain(m.text) : m.text,
 				m.out ? statusEl(m) : null,
 				!head && sig ? el("span", { class: "mc-sig mc-hover", text: sig }) : null));
 			row.appendChild(body);
 			return row;
 		}
+		// A sender's face or name, or a mention: their profile
+		function picked(ev) {
+			var pk = ev.target.closest("[data-pick]"), mn = ev.target.closest("[data-mention]");
+			if (pk) {
+				var row = pk.closest(".mc-row"), m = row && byId[row.getAttribute("data-id")];
+				if (m) openProfile(targetOf(m), pk);
+				return true;
+			}
+			if (mn) {
+				openProfile(targetByName(mn.getAttribute("data-mention")), mn);
+				return true;
+			}
+			return false;
+		}
+		threadBody.addEventListener("keydown", function (ev) {
+			if ((ev.key === "Enter" || ev.key === " ") && picked(ev)) ev.preventDefault();
+		});
 		// A tap on a phone shows a message's actions (there's no hover)
 		threadBody.addEventListener("click", function (ev) {
+			if (picked(ev)) return;
 			if (!TOUCH || ev.target.closest("button, a")) return;
 			var row = ev.target.closest(".mc-row"), was = threadBody.querySelector(".mc-sel");
 			if (was && was !== row) was.classList.remove("mc-sel");
@@ -2869,6 +3190,7 @@
 		}
 		function openConv(conv) {
 			if (conv !== open) cancelReply();
+			closeProfile();
 			var c = chanOf(conv) || contactOf(conv), u = (c && c.unread) || 0;
 			mode = "thread"; page = null; open = conv;
 			if (search.value) search.value = "";

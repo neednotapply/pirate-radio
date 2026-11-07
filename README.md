@@ -374,6 +374,16 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   it's the newest of that person's before it (as MeshCore's app means it),
   or, from MeshCore Open (which adds the time, `@[Name#…]`), the one of
   theirs at that time. `@[Name]` answering nothing here is a mention.
+- **Profiles**, as Discord's: click a face or a name (in a thread, a
+  mention, a conversation's head, Contacts, your radio at the foot) for
+  their card: who they are (their key, when they were last heard); their
+  route, through which repeaters, with *Trace route* (MeshCore's trace:
+  each repeater's SNR, there and back) and *Find a route* (MeshCore's path
+  discovery; the route found is used from then on); where they are, from
+  their advert (how far and which way from you, a map), and *Ask for
+  telemetry* (their battery, and their position and sensors if they share
+  them with you); *Message*, *Mention* (`@[Name]` in the composer),
+  *Remove*. Someone in a channel who isn't a contact can be mentioned.
 - **Channels** (# for public and #hashtag ones, a lock for private ones):
   add a #hashtag one (its key comes from its name), a private one (a random
   key) or one whose key you were given; a channel's gear shows its key, to
@@ -467,10 +477,11 @@ Tested in this repository's tests and builds:
   delivery and its absence, a retry, replies sent and received (MeshCore's
   app's and MeshCore Open's), hashtag, private and keyed channels,
   adverts, its name, its GPS and the survey taking its position, contacts'
-  routes and removal, the messages kept through a restart, and gpsd keeping
-  off its port),
+  routes, traces along them (to a person and to a repeater), a route found
+  and kept, telemetry and its absence, removal, the messages kept through a
+  restart, and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 647
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 646
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

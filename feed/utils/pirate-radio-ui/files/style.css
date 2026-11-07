@@ -720,6 +720,78 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .mc-cstatus { padding-top: 4px; }
 .mc-cstatus:empty { display: none; }
 
+/* Who: a face or name to click, anywhere, for their profile */
+.mc-pick { cursor: pointer; }
+.mc-author.mc-pick:hover, .mc-author.mc-pick:focus-visible { text-decoration: underline; }
+.mc-gut .mc-av.mc-pick:hover { filter: brightness(1.2); }
+.mc-mention[data-mention] { cursor: pointer; }
+.mc-mention[data-mention]:hover { filter: brightness(1.2); }
+.mc-hwho, .mc-cwho, .mc-mewho {
+	appearance: none; display: flex; align-items: center; min-width: 0; background: none; border: 0;
+	color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: 4px;
+}
+.mc-hwho { gap: 10px; padding: 2px 8px 2px 2px; margin: -2px 0; }
+.mc-hwho:hover { background: var(--panel-2); }
+.mc-cwho { flex: 1; gap: 12px; padding: 0; }
+.mc-cwho:hover .mc-cn { text-decoration: underline; }
+.mc-cmain { display: flex; flex-direction: column; }
+.mc-csub { display: block; }
+.mc-mewho { flex: 1; gap: 10px; padding: 3px 4px; margin: -3px 0 -3px -4px; }
+.mc-mewho:hover { background: var(--panel-2); }
+.mc-meinfo { display: flex; flex-direction: column; }
+.mc-mename, .mc-mesub { display: block; }
+
+/* A profile: a card beside what was clicked (a sheet from the foot, on a phone) */
+.mc-pop {
+	position: fixed; z-index: 40; width: 312px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto;
+	background: var(--panel); border: 1px solid var(--line-3); border-radius: 8px; box-shadow: 0 12px 36px rgba(0, 0, 0, .6);
+	scrollbar-width: thin;
+}
+.mc-pop.sheet {
+	left: 0; right: 0; top: auto; bottom: 0; width: auto; max-width: none; max-height: 82vh; max-height: 82dvh;
+	border-radius: 12px 12px 0 0; border-bottom: 0;
+}
+.mc-banner { --h: 210; height: 60px; background: hsl(var(--h), 34%, 25%); border-radius: 7px 7px 0 0; }
+.mc-banner.deep { background: hsl(var(--h), 55%, 29%); }
+.mc-banner.mine { background: rgba(224, 160, 64, .3); }
+.mc-pop.sheet .mc-banner { border-radius: 11px 11px 0 0; }
+.mc-cardface { margin: -36px 0 0 14px; display: flex; }
+.mc-cardface .mc-av { box-shadow: 0 0 0 5px var(--panel); }
+.mc-cardname { --h: 210; padding: 8px 16px 0; font-size: 18px; font-weight: 700; line-height: 1.25; color: hsl(var(--h), 75%, 76%); overflow-wrap: anywhere; }
+.mc-cardname.deep { color: hsl(var(--h), 92%, 64%); }
+.mc-cardname.mine { color: var(--accent); }
+.mc-cardchips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 3px 16px 0; font-size: 12px; }
+.mc-cardbody { padding: 6px 16px 14px; }
+.mc-cardline { font-size: 13px; color: var(--txt); overflow-wrap: anywhere; margin-top: 4px; }
+.mc-cardkey { font-size: 11px; color: var(--muted); cursor: pointer; overflow-wrap: anywhere; }
+.mc-cardkey:hover { color: var(--txt); }
+.mc-cardnote { margin: 8px 0 0; font-size: 12px; }
+.mc-cardsec { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.mc-cardsec h4 { margin: 0; font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+.mc-cardacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.mc-cardres { margin-top: 8px; }
+.mc-cardres:empty { display: none; }
+.mc-cardmeta { font-size: 11px; margin-top: 3px; }
+.mc-cardmeta.warn-text { color: var(--warn); }
+.mc-maplink { margin-left: 8px; font-size: 12px; text-decoration: none; }
+.mc-maplink:hover { text-decoration: underline; }
+.mc-cardfoot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+.mc-cardfoot .reset { margin-left: auto; }
+.mc-telem { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; font-size: 13px; margin-bottom: 6px; }
+/* A trace: the way there and back, a dot each hop, its SNR beside it */
+.mc-trace { position: relative; list-style: none; margin: 0; padding: 0 0 0 16px; }
+.mc-trace::before { content: ""; position: absolute; left: 4px; top: 9px; bottom: 9px; border-left: 2px solid var(--line-3); }
+.mc-trace li { position: relative; display: flex; align-items: center; gap: 6px; min-height: 22px; font-size: 13px; }
+.mc-trace li::before { content: ""; position: absolute; left: -16px; top: 50%; width: 6px; height: 6px; margin-top: -5px; border-radius: 50%; background: var(--panel); border: 2px solid var(--muted); }
+.mc-trace li:first-child::before, .mc-trace li:last-child::before { border-color: var(--accent); }
+.mc-hopname { color: var(--hi); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-hopid { flex: none; font-size: 11px; color: var(--faint); }
+.mc-snr { flex: none; margin-left: auto; padding: 0 5px; border-radius: 3px; font-family: var(--mono); font-size: 11px; line-height: 17px; }
+.mc-snr.good { color: var(--ok); background: var(--ok-soft); }
+.mc-snr.fair { color: var(--txt); background: var(--panel-2); }
+.mc-snr.weak { color: var(--warn); background: var(--warn-soft); }
+.mc-snr.poor { color: var(--bad); background: var(--bad-soft); }
+
 /* Drives: one block per USB drive, its usage, and the file browser */
 .drive { border-top: 1px solid var(--line); padding: 14px 0 4px; }
 .drive:first-child { border-top: 0; padding-top: 2px; }
