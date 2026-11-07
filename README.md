@@ -390,17 +390,15 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   has none in its protocol: its apps send a reaction as a message.
   MeshCore One's (`@[Name]👍` and, a line down, an 8-character hash of the
   message: its text and its sender's time, through SHA-256, in Crockford's
-  base 32) and meshcore-open's (`r:hash:index`, into its table of 184
-  emoji) are both read. Yours go as MeshCore One's, or as meshcore-open's
-  to someone whose own reactions come that way (meshcore-open before
-  9.5.2 reads no other), if the emoji is in its table: the picker's all
-  are; one typed that isn't goes as MeshCore One's, and the page says so.
-  The router finds each one's message, keeps one that comes before its
+  base 32) are read and sent (meshcore-open reads them too, from 9.5.2);
+  meshcore-open's (`r:hash:index`, into its table of emoji) are read. The
+  router finds each one's message, keeps one that comes before its
   message until that does (as MeshCore One does), and counts none as
   news. In a DM you react to their messages, not your own: a DM's
   reaction names no one, so meshcore-open and MCO Advanced look for it
   only among the messages they sent (one to yours would show there as its
-  text). In a channel, any message.
+  text). In a channel, any message. The official MeshCore app has no
+  reactions: it shows anyone's, from any app, as their text.
 - **Links**, clickable; **images** shown under the words, as Discord
   shows them: Giphy's GIFs (a `giphy.com/gifs/…` page, or meshcore-open's
   `g:ID`) and links to an image file (`.gif`, `.png`, `.jpg`, `.webp`…). A
@@ -511,9 +509,9 @@ Tested in this repository's tests and builds:
   messages it kept and those that come, sending to contacts and channels,
   delivery and its absence, a retry, replies sent and received (MeshCore's
   app's and MeshCore Open's), reactions (MeshCore One's and meshcore-open's
-  hashes against their own examples, reactions come, found and kept, ours
-  sent in each form as theirs come, in a DM only to theirs, none counted
-  as news), MCOimg come as
+  hashes against their own examples, reactions come, found and kept
+  (meshcore-open's in a DM too), one sent, in a DM only to theirs, none
+  counted as news), MCOimg come as
   channel data (MCO Advanced's fixtures: v3, v1/v2, v4, its other kinds,
   MeshCore Open's, and data that isn't a chat's), hashtag, private and
   keyed channels,
@@ -522,7 +520,7 @@ Tested in this repository's tests and builds:
   and kept, telemetry and its absence, removal, the messages kept through a
   restart, and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 672
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 668
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

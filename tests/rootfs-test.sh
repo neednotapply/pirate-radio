@@ -1897,30 +1897,20 @@ TA=$(mc_msg ca1a1a1a1a1a1 'hi alice' ts)
 printf '%s\n' "msg ❤️\\n$(pirate-meshcore -H mc1 "$TA" 'hi alice')" > "$MC/ctl"
 sleep 2
 check "meshcore: a reaction comes, to ours, between two" [ "$(mc messages '{"conv":"ca1a1a1a1a1a1"}' | jsonfilter -e "@.messages[@.emoji='❤️'].react")" = "$(mc_msg ca1a1a1a1a1a1 'hi alice' id)" ]
-# Ours go as MeshCore One's, or, to someone whose own come as meshcore-open's
-# (Bob's newest did), as that, an emoji its table has (🎉 is its 3rd):
-# meshcore-open before 9.5.2 reads no other
 check "meshcore: react" mc_ok react "{\"id\":$RB,\"emoji\":\"🎉\"}"
-check "meshcore: react: in meshcore-open's form, to one whose come in it" grep -qxF "chan 0 r:$MH:03" "$MC/fake.log"
+check "meshcore: react: as MeshCore One's, on the air" sh -c "grep -qxF 'chan 0 @[Bob]🎉' '$MC/fake.log' && grep -qxF '$RH' '$MC/fake.log'"
 check "meshcore: react: kept as one, to its message" [ "$(mc messages '{"conv":"#0"}' | jsonfilter -e "@.messages[@.emoji='🎉'].react")" = "$RB" ]
-check "meshcore: react: an emoji meshcore-open hasn't: MeshCore One's form, said" [ "$(mc react "{\"id\":$RB,\"emoji\":\"👀\"}" | jsonfilter -e '@.note')" = "👀 isn't one of meshcore-open's emoji: it went in MeshCore One's form, which meshcore-open before 9.5.2 shows as text" ]
-sleep 1
-check "meshcore: react: as MeshCore One's, on the air" sh -c "grep -qxF 'chan 0 @[Bob]👀' '$MC/fake.log' && grep -qxF '$RH' '$MC/fake.log'"
 check "meshcore: react, between two" sh -c "'$FZ_UBUS' -s '$MC/ubus.sock' -t 30 call pirate.meshcore react '{\"id\":$(mc_msg ca1a1a1a1a1a1 'hello router' id),\"emoji\":\"👍\"}' | jsonfilter -e '@.ok' | grep -qx true && grep -qxF 'send a1a1a1a1a1a1 0 👍' '$MC/fake.log'"
 check "meshcore: react: one emoji" [ "$(mce react "{\"id\":$RB,\"emoji\":\"ok\"}")" = "emoji: one emoji" ]
 # (Between two, only to theirs: meshcore-open looks for a DM's reaction
 # only among what it sent, and would show one to ours as its text)
 NS=$(grep -c '^send ' "$MC/fake.log")
 check "meshcore: react, between two: to theirs only, nothing sent" [ "$(mce react "{\"id\":$(mc_msg ca1a1a1a1a1a1 'hi alice' id),\"emoji\":\"👍\"}")|$(grep -c '^send ' "$MC/fake.log")" = "id: in a DM, one of their messages (meshcore-open can't show a reaction to your own)|$NS" ]
-# (Alice's come as meshcore-open's now: ours to her follow)
+# (meshcore-open's between two, as its users send them: to the message it's to)
 AR=r:$(pirate-meshcore -H mco "$TA" - 'hi alice'):01
 printf '%s\n' "msg $AR" > "$MC/ctl"
 sleep 2
 check "meshcore: meshcore-open's, between two: to its message" [ "$(mc_msg ca1a1a1a1a1a1 "$AR" emoji)|$(mc_msg ca1a1a1a1a1a1 "$AR" react)" = "❤️|$(mc_msg ca1a1a1a1a1a1 'hi alice' id)" ]
-AH=$(pirate-meshcore -H mco "$(mc_msg ca1a1a1a1a1a1 'hello router' ts)" - 'hello router')
-check "meshcore: react, between two, in meshcore-open's form" mc_ok react "{\"id\":$(mc_msg ca1a1a1a1a1a1 'hello router' id),\"emoji\":\"🔥\"}"
-sleep 1
-check "meshcore: react, between two, in meshcore-open's form: on the air" grep -qxF "send a1a1a1a1a1a1 0 r:$AH:05" "$MC/fake.log"
 # (Reacting read the channel, as sending does: news again, for what's kept)
 printf '%s\n' "chan still there?" > "$MC/ctl"
 sleep 2

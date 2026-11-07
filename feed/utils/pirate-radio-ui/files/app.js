@@ -3303,9 +3303,7 @@
 
 		/* Reactions, as Discord shows them: a chip each emoji under the
 		   message, how many, who on hover, yours lit; a click adds yours */
-		// All in meshcore-open's table of reaction emoji, so each can go in its
-		// form to someone whose reactions come in it (before 9.5.2 it reads no other)
-		var QUICK = ["👍", "❤️", "😂", "😱", "😢", "🙏", "🔥", "👏", "🎉", "🤔", "💪", "👌"];
+		var QUICK = ["👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "👏", "🎉", "👀", "💯", "✅"];
 		// In a channel, any message with a name; in a DM, only theirs: a DM's
 		// reaction names no one, so meshcore-open (and MCO Advanced) look for
 		// it only among the messages they sent, and show one to yours as text
@@ -3332,10 +3330,8 @@
 		function react(m, e) {
 			sayStatus("");
 			call("pirate.meshcore", "react", { id: m.id, emoji: e }).then(function (r) {
-				if (r.error) { sayStatus(r.error, "err"); return; }
-				// How it went, when it isn't the obvious (an emoji meshcore-open hasn't)
-				if (r.note) sayStatus(r.note);
-				poll();
+				if (r.error) sayStatus(r.error, "err");
+				else poll();
 			}).catch(function (e2) { if (!failed(e2)) sayStatus(String(e2.message || e2), "err"); });
 		}
 		// The picker: the ones most used, or any emoji of yours
