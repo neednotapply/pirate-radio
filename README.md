@@ -470,7 +470,7 @@ Tested in this repository's tests and builds:
   routes and removal, the messages kept through a restart, and gpsd keeping
   off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 630
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 647
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

@@ -79,9 +79,10 @@
 enum {
 	CMD_APP_START = 1, CMD_SEND_TXT_MSG = 2, CMD_SEND_CHANNEL_TXT_MSG = 3, CMD_GET_CONTACTS = 4,
 	CMD_SET_DEVICE_TIME = 6, CMD_SEND_SELF_ADVERT = 7, CMD_SET_ADVERT_NAME = 8,
-	CMD_SYNC_NEXT_MESSAGE = 10, CMD_RESET_PATH = 13, CMD_REMOVE_CONTACT = 15,
+	CMD_ADD_UPDATE_CONTACT = 9, CMD_SYNC_NEXT_MESSAGE = 10, CMD_RESET_PATH = 13, CMD_REMOVE_CONTACT = 15,
 	CMD_GET_BATT_AND_STORAGE = 20, CMD_DEVICE_QUERY = 22, CMD_GET_CHANNEL = 31,
-	CMD_SET_CHANNEL = 32, CMD_GET_CUSTOM_VARS = 40, CMD_SET_CUSTOM_VAR = 41,
+	CMD_SET_CHANNEL = 32, CMD_SEND_TRACE_PATH = 36, CMD_SEND_TELEMETRY_REQ = 39,
+	CMD_GET_CUSTOM_VARS = 40, CMD_SET_CUSTOM_VAR = 41, CMD_SEND_PATH_DISCOVERY_REQ = 52,
 };
 /* Answers */
 enum {
@@ -93,7 +94,8 @@ enum {
 /* News */
 enum {
 	PUSH_ADVERT = 0x80, PUSH_PATH_UPDATED = 0x81, PUSH_SEND_CONFIRMED = 0x82, PUSH_MSG_WAITING = 0x83,
-	PUSH_NEW_ADVERT = 0x8a, PUSH_CONTACT_DELETED = 0x8f, PUSH_CONTACTS_FULL = 0x90,
+	PUSH_TRACE_DATA = 0x89, PUSH_NEW_ADVERT = 0x8a, PUSH_TELEMETRY = 0x8b, PUSH_PATH_DISCOVERY = 0x8d,
+	PUSH_CONTACT_DELETED = 0x8f, PUSH_CONTACTS_FULL = 0x90,
 };
 
 struct buf {
@@ -227,7 +229,8 @@ static void sha256(const uint8_t *p, size_t n, uint8_t out[32])
 
 struct contact {
 	uint8_t key[PUB_KEY];
-	uint8_t type, flags, path_len;
+	uint8_t type, flags, path_len;  /* path_len: hops (low 6 bits), each hop's id 1-3 bytes (high 2, less 1); 0xff: none */
+	uint8_t path[PATH_MAX_SZ];      /* the repeaters' ids, nearest us first */
 	char name[MAX_NAME + 1];
 	uint32_t last_advert, lastmod;
 	int32_t lat, lon;
@@ -267,7 +270,22 @@ enum state { ST_ABSENT, ST_CONNECTING, ST_READY };
 enum op_kind {
 	OP_QUERY, OP_APPSTART, OP_TIME, OP_CONTACTS, OP_CHANNEL, OP_VARS, OP_BATT, OP_SYNC,
 	OP_SEND, OP_SEND_CH, OP_ADVERT, OP_NAME, OP_SETVAR, OP_SETCH, OP_REMOVE, OP_RESETPATH,
+	OP_TRACE, OP_DISCOVER, OP_TELEM, OP_SETPATH,
 };
+
+/* A request whose answer comes later, as news: a trace (matched by its
+ * tag), a route found or a contact's telemetry (by the contact's key); the
+ * ubus call waits for it, or for its time to run out */
+enum ask_kind { ASK_TRACE, ASK_DISCOVER, ASK_TELEM };
+struct ask {
+	bool used;
+	enum ask_kind kind;
+	uint32_t tag;
+	uint8_t key[PUB_KEY];
+	int64_t start, deadline;
+	struct ubus_request_data req;
+};
+#define MAX_ASKS 4
 
 struct op {
 	struct list_head list;
@@ -279,6 +297,7 @@ struct op {
 	uint32_t msg_id;
 	int arg;
 	bool last_initial;
+	uint8_t key[PUB_KEY];       /* a request's contact */
 };
 
 static struct ubus_auto_conn conn;
@@ -290,7 +309,8 @@ static int pos_ms = POS_MS, ack_min_ms = ACK_MIN_MS;
 static enum state state = ST_ABSENT;
 static int fd = -1;
 static struct uloop_fd ufd;
-static struct uloop_timeout scan_t, hs_t, op_t, close_t, pos_t, batt_t, ack_t, refresh_t;
+static struct uloop_timeout scan_t, hs_t, op_t, close_t, pos_t, batt_t, ack_t, refresh_t, ask_t;
+static struct ask asks[MAX_ASKS];
 static struct buf in, out;
 static char dev_path[256], last_error[160], fail_reason[160];
 static bool broken, have_info;
@@ -891,6 +911,7 @@ static void contact_from(struct contact *c, const uint8_t *f, size_t n)
 	c->type = f[33];
 	c->flags = f[34];
 	c->path_len = f[35];
+	memcpy(c->path, f + 36, PATH_MAX_SZ);
 	field_str(c->name, sizeof(c->name), f + 100, MAX_NAME);
 	c->last_advert = rd32(f + 132);
 	if (n >= 144) {
@@ -1015,6 +1036,327 @@ static void sync_messages(void)
 		op_add1(OP_SYNC, f, sizeof(f));
 }
 
+/* ---------- requests answered later: traces, routes found, telemetry ---------- */
+
+static void ask_done(struct ask *a, struct blob_buf *b)
+{
+	ubus_send_reply(UBUS, &a->req, b->head);
+	ubus_complete_deferred_request(UBUS, &a->req, UBUS_STATUS_OK);
+	a->used = false;
+}
+
+static void ask_fail(struct ask *a, const char *err)
+{
+	struct blob_buf b = { 0 };
+
+	blob_buf_init(&b, 0);
+	blobmsg_add_string(&b, "error", err);
+	ask_done(a, &b);
+	blob_buf_free(&b);
+}
+
+static void ask_arm(void)
+{
+	int64_t next = 0, now = now_ms();
+	int i;
+
+	for (i = 0; i < MAX_ASKS; i++)
+		if (asks[i].used && (!next || asks[i].deadline < next))
+			next = asks[i].deadline;
+	if (next)
+		uloop_timeout_set(&ask_t, next > now ? (int)(next - now) : 0);
+	else
+		uloop_timeout_cancel(&ask_t);
+}
+
+static const char *const ask_late[] = {
+	[ASK_TRACE] = "no answer: the trace didn't come back (a repeater on the way may be out of reach)",
+	[ASK_DISCOVER] = "no answer: they didn't reply (out of reach, or not listening)",
+	[ASK_TELEM] = "no answer: they may not share telemetry with you, or be out of reach",
+};
+
+static void ask_cb(struct uloop_timeout *t)
+{
+	int64_t now = now_ms();
+	int i;
+
+	(void)t;
+	for (i = 0; i < MAX_ASKS; i++)
+		if (asks[i].used && asks[i].deadline <= now)
+			ask_fail(&asks[i], ask_late[asks[i].kind]);
+	ask_arm();
+}
+
+/* Sent: its call waits on for the answer, as long as the radio reckons it
+ * takes, and a margin */
+static bool ask_start(struct op *o, enum ask_kind kind, uint32_t tag, uint32_t est)
+{
+	int64_t wait = (int64_t)est + (kind == ASK_TRACE ? 3000 : 5000);
+	int i;
+
+	for (i = 0; i < MAX_ASKS && asks[i].used; i++)
+		;
+	if (i == MAX_ASKS)
+		return false;
+	if (wait < 5000)
+		wait = 5000;
+	if (wait > 45000)
+		wait = 45000;
+	asks[i].used = true;
+	asks[i].kind = kind;
+	asks[i].tag = tag;
+	memcpy(asks[i].key, o->key, PUB_KEY);
+	asks[i].start = now_ms();
+	asks[i].deadline = asks[i].start + wait;
+	asks[i].req = o->req;
+	o->has_req = false;
+	ask_arm();
+	return true;
+}
+
+/* A trace's by its tag; the others' by their contact's key */
+static struct ask *ask_find(enum ask_kind kind, uint32_t tag, const uint8_t *key6)
+{
+	int i;
+
+	for (i = 0; i < MAX_ASKS; i++)
+		if (asks[i].used && asks[i].kind == kind &&
+		    (key6 ? !memcmp(asks[i].key, key6, 6) : asks[i].tag == tag))
+			return &asks[i];
+	return NULL;
+}
+
+/* A route's length in bytes: its hops times their ids' size (0xff: none) */
+static size_t path_bytes(uint8_t len)
+{
+	size_t hs = (len >> 6) + 1, n = (size_t)(len & 63) * hs;
+
+	if (len == 0xff || hs == 4 || n > PATH_MAX_SZ)
+		return 0;
+	return n;
+}
+
+/* Who a hop is: the one repeater whose key starts with its id (or, none
+ * of those, the one contact) */
+static const struct contact *hop_contact(const uint8_t *id, size_t hs)
+{
+	const struct contact *rep = NULL, *any = NULL;
+	int i, nrep = 0, nany = 0;
+
+	for (i = 0; i < ncontacts; i++) {
+		if (memcmp(contacts[i].key, id, hs))
+			continue;
+		nany++;
+		any = &contacts[i];
+		if (contacts[i].type == 2) {
+			nrep++;
+			rep = &contacts[i];
+		}
+	}
+	return nrep == 1 ? rep : !nrep && nany == 1 ? any : NULL;
+}
+
+static void add_hop(struct blob_buf *b, const uint8_t *id, size_t hs)
+{
+	const struct contact *c = hop_contact(id, hs);
+	char h[2 * 8 + 1];
+
+	hex(h, id, hs);
+	blobmsg_add_string(b, "id", h);
+	if (c)
+		blobmsg_add_string(b, "name", c->name);
+}
+
+/* A route, as its hops: each one's id, and who it is where that's known */
+static void add_path(struct blob_buf *b, const char *name, uint8_t len, const uint8_t *p)
+{
+	size_t hs = (len >> 6) + 1, nh = path_bytes(len) / hs, i;
+	void *a = blobmsg_open_array(b, name);
+
+	for (i = 0; i < nh; i++) {
+		void *t = blobmsg_open_table(b, NULL);
+
+		add_hop(b, p + i * hs, hs);
+		blobmsg_close_table(b, t);
+	}
+	blobmsg_close_array(b, a);
+}
+
+/* A trace come back: each hop, the SNR it heard the one before it at;
+ * then ours, of the last */
+static void on_trace(const uint8_t *f, size_t n)
+{
+	struct blob_buf b = { 0 };
+	struct ask *a;
+	size_t plen, hs, nh, i;
+	void *arr;
+
+	if (n < 12 || !(a = ask_find(ASK_TRACE, rd32(f + 4), NULL)))
+		return;
+	plen = f[2];
+	hs = (size_t)1 << (f[3] & 3);
+	nh = plen / hs;
+	if (n < 12 + plen + nh + 1)
+		return;
+	blob_buf_init(&b, 0);
+	blobmsg_add_u8(&b, "ok", 1);
+	blobmsg_add_u32(&b, "ms", (uint32_t)(now_ms() - a->start));
+	arr = blobmsg_open_array(&b, "hops");
+	for (i = 0; i < nh; i++) {
+		void *t = blobmsg_open_table(&b, NULL);
+
+		add_hop(&b, f + 12 + i * hs, hs);
+		blobmsg_add_double(&b, "snr", (int8_t)f[12 + plen + i] / 4.0);
+		blobmsg_close_table(&b, t);
+	}
+	blobmsg_close_array(&b, arr);
+	blobmsg_add_double(&b, "snr_back", (int8_t)f[12 + plen + nh] / 4.0);
+	ask_done(a, &b);
+	blob_buf_free(&b);
+	ask_arm();
+}
+
+/* A contact's route, from now on: told to the radio (the whole contact,
+ * as it has it, with the route in place) */
+static void set_route(struct contact *ct, uint8_t len, const uint8_t *path)
+{
+	uint8_t f[144];
+	size_t pl = path_bytes(len);
+
+	memset(f, 0, sizeof(f));
+	f[0] = CMD_ADD_UPDATE_CONTACT;
+	memcpy(f + 1, ct->key, PUB_KEY);
+	f[33] = ct->type;
+	f[34] = ct->flags;
+	f[35] = len;
+	memcpy(f + 36, path, pl);
+	memcpy(f + 100, ct->name, strnlen(ct->name, 32));
+	wr32(f + 132, ct->last_advert);
+	wr32(f + 136, (uint32_t)ct->lat);
+	wr32(f + 140, (uint32_t)ct->lon);
+	op_add1(OP_SETPATH, f, sizeof(f));
+	ct->path_len = len;
+	memset(ct->path, 0, PATH_MAX_SZ);
+	memcpy(ct->path, path, pl);
+	meta_seq = ++seq;
+}
+
+/* A route found: ours to them, and theirs back. MeshCore's radio keeps
+ * neither: ours becomes the contact's, as MeshCore's app has it */
+static void on_discovered(const uint8_t *f, size_t n)
+{
+	struct blob_buf b = { 0 };
+	struct contact *ct;
+	struct ask *a;
+	size_t ol, il;
+
+	if (n < 10 || !(a = ask_find(ASK_DISCOVER, 0, f + 2)))
+		return;
+	ol = path_bytes(f[8]);
+	if (n < 10 + ol)
+		return;
+	il = path_bytes(f[9 + ol]);
+	if (n < 10 + ol + il)
+		return;
+	blob_buf_init(&b, 0);
+	blobmsg_add_u8(&b, "ok", 1);
+	blobmsg_add_u32(&b, "ms", (uint32_t)(now_ms() - a->start));
+	add_path(&b, "out", f[8], f + 9);
+	add_path(&b, "in", f[9 + ol], f + 10 + ol);
+	ct = contact_by_prefix(f + 2, 6);
+	if (ct && f[8] != 0xff && (f[8] >> 6) != 3) {
+		set_route(ct, f[8], f + 9);
+		blobmsg_add_u8(&b, "kept", 1);
+	}
+	ask_done(a, &b);
+	blob_buf_free(&b);
+	ask_arm();
+}
+
+/* Telemetry, as Cayenne LPP: a channel, a type, its value (big-endian) */
+static const struct lpp_type {
+	uint8_t type, size;
+	const char *kind, *unit;
+	double scale;           /* 0: not a number this says */
+	bool sign;
+} lpp_types[] = {
+	{ 0, 1, "digital input", "", 1, false }, { 1, 1, "digital output", "", 1, false },
+	{ 2, 2, "analog input", "", 0.01, true }, { 3, 2, "analog output", "", 0.01, true },
+	{ 100, 4, "value", "", 1, false }, { 101, 2, "light", "lx", 1, false },
+	{ 102, 1, "presence", "", 1, false }, { 103, 2, "temperature", "\xc2\xb0" "C", 0.1, true },
+	{ 104, 1, "humidity", "%", 0.5, false }, { 113, 6, "acceleration", "", 0, false },
+	{ 115, 2, "pressure", "hPa", 0.1, false }, { 116, 2, "voltage", "V", 0.01, false },
+	{ 117, 2, "current", "A", 0.001, false }, { 118, 4, "frequency", "Hz", 1, false },
+	{ 120, 1, "percentage", "%", 1, false }, { 121, 2, "altitude", "m", 1, true },
+	{ 125, 2, "concentration", "ppm", 1, false }, { 128, 2, "power", "W", 1, false },
+	{ 130, 4, "distance", "m", 0.001, false }, { 131, 4, "energy", "kWh", 0.001, false },
+	{ 132, 2, "direction", "\xc2\xb0", 1, false }, { 133, 4, "time", "", 1, false },
+	{ 134, 6, "rotation", "", 0, false }, { 135, 3, "colour", "", 0, false },
+	{ 136, 9, "gps", "", 0, false }, { 142, 1, "switch", "", 1, false },
+};
+
+static int64_t be_num(const uint8_t *p, size_t n, bool sign)
+{
+	uint64_t v = 0;
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		v = v << 8 | p[i];
+	if (sign && n < 8 && (v >> (8 * n - 1)) & 1)
+		v |= ~(uint64_t)0 << (8 * n);
+	return (int64_t)v;
+}
+
+static void add_lpp(struct blob_buf *b, const uint8_t *p, size_t n)
+{
+	void *a = blobmsg_open_array(b, "readings");
+	size_t i = 0, j, nt = sizeof(lpp_types) / sizeof(lpp_types[0]);
+
+	while (i + 2 <= n) {
+		const struct lpp_type *t = NULL;
+		const uint8_t *d = p + i + 2;
+		void *r;
+
+		for (j = 0; j < nt && !t; j++)
+			if (lpp_types[j].type == p[i + 1])
+				t = &lpp_types[j];
+		/* A type not known here: nor its size, so nothing after it either */
+		if (!t || i + 2 + t->size > n)
+			break;
+		r = blobmsg_open_table(b, NULL);
+		blobmsg_add_u32(b, "channel", p[i]);
+		blobmsg_add_string(b, "kind", t->kind);
+		if (t->type == 136) {
+			blobmsg_add_double(b, "lat", be_num(d, 3, true) / 10000.0);
+			blobmsg_add_double(b, "lon", be_num(d + 3, 3, true) / 10000.0);
+			blobmsg_add_double(b, "alt", be_num(d + 6, 3, true) / 100.0);
+		} else if (t->scale) {
+			blobmsg_add_double(b, "value", be_num(d, t->size, t->sign) * t->scale);
+			if (t->unit[0])
+				blobmsg_add_string(b, "unit", t->unit);
+		}
+		blobmsg_close_table(b, r);
+		i += 2 + t->size;
+	}
+	blobmsg_close_array(b, a);
+}
+
+static void on_telemetry(const uint8_t *f, size_t n)
+{
+	struct blob_buf b = { 0 };
+	struct ask *a;
+
+	if (n < 8 || !(a = ask_find(ASK_TELEM, 0, f + 2)))
+		return;
+	blob_buf_init(&b, 0);
+	blobmsg_add_u8(&b, "ok", 1);
+	blobmsg_add_u32(&b, "ms", (uint32_t)(now_ms() - a->start));
+	add_lpp(&b, f + 8, n - 8);
+	ask_done(a, &b);
+	blob_buf_free(&b);
+	ask_arm();
+}
+
 static void on_push(const uint8_t *f, size_t n)
 {
 	int i;
@@ -1069,6 +1411,15 @@ static void on_push(const uint8_t *f, size_t n)
 	case PUSH_CONTACTS_FULL:
 		contacts_full = true;
 		meta_seq = ++seq;
+		break;
+	case PUSH_TRACE_DATA:
+		on_trace(f, n);
+		break;
+	case PUSH_PATH_DISCOVERY:
+		on_discovered(f, n);
+		break;
+	case PUSH_TELEMETRY:
+		on_telemetry(f, n);
 		break;
 	}
 }
@@ -1305,8 +1656,19 @@ static void on_frame(const uint8_t *f, size_t n)
 	case OP_NAME:
 	case OP_REMOVE:
 	case OP_RESETPATH:
+	case OP_SETPATH:
 		if (code == RESP_OK)
 			op_finish(o, NULL);
+		break;
+	case OP_TRACE:
+	case OP_DISCOVER:
+	case OP_TELEM:
+		/* Sent: its answer comes later, as news */
+		if (code == RESP_SENT && n >= 10) {
+			enum ask_kind k = o->kind == OP_TRACE ? ASK_TRACE : o->kind == OP_DISCOVER ? ASK_DISCOVER : ASK_TELEM;
+
+			op_finish(o, ask_start(o, k, rd32(f + 2), rd32(f + 6)) ? NULL : "too many requests waiting for answers");
+		}
 		break;
 	case OP_SETVAR:
 		if (code == RESP_OK) {
@@ -1504,6 +1866,7 @@ static void close_cb(struct uloop_timeout *t)
 {
 	const char *why = fail_reason[0] ? fail_reason : "the radio went away";
 	struct op *o, *tmp;
+	int i;
 
 	(void)t;
 	if (fd >= 0) {
@@ -1525,6 +1888,10 @@ static void close_cb(struct uloop_timeout *t)
 	cur = NULL;
 	list_for_each_entry_safe(o, tmp, &ops, list)
 		op_finish(o, why);
+	for (i = 0; i < MAX_ASKS; i++)
+		if (asks[i].used)
+			ask_fail(&asks[i], why);
+	uloop_timeout_cancel(&ask_t);
 	have_info = self.have = batt.have = contacts_loaded = contacts_full = false;
 	gps_known = gps_on = pos_have = false;
 	pos_lat = pos_lon = 0;
@@ -1891,11 +2258,14 @@ static int m_contacts(struct ubus_context *c, struct ubus_object *obj, struct ub
 		blobmsg_add_string(&rb, "conv", conv);
 		blobmsg_add_string(&rb, "name", x->name);
 		blobmsg_add_string(&rb, "type", type_name(x->type));
-		/* Its route: hops, or none known (it floods) */
-		if (x->path_len == 0xff)
+		/* Its route: hops (the repeaters', nearest us first), or none known (it floods) */
+		if (x->path_len == 0xff) {
 			blobmsg_add_u8(&rb, "flood", 1);
-		else
+		} else {
 			blobmsg_add_u32(&rb, "hops", x->path_len & 0x3f);
+			if (x->path_len & 0x3f)
+				add_path(&rb, "path", x->path_len, x->path);
+		}
 		blobmsg_add_u32(&rb, "last_advert", x->last_advert);
 		if (x->lat || x->lon) {
 			add_coord(&rb, "lat", x->lat);
@@ -2479,6 +2849,149 @@ static int m_contact_reset_path(struct ubus_context *c, struct ubus_object *obj,
 	return contact_op(c, req, msg, CMD_RESET_PATH, OP_RESETPATH);
 }
 
+/* The contact a call names: its key, the start of it (12 hex digits at
+ * least), or its conv */
+static struct contact *arg_contact(const char **err)
+{
+	uint8_t key[PUB_KEY];
+	const char *k = arg_str(A_KEY);
+	struct contact *ct;
+	int kl;
+
+	if (!k) {
+		*err = "key: a contact's";
+		return NULL;
+	}
+	if (k[0] == 'c' && strlen(k) == 13)
+		k++;
+	kl = unhex(key, sizeof(key), k);
+	if (kl < 6) {
+		*err = "key: a contact's (12 hex digits at least)";
+		return NULL;
+	}
+	if (!(ct = contact_by_prefix(key, kl)))
+		*err = "no such contact";
+	return ct;
+}
+
+/* A request of a contact, its call deferred until the answer comes */
+static int ask_op(struct ubus_context *c, struct ubus_request_data *req, enum op_kind kind,
+		  const uint8_t *f, size_t n, const struct contact *ct)
+{
+	struct op *o = op_new(kind, f, n);
+
+	if (!o)
+		return reply_error(c, req, "out of memory");
+	memcpy(o->key, ct->key, PUB_KEY);
+	ubus_defer_request(c, req, &o->req);
+	o->has_req = true;
+	op_add(o);
+	return UBUS_STATUS_OK;
+}
+
+/* MeshCore's radio waits on one request at a time (a new one forgets the
+ * last): a route or telemetry asked while another is out waits its turn */
+static const char *asking(void)
+{
+	static char s[96];
+	int i;
+
+	for (i = 0; i < MAX_ASKS; i++)
+		if (asks[i].used && asks[i].kind != ASK_TRACE) {
+			const struct contact *c = contact_by_prefix(asks[i].key, PUB_KEY);
+
+			snprintf(s, sizeof(s), "waiting for an answer from %s: one request at a time", c ? c->name : "a contact");
+			return s;
+		}
+	return NULL;
+}
+
+/* Trace a contact's route there and back: each repeater on it says how
+ * well it heard the one before it (MeshCore's trace). To a repeater, it
+ * and back; to anyone else (their radios don't pass traces on), as far as
+ * the last repeater before them and back */
+static int m_trace(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		   const char *method, struct blob_attr *msg)
+{
+	static uint32_t tags;
+	uint8_t f[MAX_FRAME];
+	struct contact *ct;
+	const char *err;
+	size_t hs, nh, ent, k = 10, i;
+	bool rep;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)))
+		return reply_error(c, req, err);
+	if (ct->path_len == 0xff)
+		return reply_error(c, req, "no route known to trace: discover one first");
+	hs = (ct->path_len >> 6) + 1;
+	nh = ct->path_len & 63;
+	if (hs > 2)
+		return reply_error(c, req, "its route's hops have 3-byte ids: MeshCore traces 1- or 2-byte ones");
+	rep = ct->type == 2;
+	if (!rep && !nh)
+		return reply_error(c, req, "heard directly: there's no repeater between you to trace");
+	ent = nh + (rep ? 1 + nh : nh - 1);
+	if (ent * hs > PATH_MAX_SZ || nh * hs > PATH_MAX_SZ)
+		return reply_error(c, req, "too long a route to trace");
+	f[0] = CMD_SEND_TRACE_PATH;
+	wr32(f + 1, (uint32_t)time(NULL) * 2654435761u + ++tags);
+	wr32(f + 5, 0);
+	f[9] = hs == 2;           /* each hop's id: 1 << this, in bytes */
+	memcpy(f + k, ct->path, nh * hs);
+	k += nh * hs;
+	if (rep) {
+		memcpy(f + k, ct->key, hs);
+		k += hs;
+	}
+	for (i = rep ? nh : nh - 1; i-- > 0; k += hs)
+		memcpy(f + k, ct->path + i * hs, hs);
+	return ask_op(c, req, OP_TRACE, f, k, ct);
+}
+
+/* Find a route to a contact: a request flooded out, its answer coming
+ * back the way it went (MeshCore's path discovery); the route found is
+ * the contact's from then on */
+static int m_discover(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		      const char *method, struct blob_attr *msg)
+{
+	uint8_t f[2 + PUB_KEY] = { CMD_SEND_PATH_DISCOVERY_REQ, 0 };
+	struct contact *ct;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()) || (err = asking()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)))
+		return reply_error(c, req, err);
+	memcpy(f + 2, ct->key, PUB_KEY);
+	return ask_op(c, req, OP_DISCOVER, f, sizeof(f), ct);
+}
+
+/* Ask a contact for its telemetry (its battery; its position and sensors,
+ * if it shares them with you) */
+static int m_telemetry(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		       const char *method, struct blob_attr *msg)
+{
+	uint8_t f[4 + PUB_KEY] = { CMD_SEND_TELEMETRY_REQ, 0, 0, 0 };
+	struct contact *ct;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()) || (err = asking()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)))
+		return reply_error(c, req, err);
+	memcpy(f + 4, ct->key, PUB_KEY);
+	return ask_op(c, req, OP_TELEM, f, sizeof(f), ct);
+}
+
 static int m_refresh(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		     const char *method, struct blob_attr *msg)
 {
@@ -2512,6 +3025,9 @@ static const struct ubus_method methods[] = {
 	UBUS_METHOD("channel_set", m_channel_set, p_channel),
 	UBUS_METHOD("contact_remove", m_contact_remove, p_key),
 	UBUS_METHOD("contact_reset_path", m_contact_reset_path, p_key),
+	UBUS_METHOD("trace", m_trace, p_key),
+	UBUS_METHOD("discover", m_discover, p_key),
+	UBUS_METHOD("telemetry", m_telemetry, p_key),
 	UBUS_METHOD_NOARG("refresh", m_refresh),
 };
 
@@ -2586,6 +3102,7 @@ int main(int argc, char **argv)
 	batt_t.cb = batt_cb;
 	ack_t.cb = ack_cb;
 	refresh_t.cb = refresh_cb;
+	ask_t.cb = ask_cb;
 	conn.cb = on_connect;
 	ubus_auto_connect(&conn);
 	uloop_timeout_set(&scan_t, 0);

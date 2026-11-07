@@ -2,10 +2,14 @@
  * fakemeshcore: a MeshCore companion radio (a USB build) as pirate-meshcore
  * sees one, on a pseudo-terminal, for testing pirate-meshcore without one.
  * It answers the companion protocol (MeshCore's docs/companion_protocol.md)
- * with three contacts (Alice, Bob, a repeater), two channels (Public and
- * #test), two messages waiting, and a GPS whose position moves a little
- * each time it is asked while it is on. A message to Alice is delivered
- * (confirmed a moment later); one to Bob never is.
+ * with three contacts (Alice, two hops away via the repeater and another;
+ * Bob, no route; a repeater), two channels (Public and #test), two
+ * messages waiting, and a GPS whose position moves a little each time it
+ * is asked while it is on. A message to Alice is delivered (confirmed a
+ * moment later); one to Bob never is. A trace along repeaters it knows
+ * comes back; Alice answers a telemetry request (her battery, temperature
+ * and position); a route to Bob is found (through the repeater); anyone
+ * else asked stays quiet.
  *
  *   fakemeshcore [-l link] [-c control-fifo] [-s]
  *
@@ -17,7 +21,9 @@
  * Prints an event a line to stdout: "query", "start", "time <secs>",
  * "send <key prefix> <attempt> <text>", "chan <index> <text>", "advert
  * <flood>", "name <name>", "var <name:value>", "channel <index> <name>
- * <secret>", "remove <key prefix>", "reset <key prefix>", "unknown <code>".
+ * <secret>", "remove <key prefix>", "reset <key prefix>", "trace <hop
+ * ids>", "discover <key prefix>", "telemetry <key prefix>", "path <key
+ * prefix> <path_len> <hop ids>", "unknown <code>".
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -39,7 +45,7 @@ static uint32_t pos_n, acks, rtc = 1700000000;
 static char name[33] = "PirateTest";
 
 struct contact {
-	uint8_t key[32], type, flags, path_len;
+	uint8_t key[32], type, flags, path_len, path[64];
 	char name[33];
 	uint32_t last_advert;
 	int32_t lat, lon;
@@ -62,6 +68,10 @@ static int nq;
 static uint32_t due_ack;
 static long due_ms;
 
+/* News to tell later: a trace come back, an answer to a request */
+static struct { long at; size_t n; uint8_t f[200]; } laters[8];
+static int nlaters;
+
 static long now_ms(void)
 {
 	struct timespec t;
@@ -79,6 +89,35 @@ static void out(const uint8_t *p, size_t n)
 
 	if (write(mfd, h, 3) != 3 || write(mfd, p, n) != (ssize_t)n)
 		exit(1);
+}
+
+static void later(const uint8_t *f, size_t n, long ms)
+{
+	if (nlaters == 8 || n > sizeof(laters[0].f))
+		return;
+	laters[nlaters].at = now_ms() + ms;
+	laters[nlaters].n = n;
+	memcpy(laters[nlaters].f, f, n);
+	nlaters++;
+}
+
+static void sent(uint8_t flood, uint32_t tag, uint32_t est)
+{
+	uint8_t o[10] = { 6, flood };
+
+	wr32(o + 2, tag);
+	wr32(o + 6, est);
+	out(o, 10);
+}
+
+static struct contact *by_key(const uint8_t *k)
+{
+	int i;
+
+	for (i = 0; i < ncontacts; i++)
+		if (!memcmp(contacts[i].key, k, 32))
+			return &contacts[i];
+	return NULL;
 }
 
 static void ok(void)
@@ -127,6 +166,7 @@ static size_t contact_frame(uint8_t *f, uint8_t code, const struct contact *c)
 	f[33] = c->type;
 	f[34] = c->flags;
 	f[35] = c->path_len;
+	memcpy(f + 36, c->path, 64);
 	memcpy(f + 100, c->name, strlen(c->name));
 	wr32(f + 132, c->last_advert);
 	wr32(f + 136, (uint32_t)c->lat);
@@ -378,6 +418,108 @@ static void on_frame(const uint8_t *f, size_t n)
 		}
 		ok();
 		break;
+	case 9: {
+		/* A contact, as the app has it: here, its route */
+		struct contact *c = n >= 36 ? by_key(f + 1) : NULL;
+		char h[3 * 64 + 1] = "";
+		size_t pl = (f[35] & 63) * ((f[35] >> 6) + 1), k;
+
+		if (!c) {
+			err(2);
+			break;
+		}
+		if (f[35] == 0xff)
+			pl = 0;
+		for (k = 0; k < pl && 36 + k < n; k++)
+			sprintf(h + 3 * k, " %02x", f[36 + k]);
+		prefix(p, f + 1);
+		printf("path %s %u%s\n", p, f[35], h);
+		c->path_len = f[35];
+		memset(c->path, 0, 64);
+		memcpy(c->path, f + 36, pl);
+		ok();
+		break;
+	}
+	case 36: {
+		/* A trace: back along repeaters it knows, each one's SNR on it */
+		size_t hs = (size_t)1 << (f[9] & 3), pl, k, ne;
+		bool known = true;
+		char h[3 * 64 + 1] = "";
+
+		if (n <= 10 || n - 10 > 64)
+			break;
+		pl = n - 10;
+		ne = pl / hs;
+		for (k = 0; k < pl; k += hs) {
+			sprintf(h + 3 * (k / hs), " %02x", f[10 + k]);
+			if (f[10 + k] != 0xc2 && f[10 + k] != 0x77)
+				known = false;
+		}
+		printf("trace%s\n", h);
+		sent(0, rd32(f + 1), 1200);
+		if (known) {
+			o[0] = 0x89;
+			o[1] = 0;
+			o[2] = pl;
+			o[3] = f[9];
+			memcpy(o + 4, f + 1, 8);
+			memcpy(o + 12, f + 10, pl);
+			for (k = 0; k < ne; k++)
+				o[12 + pl + k] = (uint8_t)(int8_t)(4 * (8 - (int)k));
+			o[12 + pl + ne] = 22;
+			later(o, 13 + pl + ne, 300);
+		}
+		break;
+	}
+	case 39: {
+		/* Telemetry: Alice's battery, temperature and position */
+		struct contact *c = n >= 36 ? by_key(f + 4) : NULL;
+		static const uint8_t lpp[] = {
+			1, 116, 0x01, 0x9c,                     /* 4.12 V */
+			1, 103, 0x00, 0xd7,                     /* 21.5 C */
+			1, 136, 0x05, 0xb5, 0xcc, 0xed, 0x5f, 0x18, 0x00, 0x04, 0xb0,
+			                                        /* 37.4220, -122.0840, 12 m */
+		};
+
+		if (!c) {
+			err(2);
+			break;
+		}
+		prefix(p, f + 4);
+		printf("telemetry %s\n", p);
+		sent(c->path_len == 0xff, 0x7e1e0000 + c->key[0], 1000);
+		if (c->key[0] == 0xa1) {
+			o[0] = 0x8b;
+			o[1] = 0;
+			memcpy(o + 2, c->key, 6);
+			memcpy(o + 8, lpp, sizeof(lpp));
+			later(o, 8 + sizeof(lpp), 300);
+		}
+		break;
+	}
+	case 52: {
+		/* A route found: to Bob, through the repeater, both ways */
+		struct contact *c = n >= 34 ? by_key(f + 2) : NULL;
+
+		if (!c) {
+			err(2);
+			break;
+		}
+		prefix(p, f + 2);
+		printf("discover %s\n", p);
+		sent(1, 0xd15c0000 + c->key[0], 1000);
+		if (c->key[0] == 0xb0) {
+			o[0] = 0x8d;
+			o[1] = 0;
+			memcpy(o + 2, c->key, 6);
+			o[8] = 1;
+			o[9] = 0xc2;
+			o[10] = 1;
+			o[11] = 0xc2;
+			later(o, 12, 400);
+		}
+		break;
+	}
 	default:
 		printf("unknown %u\n", f[0]);
 		err(1);
@@ -428,7 +570,9 @@ int main(int argc, char **argv)
 			return 2;
 	}
 	setvbuf(stdout, NULL, _IOLBF, 0);
-	add_contact("Alice", 0xa1, 1, 1);
+	add_contact("Alice", 0xa1, 1, 2);
+	contacts[0].path[0] = 0xc2;   /* via the repeater, and one it doesn't know */
+	contacts[0].path[1] = 0x77;
 	add_contact("Bob", 0xb0, 1, 0xff);
 	add_contact("Hilltop Repeater", 0xc2, 2, 0);
 	snprintf(channels[0].name, 33, "Public");
@@ -479,6 +623,14 @@ int main(int argc, char **argv)
 			if (wait < 0)
 				wait = 0;
 		}
+		for (int i = 0; i < nlaters; i++) {
+			long w = laters[i].at - now_ms();
+
+			if (w < 0)
+				w = 0;
+			if (wait < 0 || w < wait)
+				wait = w;
+		}
 		if (poll(pfd, np, wait) < 0) {
 			if (errno == EINTR)
 				continue;
@@ -491,6 +643,15 @@ int main(int argc, char **argv)
 			wr32(o + 5, 850);
 			out(o, 9);
 			due_ack = 0;
+		}
+		for (int i = 0; i < nlaters; ) {
+			if (now_ms() >= laters[i].at) {
+				out(laters[i].f, laters[i].n);
+				memmove(&laters[i], &laters[i + 1], (nlaters - i - 1) * sizeof(laters[0]));
+				nlaters--;
+			} else {
+				i++;
+			}
 		}
 		if (np == 2 && (pfd[1].revents & POLLIN)) {
 			r = read(cfd, tmp, sizeof(tmp));

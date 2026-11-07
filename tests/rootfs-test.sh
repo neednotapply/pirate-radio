@@ -1808,7 +1808,7 @@ mc contacts > "$MC/contacts.json"
 cj() { jsonfilter -i "$MC/contacts.json" -e "$1"; }
 check "meshcore: contacts" [ "$(cj '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|" ]
 check "meshcore: contacts: types" [ "$(cj '@.contacts[*].type' | tr '\n' ' ')" = "chat chat repeater " ]
-check "meshcore: contacts: routes" [ "$(cj '@.contacts[0].hops') $(cj '@.contacts[1].flood')" = "1 true" ]
+check "meshcore: contacts: routes" [ "$(cj '@.contacts[0].hops') $(cj '@.contacts[1].flood')" = "2 true" ]
 check "meshcore: contacts: keys" [ "$(cj '@.contacts[0].key') $(cj '@.contacts[0].conv')" = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1 ca1a1a1a1a1a1" ]
 check "meshcore: contacts: a position" sh -c "[ -n \"\$(jsonfilter -i $MC/contacts.json -e '@.contacts[0].lat')\" ] && [ -z \"\$(jsonfilter -i $MC/contacts.json -e '@.contacts[1].lat')\" ]"
 mc channels > "$MC/channels.json"
@@ -1880,6 +1880,29 @@ check "meshcore: a mention of no one here: no reply" [ -z "$(mc_msg '#0' '@[Nobo
 echo "advert" > "$MC/ctl"
 sleep 1
 check "meshcore: an advert: a new contact" [ "$(mc contacts | jsonfilter -e '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|Carol|" ]
+# A contact's route, a trace along it, a route found, telemetry (as the
+# Messenger's profiles ask them): Alice is two hops off, through the
+# repeater and one it doesn't know
+check "meshcore: a route: its hops, named where known" [ "$(mc contacts | jsonfilter -e "@.contacts[@.name='Alice'].path[*].id" | tr '\n' ' ')|$(mc contacts | jsonfilter -e "@.contacts[@.name='Alice'].path[0].name")" = "c2 77 |Hilltop Repeater" ]
+mc trace '{"key":"a1a1a1a1a1a1"}' > "$MC/trace.json"
+check "meshcore: trace: there and back" grep -qx 'trace c2 77 c2' "$MC/fake.log"
+check "meshcore: trace: each hop" [ "$(jsonfilter -i "$MC/trace.json" -e '@.hops[*].id' | tr '\n' ' ')" = "c2 77 c2 " ]
+check "meshcore: trace: hops named where known" [ "$(jsonfilter -i "$MC/trace.json" -e '@.hops[0].name')|$(jsonfilter -i "$MC/trace.json" -e '@.hops[1].name')" = "Hilltop Repeater|" ]
+check "meshcore: trace: the SNR each heard at, then ours" [ "$(jsonfilter -i "$MC/trace.json" -e '@.hops[*].snr' -e '@.snr_back' | awk '{ printf "%s ", $1 + 0 }')" = "8 7 6 5.5 " ]
+check "meshcore: trace: a repeater, to it and back" sh -c "'$FZ_UBUS' -s '$MC/ubus.sock' -t 30 call pirate.meshcore trace '{\"key\":\"c2c2c2c2c2c2\"}' | jsonfilter -e '@.ok' | grep -qx true && grep -qx 'trace c2' '$MC/fake.log'"
+check "meshcore: trace: no route known" [ "$(mce trace '{"key":"b0b0b0b0b0b0"}')" = "no route known to trace: discover one first" ]
+mc discover '{"key":"b0b0b0b0b0b0"}' > "$MC/discover.json"
+sleep 1
+check "meshcore: discover: asked" grep -qx 'discover b0b0b0b0b0b0' "$MC/fake.log"
+check "meshcore: discover: the route found, both ways" [ "$(jsonfilter -i "$MC/discover.json" -e '@.out[0].id' -e '@.in[0].id' -e '@.out[0].name' | tr '\n' '|')" = "c2|c2|Hilltop Repeater|" ]
+check "meshcore: discover: kept as Bob's" grep -qx 'path b0b0b0b0b0b0 1 c2' "$MC/fake.log"
+check "meshcore: discover: Bob has a route now" [ "$(mc contacts | jsonfilter -e "@.contacts[@.name='Bob'].hops")" = 1 ]
+mc telemetry '{"key":"a1a1a1a1a1a1"}' > "$MC/telemetry.json"
+check "meshcore: telemetry: asked" grep -qx 'telemetry a1a1a1a1a1a1' "$MC/fake.log"
+check "meshcore: telemetry: battery, temperature" [ "$(jsonfilter -i "$MC/telemetry.json" -e "@.readings[@.kind='voltage'].value" -e "@.readings[@.kind='temperature'].value" | awk '{ printf "%s ", $1 + 0 }')" = "4.12 21.5 " ]
+check "meshcore: telemetry: units" [ "$(jsonfilter -i "$MC/telemetry.json" -e "@.readings[@.kind='voltage'].unit")" = V ]
+check "meshcore: telemetry: a position" [ "$(jsonfilter -i "$MC/telemetry.json" -e "@.readings[@.kind='gps'].lat" -e "@.readings[@.kind='gps'].lon" -e "@.readings[@.kind='gps'].alt" | awk '{ printf "%s ", $1 + 0 }')" = "37.422 -122.084 12 " ]
+check "meshcore: telemetry: no answer" [ "$(mce telemetry '{"key":"c2c2c2c2c2c2"}')" = "no answer: they may not share telemetry with you, or be out of reach" ]
 # Channels: a hashtag one (its key from its name), a private one, one with a key, cleared
 check "meshcore: channel: a hashtag one" mc_ok channel_set '{"index":2,"name":"#pirates"}'
 check "meshcore: channel: its key, from its name" grep -qx 'channel 2 #pirates 6ea268a7936a8b03d5abda223c429af0' "$MC/fake.log"
