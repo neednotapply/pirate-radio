@@ -1940,6 +1940,16 @@ check "meshcore: channel data not for a chat: nothing" [ "$(mc messages '{"conv"
 echo "advert" > "$MC/ctl"
 sleep 1
 check "meshcore: an advert: a new contact" [ "$(mc contacts | jsonfilter -e '@.contacts[*].name' | tr '\n' '|')" = "Alice|Bob|Hilltop Repeater|Carol|" ]
+# Favourites, as the radio keeps them (a contact's flags' lowest bit): made
+# and unmade, the rest of its flags (what it may ask of us) as they were
+fav() { mc contacts | jsonfilter -e "@.contacts[@.name='$1'].favorite"; }
+check "meshcore: a favourite, as the radio has it" [ "$(fav Alice)|$(fav Bob)" = "true|" ]
+check "meshcore: favourite: made" mc_ok contact_favorite '{"key":"b0b0b0b0b0b0","favorite":true}'
+check "meshcore: favourite: the radio told, its other flags kept" grep -qx 'flags b0b0b0b0b0b0 5' "$MC/fake.log"
+check "meshcore: favourite: unmade" mc_ok contact_favorite '{"key":"a1a1a1a1a1a1","favorite":false}'
+check "meshcore: favourite: unmade, its other flags kept" grep -qx 'flags a1a1a1a1a1a1 2' "$MC/fake.log"
+check "meshcore: favourites now" [ "$(fav Alice)|$(fav Bob)" = "|true" ]
+check "meshcore: favourite: true or false" [ "$(mce contact_favorite '{"key":"b0b0b0b0b0b0"}')" = "favorite: true or false" ]
 # A contact's route, a trace along it, a route found, telemetry (as the
 # Messenger's profiles ask them): Alice is two hops off, through the
 # repeater and one it doesn't know
@@ -1957,6 +1967,8 @@ check "meshcore: discover: asked" grep -qx 'discover b0b0b0b0b0b0' "$MC/fake.log
 check "meshcore: discover: the route found, both ways" [ "$(jsonfilter -i "$MC/discover.json" -e '@.out[0].id' -e '@.in[0].id' -e '@.out[0].name' | tr '\n' '|')" = "c2|c2|Hilltop Repeater|" ]
 check "meshcore: discover: kept as Bob's" grep -qx 'path b0b0b0b0b0b0 1 c2' "$MC/fake.log"
 check "meshcore: discover: Bob has a route now" [ "$(mc contacts | jsonfilter -e "@.contacts[@.name='Bob'].hops")" = 1 ]
+check "meshcore: discover: Bob still a favourite" [ "$(fav Bob)" = true ]
+check "meshcore: discover: his flags as they were, on the radio" [ "$(grep -c '^flags b0b0b0b0b0b0' "$MC/fake.log")" = 1 ]
 mc telemetry '{"key":"a1a1a1a1a1a1"}' > "$MC/telemetry.json"
 check "meshcore: telemetry: asked" grep -qx 'telemetry a1a1a1a1a1a1' "$MC/fake.log"
 check "meshcore: telemetry: battery, temperature" [ "$(jsonfilter -i "$MC/telemetry.json" -e "@.readings[@.kind='voltage'].value" -e "@.readings[@.kind='temperature'].value" | awk '{ printf "%s ", $1 + 0 }')" = "4.12 21.5 " ]
@@ -2015,6 +2027,7 @@ check "meshcore: kept: something unread, to keep" [ "$U0" -gt 0 ]
 check "meshcore: kept: what was read" [ "$(mc channels | jsonfilter -e '@.channels[0].unread')" = "$U0" ]
 check "meshcore: kept: what a reply answers" [ "$(mc_msg '#0' '@[Bob] right here' reply)" = "$RB" ]
 check "meshcore: kept: what a reaction is to" [ "$(mc messages '{"conv":"#0"}' | jsonfilter -e "@.messages[@.emoji='👍'].react")" = "$RB" ]
+check "meshcore: kept: a favourite (the radio's)" [ "$(fav Alice)|$(fav Bob)" = "|true" ]
 # Unplugged
 kill "$MC_FAKE"
 check "meshcore: unplugged: absent" mc_wait '@.state' absent

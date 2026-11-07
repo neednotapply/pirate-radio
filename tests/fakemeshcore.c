@@ -419,7 +419,8 @@ static void on_frame(const uint8_t *f, size_t n)
 		ok();
 		break;
 	case 9: {
-		/* A contact, as the app has it: here, its route */
+		/* A contact, as the app has it: its route, and its flags (a
+		 * favourite, what it may ask), said when they change */
 		struct contact *c = n >= 36 ? by_key(f + 1) : NULL;
 		char h[3 * 64 + 1] = "";
 		size_t pl = (f[35] & 63) * ((f[35] >> 6) + 1), k;
@@ -434,6 +435,9 @@ static void on_frame(const uint8_t *f, size_t n)
 			sprintf(h + 3 * k, " %02x", f[36 + k]);
 		prefix(p, f + 1);
 		printf("path %s %u%s\n", p, f[35], h);
+		if (c->flags != f[34])
+			printf("flags %s %u\n", p, f[34]);
+		c->flags = f[34];
 		c->path_len = f[35];
 		memset(c->path, 0, 64);
 		memcpy(c->path, f + 36, pl);
@@ -608,7 +612,9 @@ int main(int argc, char **argv)
 	add_contact("Alice", 0xa1, 1, 2);
 	contacts[0].path[0] = 0xc2;   /* via the repeater, and one it doesn't know */
 	contacts[0].path[1] = 0x77;
+	contacts[0].flags = 0x03;     /* a favourite, who may ask our battery */
 	add_contact("Bob", 0xb0, 1, 0xff);
+	contacts[1].flags = 0x04;     /* who may ask where we are */
 	add_contact("Hilltop Repeater", 0xc2, 2, 0);
 	snprintf(channels[0].name, 33, "Public");
 	memcpy(channels[0].secret, "\x8b\x33\x87\xe9\xc5\xcd\xea\x6a\xc9\xe5\xed\xba\xa1\x15\xcd\x72", 16);

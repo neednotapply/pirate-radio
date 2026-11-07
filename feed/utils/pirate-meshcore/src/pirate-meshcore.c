@@ -275,7 +275,7 @@ enum state { ST_ABSENT, ST_CONNECTING, ST_READY };
 enum op_kind {
 	OP_QUERY, OP_APPSTART, OP_TIME, OP_CONTACTS, OP_CHANNEL, OP_VARS, OP_BATT, OP_SYNC,
 	OP_SEND, OP_SEND_CH, OP_ADVERT, OP_NAME, OP_SETVAR, OP_SETCH, OP_REMOVE, OP_RESETPATH,
-	OP_TRACE, OP_DISCOVER, OP_TELEM, OP_SETPATH,
+	OP_TRACE, OP_DISCOVER, OP_TELEM, OP_SETCONTACT,
 };
 
 /* A request whose answer comes later, as news: a trace (matched by its
@@ -1666,6 +1666,26 @@ static void on_trace(const uint8_t *f, size_t n)
 	ask_arm();
 }
 
+/* A contact, as the radio is told it (CMD_ADD_UPDATE_CONTACT): the whole
+ * of it as it has it, with these flags and this route. Its flags: the
+ * lowest bit makes it a favourite, the rest are what it may ask of us
+ * (telemetry: 0x02 our battery, 0x04 where we are, 0x08 our sensors;
+ * 0x10, our command line) */
+static void contact_cmd(uint8_t f[144], const struct contact *ct, uint8_t flags, uint8_t len, const uint8_t *path)
+{
+	memset(f, 0, 144);
+	f[0] = CMD_ADD_UPDATE_CONTACT;
+	memcpy(f + 1, ct->key, PUB_KEY);
+	f[33] = ct->type;
+	f[34] = flags;
+	f[35] = len;
+	memcpy(f + 36, path, path_bytes(len));
+	memcpy(f + 100, ct->name, strnlen(ct->name, 32));
+	wr32(f + 132, ct->last_advert);
+	wr32(f + 136, (uint32_t)ct->lat);
+	wr32(f + 140, (uint32_t)ct->lon);
+}
+
 /* A contact's route, from now on: told to the radio (the whole contact,
  * as it has it, with the route in place) */
 static void set_route(struct contact *ct, uint8_t len, const uint8_t *path)
@@ -1673,18 +1693,8 @@ static void set_route(struct contact *ct, uint8_t len, const uint8_t *path)
 	uint8_t f[144];
 	size_t pl = path_bytes(len);
 
-	memset(f, 0, sizeof(f));
-	f[0] = CMD_ADD_UPDATE_CONTACT;
-	memcpy(f + 1, ct->key, PUB_KEY);
-	f[33] = ct->type;
-	f[34] = ct->flags;
-	f[35] = len;
-	memcpy(f + 36, path, pl);
-	memcpy(f + 100, ct->name, strnlen(ct->name, 32));
-	wr32(f + 132, ct->last_advert);
-	wr32(f + 136, (uint32_t)ct->lat);
-	wr32(f + 140, (uint32_t)ct->lon);
-	op_add1(OP_SETPATH, f, sizeof(f));
+	contact_cmd(f, ct, ct->flags, len, path);
+	op_add1(OP_SETCONTACT, f, sizeof(f));
 	ct->path_len = len;
 	memset(ct->path, 0, PATH_MAX_SZ);
 	memcpy(ct->path, path, pl);
@@ -1986,6 +1996,15 @@ static void on_frame(const uint8_t *f, size_t n)
 			op_finish(o, NULL);   /* its clock was ahead: it keeps it */
 			return;
 		}
+		if (o->kind == OP_SETCONTACT && (o->arg & 0x100)) {
+			/* A favourite refused: its flags as they were */
+			struct contact *x = contact_by_prefix(o->frame + 1, PUB_KEY);
+
+			if (x) {
+				x->flags = o->arg & 0xff;
+				meta_seq = ++seq;
+			}
+		}
 		op_finish(o, err_text(n > 1 ? f[1] : 0));
 		return;
 	}
@@ -2108,7 +2127,7 @@ static void on_frame(const uint8_t *f, size_t n)
 	case OP_NAME:
 	case OP_REMOVE:
 	case OP_RESETPATH:
-	case OP_SETPATH:
+	case OP_SETCONTACT:
 		if (code == RESP_OK)
 			op_finish(o, NULL);
 		break;
@@ -2406,7 +2425,7 @@ static void refresh_cb(struct uloop_timeout *t)
 
 enum {
 	A_TO, A_TEXT, A_ID, A_CONV, A_SINCE, A_BEFORE, A_LIMIT, A_NAME, A_ENABLED, A_FLOOD,
-	A_KEY, A_INDEX, A_SECRET, A_REPLY, A_EMOJI,
+	A_KEY, A_INDEX, A_SECRET, A_REPLY, A_EMOJI, A_FAVORITE,
 	__A_MAX
 };
 
@@ -2427,6 +2446,7 @@ static const struct blobmsg_policy pol_all[__A_MAX] = {
 	[A_SECRET] = { "secret", BLOBMSG_TYPE_UNSPEC },
 	[A_REPLY] = { "reply", BLOBMSG_TYPE_UNSPEC },
 	[A_EMOJI] = { "emoji", BLOBMSG_TYPE_UNSPEC },
+	[A_FAVORITE] = { "favorite", BLOBMSG_TYPE_UNSPEC },
 };
 static struct blob_attr *tb[__A_MAX];
 
@@ -2445,6 +2465,7 @@ static const struct blobmsg_policy p_name[] = { { "name", BLOBMSG_TYPE_STRING } 
 static const struct blobmsg_policy p_enabled[] = { { "enabled", BLOBMSG_TYPE_BOOL } };
 static const struct blobmsg_policy p_advert[] = { { "flood", BLOBMSG_TYPE_BOOL } };
 static const struct blobmsg_policy p_key[] = { { "key", BLOBMSG_TYPE_STRING } };
+static const struct blobmsg_policy p_favorite[] = { { "key", BLOBMSG_TYPE_STRING }, { "favorite", BLOBMSG_TYPE_BOOL } };
 static const struct blobmsg_policy p_channel[] = {
 	{ "index", BLOBMSG_TYPE_INT32 }, { "name", BLOBMSG_TYPE_STRING }, { "secret", BLOBMSG_TYPE_STRING },
 };
@@ -2717,6 +2738,9 @@ static int m_contacts(struct ubus_context *c, struct ubus_object *obj, struct ub
 		blobmsg_add_string(&rb, "conv", conv);
 		blobmsg_add_string(&rb, "name", x->name);
 		blobmsg_add_string(&rb, "type", type_name(x->type));
+		/* A favourite: so marked on the radio (by any app) */
+		if (x->flags & 0x01)
+			blobmsg_add_u8(&rb, "favorite", 1);
 		/* Its route: hops (the repeaters', nearest us first), or none known (it floods) */
 		if (x->path_len == 0xff) {
 			blobmsg_add_u8(&rb, "flood", 1);
@@ -3381,6 +3405,36 @@ static int m_contact_reset_path(struct ubus_context *c, struct ubus_object *obj,
 	return contact_op(c, req, msg, CMD_RESET_PATH, OP_RESETPATH);
 }
 
+static struct contact *arg_contact(const char **err);
+
+/* A contact made a favourite, or not: kept on the radio (its flags' lowest
+ * bit, as every app has it), the rest of its flags as they were. When its
+ * list is full and it makes room for one new, it keeps its favourites.
+ * Ours at once (what else tells the radio of it carries it), as they were
+ * again if the radio refuses */
+static int m_contact_favorite(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			      const char *method, struct blob_attr *msg)
+{
+	uint8_t f[144], was;
+	const char *err;
+	struct contact *ct;
+	int on;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)))
+		return reply_error(c, req, err);
+	if ((on = arg_bool(A_FAVORITE)) < 0)
+		return reply_error(c, req, "favorite: true or false");
+	was = ct->flags;
+	ct->flags = on ? was | 0x01 : was & ~0x01;
+	contact_cmd(f, ct, ct->flags, ct->path_len, ct->path);
+	meta_seq = ++seq;
+	return op_deferred(c, req, OP_SETCONTACT, f, sizeof(f), 0x100 | was);
+}
+
 /* The contact a call names: its key, the start of it (12 hex digits at
  * least), or its conv */
 static struct contact *arg_contact(const char **err)
@@ -3558,6 +3612,7 @@ static const struct ubus_method methods[] = {
 	UBUS_METHOD("channel_set", m_channel_set, p_channel),
 	UBUS_METHOD("contact_remove", m_contact_remove, p_key),
 	UBUS_METHOD("contact_reset_path", m_contact_reset_path, p_key),
+	UBUS_METHOD("contact_favorite", m_contact_favorite, p_favorite),
 	UBUS_METHOD("trace", m_trace, p_key),
 	UBUS_METHOD("discover", m_discover, p_key),
 	UBUS_METHOD("telemetry", m_telemetry, p_key),

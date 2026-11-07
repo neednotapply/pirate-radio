@@ -114,12 +114,12 @@
 			seq: seq, name: "🏴‍☠️ Pirate Radio", gps: false, read: {},
 			contacts: [
 				{ key: key("a1"), conv: "ca1a1a1a1a1a1", name: "Alice", type: "chat", hops: 1, path: [{ id: "c2", name: "Hilltop Repeater" }],
-					last_advert: now - 900, lat: 37.4302, lon: -122.0712 },
+					last_advert: now - 900, lat: 37.4302, lon: -122.0712, favorite: true },
 				{ key: key("b0"), conv: "cb0b0b0b0b0b0", name: "Bob", type: "chat", flood: true, last_advert: now - 7200 },
 				{ key: key("d4"), conv: "cd4d4d4d4d4d4", name: "🦜 Polly", type: "chat", hops: 0, last_advert: now - 2400, lat: 37.4249, lon: -122.0911 },
 				{ key: key("e5"), conv: "ce5e5e5e5e5e5", name: "Kiwi 🇳🇿", type: "chat", hops: 3,
 					path: [{ id: "c2", name: "Hilltop Repeater" }, { id: "4f" }, { id: "9a" }], last_advert: now - 2100 },
-				{ key: key("c2"), conv: "cc2c2c2c2c2c2", name: "Hilltop Repeater", type: "repeater", hops: 0, last_advert: now - 300 }
+				{ key: key("c2"), conv: "cc2c2c2c2c2c2", name: "Hilltop Repeater", type: "repeater", hops: 0, last_advert: now - 300, favorite: true }
 			],
 			channels: [
 				{ index: 0, conv: "#0", name: "Public", secret: "8b3387e9c5cdea6ac9e5edbaa115cd72" },
@@ -827,6 +827,14 @@
 		},
 		"pirate.meshcore:contact_reset_path": function (p) {
 			DEMO_MC.contacts.forEach(function (c) { if (c.key === p.key) { c.flood = true; delete c.hops; } });
+			return { ok: true };
+		},
+		"pirate.meshcore:contact_favorite": function (p) {
+			var c = DEMO_MC.contacts.filter(function (x) { return x.key === p.key; })[0];
+			if (!c) return { error: "no such contact" };
+			if (typeof p.favorite !== "boolean") return { error: "favorite: true or false" };
+			if (p.favorite) c.favorite = true;
+			else delete c.favorite;
 			return { ok: true };
 		},
 		"pirate.meshcore:refresh": { ok: true },
@@ -2284,7 +2292,7 @@
 		var t = String(text || "").trim(), only = mcOnlyMedia(t);
 		if (MC_IMG.test(t)) return "Image";
 		if (mcPlaceholder(t)) return "A message this can't read";
-		if (mcMapperPing(t)) return "MeshMapper ping";
+		if (mcMapperPing(t)) return "📡 ping";
 		return only ? (only.gif ? "GIF" : "Image") : null;
 	}
 
@@ -2508,6 +2516,7 @@
 			return el("div", { class: "mc-item" + (isOpen(c.conv) ? " active" : "") + (c.unread ? " news" : "") },
 				el("button", { type: "button", class: "mc-itemmain", onclick: function () { openConv(c.conv); } },
 					mcFace(c.name, false, "sm"), el("span", { class: "mc-name", text: c.name }),
+					c.favorite ? el("span", { class: "mc-fav", title: "A favourite", "aria-label": "a favourite", text: "★" }) : null,
 					c.unread ? badgeEl(c.unread) : el("span", { class: "mc-itemsub", text: sub != null ? sub : mcAgo(c.last_message) })));
 		}
 		function byLast(a, b) { return (b.last_message || 0) - (a.last_message || 0); }
@@ -2678,21 +2687,27 @@
 		}
 
 		// Contacts: everyone heard, to find, sort, message or remove
-		var CKINDS = [["all", "All"], ["chat", "People"], ["repeater", "Repeaters"], ["room", "Rooms"], ["sensor", "Sensors"]];
+		// (Favourites: those the radio has marked so, by any app, whatever they are)
+		var CKINDS = [["all", "All"], ["fav", "★ Favourites"], ["chat", "People"], ["repeater", "Repeaters"], ["room", "Rooms"], ["sensor", "Sensors"]];
 		var KIND_NAME = { chat: "person", repeater: "repeater", room: "room", sensor: "sensor" };
+		function contactCounts() {
+			var n = { all: contacts.length, fav: 0 };
+			contacts.forEach(function (c) { n[c.type] = (n[c.type] || 0) + 1; if (c.favorite) n.fav++; });
+			return n;
+		}
 		function renderContacts() {
 			clear(vPage);
-			var n = { all: contacts.length };
-			contacts.forEach(function (c) { n[c.type] = (n[c.type] || 0) + 1; });
+			var n = contactCounts(), tabN = {};
 			vPage.appendChild(pageHead(mcIcon("people", "mc-hic"), "Contacts",
 				contacts.length + (st && st.max_contacts ? " of the " + st.max_contacts + " the radio keeps" : "")));
 			var tabs = el("div", { class: "mc-tabs", role: "tablist" });
 			CKINDS.forEach(function (k) {
-				if (k[0] !== "all" && !n[k[0]]) return;
+				if (k[0] !== "all" && k[0] !== "fav" && !n[k[0]]) return;
+				tabN[k[0]] = el("span", { class: "mc-tabn", text: String(n[k[0]] || 0) });
 				tabs.appendChild(el("button", { type: "button", role: "tab", class: "mc-tab" + (cv.kind === k[0] ? " on" : ""),
 					"aria-selected": cv.kind === k[0] ? "true" : "false",
 					onclick: function () { cv.kind = k[0]; cv.n = 100; renderContacts(); } },
-					k[1], el("span", { class: "mc-tabn", text: String(n[k[0]] || 0) })));
+					k[1], tabN[k[0]]));
 			});
 			var q = el("input", { class: "inp mc-cfind", type: "search", placeholder: "Search contacts", "aria-label": "Search contacts" });
 			q.value = cv.q;
@@ -2710,17 +2725,21 @@
 			var listEl = el("div", { class: "mc-clist" });
 			vPage.appendChild(listEl);
 			function fill() {
-				var keep = listEl.scrollTop, ql = cv.q.trim().toLowerCase();
+				var keep = listEl.scrollTop, ql = cv.q.trim().toLowerCase(), now = contactCounts();
+				// The tabs' counts as they are now (a favourite made, someone removed)
+				Object.keys(tabN).forEach(function (k) { tabN[k].textContent = String(now[k] || 0); });
 				clear(listEl);
 				var list = contacts.filter(function (c) {
-					return (cv.kind === "all" || c.type === cv.kind) && (!ql || c.name.toLowerCase().indexOf(ql) >= 0);
+					return (cv.kind === "all" || (cv.kind === "fav" ? c.favorite : c.type === cv.kind)) &&
+						(!ql || c.name.toLowerCase().indexOf(ql) >= 0);
 				});
 				list.sort(cv.sort === "name" ? function (a, b) { return a.name.localeCompare(b.name); }
 					: cv.sort === "stale" ? function (a, b) { return (a.last_advert || 0) - (b.last_advert || 0); }
 					: cv.sort === "near" ? function (a, b) { return (a.flood ? 99 : a.hops || 0) - (b.flood ? 99 : b.hops || 0) || (b.last_advert || 0) - (a.last_advert || 0); }
 					: function (a, b) { return (b.last_advert || 0) - (a.last_advert || 0); });
 				if (!list.length) listEl.appendChild(el("div", { class: "mc-none muted",
-					text: contacts.length ? "No one called that." : "No contacts yet: they come with adverts heard on the mesh." }));
+					text: cv.kind === "fav" && !ql ? "No favourites yet: star someone (☆) to keep them here. The radio keeps them too, when its list is full and it makes room." :
+						contacts.length ? "No one called that." : "No contacts yet: they come with adverts heard on the mesh." }));
 				list.slice(0, cv.n).forEach(function (c) { listEl.appendChild(contactRow(c)); });
 				if (list.length > cv.n) listEl.appendChild(el("div", { class: "mc-more" },
 					btn("Show more (" + (list.length - cv.n) + " left)", { onclick: function () { cv.n += 200; fill(); } })));
@@ -2737,7 +2756,7 @@
 					el("span", { class: "mc-cname" }, el("span", { class: "mc-cn", text: c.name }),
 						person ? null : el("span", { class: "mc-kind", text: KIND_NAME[c.type] || c.type })),
 					el("span", { class: "mc-csub", text: route(c) + " · " + (c.last_advert ? "heard " + mcAgo(c.last_advert) : "not heard yet") })));
-			return el("div", { class: "mc-crow" }, who,
+			return el("div", { class: "mc-crow" }, starBtn(c), who,
 				el("div", { class: "mc-cacts" },
 					person ? btn("Message", { cls: "small", onclick: function () { openConv(c.conv); } }) : null,
 					c.flood ? null : btn("Forget route", { cls: "small", onclick: function () { contactOp("contact_reset_path", c); } }),
@@ -2745,11 +2764,21 @@
 						if (window.confirm("Remove " + c.name + " from the radio's contacts? An advert from them adds them back.")) contactOp("contact_remove", c);
 					} })));
 		}
-		function contactOp(method, c) {
-			call("pirate.meshcore", method, { key: c.key }).then(function (r) {
+		function contactOp(method, c, more) {
+			var p = { key: c.key }, k;
+			for (k in more || {}) p[k] = more[k];
+			call("pirate.meshcore", method, p).then(function (r) {
 				if (r.error) window.alert(r.error);
 				refreshAll();
 			}).catch(function (e) { if (!failed(e)) window.alert(String(e.message || e)); });
+		}
+		// A favourite: the radio's mark (its other apps see it too), and kept
+		// by the radio when its list is full and it makes room for new ones
+		function starBtn(c) {
+			return el("button", { type: "button", class: "mc-star" + (c.favorite ? " on" : ""), "aria-pressed": c.favorite ? "true" : "false",
+				title: c.favorite ? "A favourite, on the radio: click to unmark" : "Make a favourite: marked on the radio, and kept when its contact list is full",
+				"aria-label": (c.favorite ? "Unfavourite " : "Favourite ") + c.name,
+				onclick: function (ev) { ev.stopPropagation(); contactOp("contact_favorite", c, { favorite: !c.favorite }); } }, c.favorite ? "★" : "☆");
 		}
 
 		// Your radio: what it is, its adverts and name, its GPS
@@ -3000,7 +3029,7 @@
 		function pingEl(p, sig) {
 			var box = el("span", { class: "mc-words mc-ping",
 				title: "A MeshMapper wardriving ping (MM:" + p.tag + "). Its tag is its session's and ping's, keyed: only MeshMapper's server reads it" },
-				el("span", { class: "mc-ping-k", text: "📡 MeshMapper ping" }),
+				el("span", { class: "mc-ping-k", text: "📡 ping" }),
 				sig ? el("span", { class: "mc-sig", text: sig }) : null);
 			if (p.pos) {
 				var mine = myPos(), d = mine ? distance(mine, p.pos) : null, la = p.pos.lat.toFixed(5), lo = p.pos.lon.toFixed(5);
@@ -3129,6 +3158,9 @@
 			if (!me && mode === "thread" && open && open.charAt(0) === "#")
 				foot.appendChild(btn("Mention", { onclick: function () { closeProfile(); mention(name); } }));
 			if (me) foot.appendChild(btn("Your radio's settings", { primary: true, onclick: function () { closeProfile(); openPage("radio"); } }));
+			if (c) foot.appendChild(btn(c.favorite ? "★ Unfavourite" : "☆ Favourite", { cls: "small",
+				title: c.favorite ? "A favourite, on the radio" : "Marked on the radio, and kept when its contact list is full",
+				onclick: function () { closeProfile(); contactOp("contact_favorite", c, { favorite: !c.favorite }); } }));
 			if (c) foot.appendChild(btn("Remove", { cls: "small reset", onclick: function () {
 				if (window.confirm("Remove " + c.name + " from the radio's contacts? An advert from them adds them back.")) { closeProfile(); contactOp("contact_remove", c); }
 			} }));

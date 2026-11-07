@@ -428,6 +428,12 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   remove one (when the radio's list is full, the page says so). *Advert*
   announces the radio to its neighbours or to the whole mesh; *Rename*
   changes the name it announces.
+- **Favourites**: the radio's own mark on a contact (the lowest bit of its
+  flags, so whichever app set it), starred in Contacts and the direct
+  messages, with a tab of their own. Star or unstar one in Contacts or its
+  profile: the radio keeps it, the contact's other flags (what it may ask
+  of you) as they were, and when its list is full and it makes room for
+  someone new, it keeps its favourites.
 - **Its GPS**, on or off. With it on and a fix, its position tags the
   **Wi-Fi survey**'s sightings when no USB GPS (gpsd) has one: no separate
   GPS needed for wardriving. The radio's adverts carry its position only if
@@ -521,12 +527,14 @@ Tested in this repository's tests and builds:
   channel data (MCO Advanced's fixtures: v3, v1/v2, v4, its other kinds,
   MeshCore Open's, and data that isn't a chat's), hashtag, private and
   keyed channels,
-  adverts, its name, its GPS and the survey taking its position, contacts'
-  routes, traces along them (to a person and to a repeater), a route found
-  and kept, telemetry and its absence, removal, the messages kept through a
+  adverts, its name, its GPS and the survey taking its position,
+  favourites (as the radio has them, made and unmade, the rest of their
+  flags kept, through a route found and a restart), contacts' routes,
+  traces along them (to a person and to a repeater), a route found and
+  kept, telemetry and its absence, removal, the messages kept through a
   restart, and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 668
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 678
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`

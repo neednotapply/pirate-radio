@@ -8,7 +8,7 @@
 		},
 		"write": {
 			"ubus": {
-				"pirate.meshcore": [ "send", "resend", "react", "read", "advert", "set_name", "gps", "channel_set", "contact_remove", "contact_reset_path", "trace", "discover", "telemetry", "refresh" ]
+				"pirate.meshcore": [ "send", "resend", "react", "read", "advert", "set_name", "gps", "channel_set", "contact_remove", "contact_reset_path", "contact_favorite", "trace", "discover", "telemetry", "refresh" ]
 			}
 		}
 	}
