@@ -1136,35 +1136,45 @@ static size_t path_bytes(uint8_t len)
 	return n;
 }
 
-/* Who a hop is: the one repeater whose key starts with its id (or, none
- * of those, the one contact) */
-static const struct contact *hop_contact(const uint8_t *id, size_t hs)
+/* Who a hop is: the repeater whose key starts with its id (or, no
+ * repeater has it, the contact). A 1-byte id is one of 256, so on a busy
+ * mesh several may have it: the one heard most recently, and how many */
+static const struct contact *hop_contact(const uint8_t *id, size_t hs, int *many)
 {
 	const struct contact *rep = NULL, *any = NULL;
 	int i, nrep = 0, nany = 0;
 
 	for (i = 0; i < ncontacts; i++) {
-		if (memcmp(contacts[i].key, id, hs))
+		const struct contact *c = &contacts[i];
+
+		if (memcmp(c->key, id, hs))
 			continue;
 		nany++;
-		any = &contacts[i];
-		if (contacts[i].type == 2) {
+		if (!any || c->last_advert > any->last_advert)
+			any = c;
+		if (c->type == 2) {
 			nrep++;
-			rep = &contacts[i];
+			if (!rep || c->last_advert > rep->last_advert)
+				rep = c;
 		}
 	}
-	return nrep == 1 ? rep : !nrep && nany == 1 ? any : NULL;
+	*many = nrep ? nrep : nany;
+	return nrep ? rep : any;
 }
 
 static void add_hop(struct blob_buf *b, const uint8_t *id, size_t hs)
 {
-	const struct contact *c = hop_contact(id, hs);
+	int many = 0;
+	const struct contact *c = hop_contact(id, hs, &many);
 	char h[2 * 8 + 1];
 
 	hex(h, id, hs);
 	blobmsg_add_string(b, "id", h);
-	if (c)
+	if (c) {
 		blobmsg_add_string(b, "name", c->name);
+		if (many > 1)
+			blobmsg_add_u32(b, "maybe", many);   /* one of so many with this id */
+	}
 }
 
 /* A route, as its hops: each one's id, and who it is where that's known */

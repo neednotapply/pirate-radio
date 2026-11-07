@@ -2758,10 +2758,15 @@
 		}
 		function distText(m) { return m < 1000 ? Math.round(m) + " m" : (m < 10000 ? (m / 1000).toFixed(1) : Math.round(m / 1000)) + " km"; }
 		function fmtMs(ms) { return ms < 1000 ? ms + " ms" : (ms / 1000).toFixed(1) + " s"; }
+		// A hop: its repeater's name ("?" when other repeaters have its id too), or its id
+		function hopLabel(h) { return h.name ? h.name + (h.maybe ? "?" : "") : h.id; }
+		function hopWhy(h) {
+			return h.maybe ? h.maybe + " repeaters you know have the id " + h.id + ": this is the one heard most recently" : "";
+		}
 		function routeText(c) {
 			if (c.flood) return "No route yet: messages to them go out to the whole mesh";
 			if (!c.hops) return "Direct: heard without a repeater between you";
-			var via = (c.path || []).map(function (h) { return h.name || h.id; });
+			var via = (c.path || []).map(hopLabel);
 			return c.hops + " hop" + (c.hops === 1 ? "" : "s") + (via.length ? ": " + via.join(" → ") : "");
 		}
 		function cardSec(title) { return el("div", { class: "mc-cardsec" }, el("h4", { text: title })); }
@@ -2799,7 +2804,8 @@
 			var list = el("ol", { class: "mc-trace" });
 			list.appendChild(el("li", {}, el("span", { class: "mc-hopname", text: "You" })));
 			(r.hops || []).forEach(function (h) {
-				list.appendChild(el("li", {}, el("span", { class: "mc-hopname" + (h.name ? "" : " muted"), text: h.name || "unknown repeater" }),
+				list.appendChild(el("li", { title: hopWhy(h) || null },
+					el("span", { class: "mc-hopname" + (h.name && !h.maybe ? "" : " muted"), text: h.name ? hopLabel(h) : "unknown repeater" }),
 					el("code", { class: "mc-hopid", text: h.id }), snrPill(h.snr)));
 			});
 			list.appendChild(el("li", {}, el("span", { class: "mc-hopname", text: "You" }), snrPill(r.snr_back)));
@@ -2807,7 +2813,7 @@
 				text: "There and back in " + fmtMs(r.ms || 0) + ". Each SNR is how well that one heard the one before it." }));
 		}
 		function discoveredEl(r) {
-			function way(p) { return p && p.length ? p.map(function (h) { return h.name || h.id; }).join(" → ") : "direct"; }
+			function way(p) { return p && p.length ? p.map(hopLabel).join(" → ") : "direct"; }
 			return el("div", {},
 				el("div", { class: "mc-cardline", text: "Found in " + fmtMs(r.ms || 0) + (r.kept ? ", and used from now on" : "") + "." }),
 				el("div", { class: "muted mc-cardmeta", text: "There: " + way(r.out) + " · back: " + way(r["in"]) }));
