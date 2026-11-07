@@ -394,6 +394,12 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   table of emoji) are read. The router finds each one's message, keeps
   one that comes before its message until that does (as MeshCore One
   does), and counts none as news.
+- **Links**, clickable; **images** shown under the words, as Discord
+  shows them: Giphy's GIFs (a `giphy.com/gifs/…` page, or meshcore-open's
+  `g:ID`) and links to an image file (`.gif`, `.png`, `.jpg`, `.webp`…). A
+  message that's only an image shows only the image. The images come
+  straight from the internet to the browser viewing the page (with no
+  referrer): with no connection, or the image gone, the link stays.
 - **Channels** (# for public and #hashtag ones, a lock for private ones):
   add a #hashtag one (its key comes from its name), a private one (a random
   key) or one whose key you were given; a channel's gear shows its key, to

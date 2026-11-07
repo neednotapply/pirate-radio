@@ -160,6 +160,9 @@
 		alice.reply = drive.id;
 		var read0 = alice.id;
 		said("#0", "Bob", "same, if the weather holds", 600, -6, 2);
+		said("#0", "🦜 Polly", "https://giphy.com/gifs/8kejjglzkEprO", 560, 6, 0);
+		said("#0", "Alice", "the route's on the map: https://www.openstreetmap.org/#map=13/37.4220/-122.0840 (via the ridge)", 520, 9.5, 1);
+		said("#0", "Kiwi 🇳🇿", "g:8kejjglzkEprO", 480, -2.5, 3);
 		said("ca1a1a1a1a1a1", "Alice", "the repeater on the hill is back up", 1800, 10, 1);
 		var readA = mine("ca1a1a1a1a1a1", "great, hearing it at -92", 1700, "delivered", { trip_ms: 850 }).id;
 		mine("cb0b0b0b0b0b0", "still on for saturday?", 3600, "unconfirmed", { flood: true });
@@ -2235,6 +2238,75 @@
 	var MC_PUBLIC_KEY = "8b3387e9c5cdea6ac9e5edbaa115cd72";
 	function mcChanKind(c) { return c.secret === MC_PUBLIC_KEY ? "public" : c.name.charAt(0) === "#" ? "hashtag" : "private"; }
 	function mcChanLabel(c) { return mcChanKind(c) === "hashtag" && c.name.length > 1 ? c.name.slice(1) : c.name; }
+	/* Links in a message, clickable; the ones known to be images (Giphy's
+	   GIFs, as a page or as meshcore-open's "g:ID"; a link to an image
+	   file) shown under it, as Discord does, loaded by the viewer's
+	   browser: offline, or gone, the link stays */
+	var MC_URL = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
+	var MC_GIPHY_PAGE = /^https?:\/\/(?:www\.)?giphy\.com\/(?:gifs|stickers)\/(?:[^\/?#]*-)?([A-Za-z0-9_]+)\/?(?:[?#].*)?$/i;
+	var MC_GIPHY_EMBED = /^https?:\/\/(?:www\.)?giphy\.com\/embed\/([A-Za-z0-9_]+)\/?(?:[?#].*)?$/i;
+	var MC_IMAGE_FILE = /^https?:\/\/[^\/?#]+\/[^?#]*\.(?:gif|png|jpe?g|webp|avif|bmp)(?:[?#].*)?$/i;
+	function mcGiphy(id) {
+		return { src: "https://media.giphy.com/media/" + id + "/200.gif", fallback: "https://media.giphy.com/media/" + id + "/giphy.gif",
+			page: "https://giphy.com/gifs/" + id, gif: true };
+	}
+	// What a link shows, if it's an image: its picture, a fallback, where it goes
+	function mcMediaOf(url) {
+		var g = MC_GIPHY_PAGE.exec(url) || MC_GIPHY_EMBED.exec(url);
+		if (g) return mcGiphy(g[1]);
+		if (MC_IMAGE_FILE.test(url)) return { src: url, page: url, gif: /\.gif(?:[?#]|$)/i.test(url) };
+		return null;
+	}
+	// A message that's one image and nothing else: the image alone, as Discord shows it
+	function mcOnlyMedia(text) {
+		var t = String(text || "").trim(), g = /^g:([A-Za-z0-9_-]+)$/.exec(t);
+		if (g) return mcGiphy(g[1]);
+		if (/\s/.test(t) || !/^https?:\/\//i.test(t)) return null;
+		return mcMediaOf(t);
+	}
+	function mcMediaLabel(text) {
+		var only = mcOnlyMedia(text);
+		return only ? (only.gif ? "GIF" : "Image") : null;
+	}
+	function mcCount(s, c) { return s.split(c).length - 1; }
+	function mcLinkify(text, media) {
+		var frag = document.createDocumentFragment(), last = 0, m;
+		MC_URL.lastIndex = 0;
+		while ((m = MC_URL.exec(text))) {
+			var u = m[0], c;
+			// Not the punctuation after it, nor a bracket it didn't open
+			for (;;) {
+				c = u.charAt(u.length - 1);
+				if (".,;:!?'\"".indexOf(c) >= 0) u = u.slice(0, -1);
+				else if (c === ")" && mcCount(u, "(") < mcCount(u, ")")) u = u.slice(0, -1);
+				else if (c === "]" && mcCount(u, "[") < mcCount(u, "]")) u = u.slice(0, -1);
+				else break;
+			}
+			if (!u || /^www\.$/i.test(u)) continue;
+			if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+			var href = /^www\./i.test(u) ? "https://" + u : u, img = mcMediaOf(href);
+			frag.appendChild(el("a", { class: "mc-link", href: href, target: "_blank", rel: "noopener noreferrer nofollow", text: u }));
+			if (img && media && media.length < 3) media.push(img);
+			last = m.index + u.length;
+			MC_URL.lastIndex = last;
+		}
+		if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+		return frag;
+	}
+	// An image, linked to where it's from; gone (offline, say), the link alone
+	function mcEmbed(img, gone, loaded) {
+		var a = el("a", { class: "mc-embed" + (img.gif ? " gif" : ""), href: img.page, target: "_blank", rel: "noopener noreferrer nofollow", title: img.page });
+		var im = el("img", { class: "mc-img", src: img.src, alt: img.gif ? "a GIF" : "an image", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" });
+		im.addEventListener("error", function () {
+			if (img.fallback && im.getAttribute("src") !== img.fallback) { im.setAttribute("src", img.fallback); return; }
+			if (a.parentNode) a.parentNode.removeChild(a);
+			if (gone) gone();
+		});
+		if (loaded) im.addEventListener("load", loaded);
+		a.appendChild(im);
+		return a;
+	}
+
 	function mcAgo(t) {
 		if (!t) return "";
 		var s = Math.max(0, Date.now() / 1000 - t);
@@ -3049,7 +3121,7 @@
 			var nm = el("span", { class: "mc-rname", text: sender(m) });
 			if (m.out) nm.classList.add("mine"); else mcColour(nm, sender(m));
 			clear(replyBar).appendChild(el("span", { class: "mc-rb-text" }, "Replying to ", nm,
-				el("span", { class: "mc-rb-snip", text: plain(m.text) })));
+				el("span", { class: "mc-rb-snip", text: mcMediaLabel(plain(m.text)) || plain(m.text) })));
 			replyBar.appendChild(el("button", { type: "button", class: "mc-rb-x", title: "Don't reply (Esc)", "aria-label": "Don't reply", text: "✕", onclick: cancelReply }));
 			replyBar.hidden = false;
 			updateCount();
@@ -3105,7 +3177,7 @@
 				row.appendChild(el("button", { type: "button", class: "mc-rline", title: to ? "Show the message it answers" : "",
 					onclick: function () { if (to) jumpTo(to); } },
 					mcFace(rep.name, rep.out, "xxs"), rn,
-					el("span", { class: "mc-rtext" + (rep.text == null ? " gone" : ""), text: rep.text == null ? "a message not kept here" : rep.text || " " })));
+					el("span", { class: "mc-rtext" + (rep.text == null ? " gone" : ""), text: rep.text == null ? "a message not kept here" : mcMediaLabel(rep.text) || rep.text || " " })));
 			}
 			// React, Reply: on hover (a tap, on a phone)
 			if (m.out || m.from || m.conv.charAt(0) !== "#")
@@ -3122,11 +3194,26 @@
 				el("span", { class: "mc-author mc-pick", "data-pick": "1", role: "button", tabindex: "0", title: "Profile", text: who }),
 				el("span", { class: "mc-when", title: when, text: mcHM(m.ts) }),
 				sig ? el("span", { class: "mc-sig", text: sig }) : null));
+			// Its words, links clickable; images under them (a message that's
+			// only an image: the image, its link back if it won't load)
+			var words = men ? " " + men.rest : rep ? plain(m.text) : m.text, media = [], only = mcOnlyMedia(words);
+			var wordsEl = el("span", { class: "mc-words" + (only ? " mc-hide" : "") }, mcLinkify(words, media));
+			if (only && !media.length) {
+				// meshcore-open's "g:ID": its page's link, should the GIF not load
+				media.push(only);
+				clear(wordsEl).appendChild(document.createTextNode("GIF: "));
+				wordsEl.appendChild(el("a", { class: "mc-link", href: only.page, target: "_blank", rel: "noopener noreferrer nofollow", text: only.page.replace(/^https:\/\//, "") }));
+			}
 			body.appendChild(el("div", { class: "mc-text" },
 				men ? el("span", { class: "mc-mention" + (men.me ? " me" : ""), "data-mention": men.name, role: "button", tabindex: "0", text: "@" + men.name }) : null,
-				men ? " " + men.rest : rep ? plain(m.text) : m.text,
+				wordsEl,
 				m.out ? statusEl(m) : null,
 				!head && sig ? el("span", { class: "mc-sig mc-hover", text: sig }) : null));
+			if (media.length) {
+				var embeds = el("div", { class: "mc-embeds" });
+				media.forEach(function (x) { embeds.appendChild(mcEmbed(x, function () { wordsEl.classList.remove("mc-hide"); })); });
+				body.appendChild(embeds);
+			}
 			var chips = reactsEl(m);
 			if (chips) body.appendChild(chips);
 			row.appendChild(body);

@@ -725,6 +725,16 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .mc-cstatus { padding-top: 4px; }
 .mc-cstatus:empty { display: none; }
 
+/* Links, and images under the words: each 200px high (its room kept as it
+   loads, so the thread doesn't jump), as wide as it is */
+.mc-link { color: var(--link); text-decoration: none; overflow-wrap: anywhere; }
+.mc-link:hover { text-decoration: underline; }
+.mc-words.mc-hide { display: none; }
+.mc-embeds { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+.mc-embed { display: block; max-width: 100%; border-radius: 6px; overflow: hidden; background: var(--inset); line-height: 0; }
+.mc-img { display: block; height: 200px; width: auto; max-width: min(100%, 420px); object-fit: contain; }
+.mc-embed:hover .mc-img { filter: brightness(1.06); }
+
 /* Reactions: a chip each emoji under its message, how many, yours lit;
    + (on hover) or the toolbar's face for a picker */
 .mc-reacts { display: flex; flex-wrap: wrap; gap: 4px; margin: 4px 0 2px; }
@@ -912,6 +922,7 @@ a { color: var(--link); }
 	.mc-cfilters { margin-left: 0; width: 100%; }
 	.mc-cfind { flex: 1; width: auto; min-width: 0; }
 	.mc-itembtn { opacity: 1; }
+	.mc-img { height: 160px; }
 	.mc-row { grid-template-columns: 52px minmax(0, 1fr); padding-right: 10px; }
 	.mc-day { margin-left: 10px; margin-right: 10px; }
 	.mc-av { width: 34px; height: 34px; font-size: 15px; }
