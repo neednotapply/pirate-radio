@@ -179,17 +179,8 @@ body {
 .badge-demo { color: var(--accent-ink); background: var(--accent); }
 
 /* ---- main view ---- */
-.view { padding: 6px 28px 56px; max-width: 1180px; }
-/* A page's group and what it's for, on a line (its title is the strip's) */
-.view-head { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; margin: 4px 0 16px; }
-.eyebrow {
-	font-size: 11px;
-	font-weight: 600;
-	text-transform: uppercase;
-	letter-spacing: .09em;
-	color: var(--accent);
-}
-.view-head .sub { color: var(--muted); font-size: 13px; }
+/* (A page's title is the strip's: the page starts with what it shows) */
+.view { padding: 20px 28px 56px; max-width: 1180px; }
 
 /* ---- grid of tiles ---- */
 .grid {

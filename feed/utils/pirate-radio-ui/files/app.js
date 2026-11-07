@@ -1154,14 +1154,13 @@
 
 	var VIEW = $("view");
 	function loading() { clear(VIEW).appendChild(el("div", { class: "loading", text: "Loading…" })); }
-	// A page's head: its title in the strip at the top (the one place it's
-	// said, on every page), and under it its group and what it's for
+	// A page's title: in the strip at the top, the one place it's said, on
+	// every page; what the page is for, on hovering it. Nothing in the page
 	function viewHead(title, sub) {
-		var g = groupOf(current);
-		$("top-title").textContent = title;
-		return el("div", { class: "view-head" },
-			g ? el("span", { class: "eyebrow", text: g }) : null,
-			sub ? el("span", { class: "sub", text: sub }) : null);
+		var t = $("top-title");
+		t.textContent = title;
+		t.title = sub || "";
+		return document.createDocumentFragment();
 	}
 	function panel(title) {
 		var p = el("div", { class: "panel" });
@@ -5043,12 +5042,6 @@
 	GROUPS.forEach(function (g) { TABS = TABS.concat(g[1]); });
 	var current = "dashboard";
 
-	function groupOf(id) {
-		for (var i = 0; i < GROUPS.length; i++)
-			if (GROUPS[i][1].some(function (t) { return t[0] === id; })) return GROUPS[i][0];
-		return "";
-	}
-
 	function renderTabs() {
 		var nav = clear($("tabs")), here = "";
 		GROUPS.forEach(function (g) {
@@ -5068,6 +5061,7 @@
 			});
 		});
 		$("top-title").textContent = here;
+		$("top-title").title = "";
 	}
 
 	// The sections: a drawer at any width, opened from the strip at the top,
