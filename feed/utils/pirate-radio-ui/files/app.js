@@ -1155,11 +1155,24 @@
 	var VIEW = $("view");
 	function loading() { clear(VIEW).appendChild(el("div", { class: "loading", text: "Loading…" })); }
 	function viewHead(title, sub) {
-		var g = groupOf(current);
+		var g = groupOf(current), h = el("h2", { text: title });
+		watchTitle(h);
 		return el("div", { class: "view-head" },
 			g ? el("div", { class: "eyebrow", text: g }) : null,
-			el("div", { class: "view-title" },
-				el("h2", { text: title }), sub ? el("span", { class: "sub", text: sub }) : null));
+			el("div", { class: "view-title" }, h, sub ? el("span", { class: "sub", text: sub }) : null));
+	}
+	// A page's own title, big at its top: the strip's says it again only once
+	// that one's scrolled away under the strip (or for a page that has none)
+	var titleSeen = null;
+	function titleShown(on) { document.body.classList.toggle("title-off", !on); }
+	function watchTitle(h) {
+		if (titleSeen) titleSeen.disconnect();
+		titleSeen = null;
+		if (!window.IntersectionObserver) return titleShown(true);
+		titleSeen = new IntersectionObserver(function (es) {
+			titleShown(!es[es.length - 1].isIntersecting);
+		}, { rootMargin: "-49px 0px 0px 0px" });
+		titleSeen.observe(h);
 	}
 	function panel(title) {
 		var p = el("div", { class: "panel" });
@@ -5090,6 +5103,11 @@
 		id = ALIASES[id] || id;
 		current = id;
 		VIEW.classList.remove("view-app");   // the Messenger's: the whole window
+		// The strip's title: off while a page with its own comes (no flash of
+		// it), on for the Messenger, which has none
+		if (titleSeen) titleSeen.disconnect();
+		titleSeen = null;
+		titleShown(id === "messenger");
 		renderTabs();
 		try { location.hash = id; } catch (e) {}
 		if (id === "dashboard") return loadDashboard();
@@ -5126,6 +5144,10 @@
 
 	function onError(e) {
 		if (String(e.message || e) === "unauthorized" && !DEMO) { firstRun(); return; }
+		// (No page title of its own now: the strip's says which page)
+		if (titleSeen) titleSeen.disconnect();
+		titleSeen = null;
+		titleShown(true);
 		clear(VIEW).appendChild(el("div", { class: "placeholder" },
 			el("b", { text: "Couldn't reach the Slate" }),
 			el("div", { class: "muted", text: String(e.message || e) })));

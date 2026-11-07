@@ -142,7 +142,10 @@ body {
 	cursor: pointer;
 }
 .menu-btn:hover { border-color: var(--line-3); color: var(--hi); }
-.top-title { font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.top-title { font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+	transition: opacity .15s ease-out; }
+/* Only once the page's own title is out of sight (it says it first) */
+.title-off .top-title { opacity: 0; visibility: hidden; transition: opacity .15s ease-out, visibility 0s linear .15s; }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 /* ---- pills & badges ---- */
