@@ -349,15 +349,22 @@ nRF52 board on Adafruit's bootloader) running MeshCore's companion firmware
 *for USB* (for the T-Echo, "Companion (USB)" on
 [MeshCore's flasher](https://flasher.meshcore.co.uk); the Bluetooth build
 says nothing over USB, and the page says so) and the **Messenger** tab is its
-app, as MeshCore's is on a phone:
+app, as MeshCore's is on a phone, laid out as Discord is:
 
-- **Channels and contacts**, each with its unread messages; a thread laid
-  out as a chat app's: each sender with a colour of their own (from their
-  name, the same everywhere) and a face (the first emoji in their name, or
-  its first letter), one sender's run of messages under one header, a line
-  between days; each message's SNR and hops, and for yours whether it was
-  sent, delivered (with the round trip) or not confirmed (*retry* sends it
-  again, as the same message).
+- **The list down the left**, filling the window beside the open
+  conversation (on a phone, one or the other): a search (Ctrl+K) that finds
+  channels, conversations and anyone to start one with; *Channels* and
+  *Direct messages*, each collapsible, with unread counts and those with
+  news in bold; *Contacts*; and your radio at the foot (its battery and
+  GPS; the gear opens its settings).
+- **A thread laid out as a chat app's**: each sender with a colour of their
+  own (from their name, the same everywhere) and a face (the first emoji in
+  their name, or its first letter), one sender's run of messages under one
+  header, a line between days and one where the news starts; older messages
+  come a page at a time as you scroll up, and a pill jumps back to the
+  newest. Each message's SNR and hops, and for yours whether it was sent,
+  delivered (with the round trip) or not confirmed (*retry* sends it again,
+  as the same message).
 - **Replies**, as in a chat app: *Reply* on a message (hover, or tap on a
   phone) and the composer says whom you're answering; a reply carries the
   start of what it answers above it (click it to go there), and one to you
@@ -367,10 +374,14 @@ app, as MeshCore's is on a phone:
   it's the newest of that person's before it (as MeshCore's app means it),
   or, from MeshCore Open (which adds the time, `@[Name#…]`), the one of
   theirs at that time. `@[Name]` answering nothing here is a mention.
-- **Channels**: add a #hashtag one (its key comes from its name), a private
-  one (a random key) or one whose key you were given; see a key to share it;
-  remove one.
-- **Contacts**, from adverts heard: forget a route, remove one. *Advert*
+- **Channels** (# for public and #hashtag ones, a lock for private ones):
+  add a #hashtag one (its key comes from its name), a private one (a random
+  key) or one whose key you were given; a channel's gear shows its key, to
+  share it, or removes it.
+- **Contacts**, from adverts heard, on a page of their own: by kind
+  (people, repeaters, rooms), searched, sorted (heard recently or longest
+  ago, by name, by hops), a page at a time; message one, forget a route,
+  remove one (when the radio's list is full, the page says so). *Advert*
   announces the radio to its neighbours or to the whole mesh; *Rename*
   changes the name it announces.
 - **Its GPS**, on or off. With it on and a fix, its position tags the

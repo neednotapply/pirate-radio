@@ -150,6 +150,7 @@
 		mc.read["#0"] = read0;
 		mc.read["ca1a1a1a1a1a1"] = readA;
 		mc.add = add;
+		if (/[?&]mcbig\b/.test(location.search)) demoMcBig(mc, now);
 		return mc;
 	})();
 	function demoMcConv(c) {
@@ -163,6 +164,80 @@
 		o.unread = unread;
 		if (last) o.last_message = last;
 		return o;
+	}
+	// ?demo=1&mcbig=1: a radio as busy as a real one, to try the Messenger at
+	// scale: 40 channels (all its slots), 350 contacts (full), 500-odd messages
+	// on Public over three days, others' news in a dozen channels
+	function demoMcBig(mc, now) {
+		var r = 7, i, k, used = {};
+		function rnd(n) { r = (Math.imul(r, 1103515245) + 12345) >>> 0; return (r >>> 12) % n; }
+		var A = ["Ridge", "Harbor", "Coyote", "Nomad", "Basalt", "Kestrel", "Juniper", "Static", "Quartz", "Tumble",
+			"Mesa", "Cinder", "Granite", "Willow", "Falcon", "Drift", "Ember", "Hollow", "Pike", "Sable", "Otter", "Larkspur"];
+		var B = ["Rover", "Base", "Mobile", "Shack", "Peak", "Node", "Van", "Camp", "Hill", "Truck", "Lookout", "Deck"];
+		var E = ["🦊", "🐢", "🌵", "⚡", "🛰️", "🏔️", "🐙", "🌊", "🔭", "🚐", "🍄", "🐝", "🦉", "🔥"];
+		var T = ["anyone hearing the ridge repeater?", "copy, loud and clear from the valley", "SNR is way up since the new antenna",
+			"heading out to the trailhead, will check in at the top", "morning mesh", "who's running the bot on #bots?",
+			"rain moving in from the west", "repeater on Mesa Peak is back after the storm", "nice, 4 hops to the coast now",
+			"testing from the truck", "that path went the long way round", "flood advert sent", "solar's keeping up, barely",
+			"anyone near the harbor? need a relay", "back online", "the old mast is down for maintenance till friday",
+			"got it", "thanks!", "same here", "👍", "on my way", "can someone confirm they got this?", "battery at 40%, signing off",
+			"new node up on the hill, say hi", "lots of traffic tonight", "is there a net on sunday?", "73"];
+		function name() {
+			var s;
+			do s = (rnd(4) === 0 ? E[rnd(E.length)] + " " : "") + A[rnd(A.length)] + " " + B[rnd(B.length)] + (rnd(3) ? "" : " " + (10 + rnd(90)));
+			while (used[s]);
+			used[s] = 1;
+			return s;
+		}
+		function key(n) { var s = ("00000000000" + n.toString(16)).slice(-12); while (s.length < 64) s += "ab"; return s; }
+		for (i = 0; i < 345; i++) {
+			var type = i < 38 ? "chat" : i < 316 ? "repeater" : "room", kk = key(0x5000 + i);
+			mc.contacts.push({ key: kk, conv: "c" + kk.slice(0, 12), name: type === "repeater" ? "RPT " + name() : name(), type: type,
+				hops: rnd(5), flood: rnd(7) === 0 || undefined, last_advert: now - rnd(86400 * 25) });
+		}
+		var CH = ["#sf", "#bayarea", "#emergency", "#weather", "#hiking", "#ham", "#repeaters", "#testing", "#bots", "#alerts",
+			"#earthquake", "#events", "#marine", "#aviation", "#roads", "#fire", "#coffee", "#offgrid", "#solar", "#antennas",
+			"#firmware", "#trading", "#music", "#photos", "#lost-and-found", "#local", "#north", "#south", "#east", "#west",
+			"Crew", "Family", "Base Camp", "Ops", "Night Shift", "Search and Rescue", "Garage", "Book Club"];
+		for (i = 0; i < CH.length; i++) mc.channels.push({ index: i + 2, conv: "#" + (i + 2), name: CH[i], secret: key(0x900 + i).slice(32) });
+		var people = mc.contacts.filter(function (c) { return c.type === "chat"; }), gen = [];
+		function talk(conv, n, from, span) {
+			var t = now - span, list = [];
+			while (list.length < n && t < now - 120) {
+				var mine = rnd(11) === 0, p = people[rnd(people.length)], run = rnd(4) === 0 ? 2 + rnd(3) : 1;
+				t += 40 + rnd(Math.floor(span / n * 1.6));
+				for (k = 0; k < run && list.length < n; k++) {
+					var m = mine ? { conv: conv, out: true, from: mc.name, text: T[rnd(T.length)], ts: t + k * 25, status: "sent" }
+						: { conv: conv, out: false, from: p.name, text: T[rnd(T.length)], ts: t + k * 25, snr: (rnd(64) - 32) / 4, hops: rnd(5) };
+					if (k === 0 && list.length > 6 && rnd(7) === 0) {
+						m.re = list[list.length - 1 - rnd(6)];
+						m.text = "@[" + m.re.from + "] " + m.text;
+					}
+					m.rx = m.ts;
+					list.push(m);
+				}
+			}
+			gen = gen.concat(list);
+		}
+		talk("#0", 520, null, 86400 * 3);
+		for (i = 0; i < 12; i++) talk("#" + (2 + rnd(38)), 5 + rnd(40), null, 86400 * 2);
+		for (i = 0; i < 9; i++) talk(people[i].conv, 3 + rnd(12), null, 86400 * 4);
+		gen.forEach(function (m) { if (!m.out && m.conv.charAt(0) === "c") m.from = mc.contacts.filter(function (c) { return c.conv === m.conv; })[0].name; });
+		// All in time order, numbered afresh, replies pointing at theirs
+		var all = mc.msgs.concat(gen).sort(function (a, b) { return a.ts - b.ts; }), oldIds = {};
+		mc.msgs = [];
+		all.forEach(function (m) { var was = m.id; mc.add(m); if (was) oldIds[was] = m; });
+		all.forEach(function (m) {
+			if (m.re) { m.reply = m.re.id; delete m.re; }
+			else if (m.reply && oldIds[m.reply] && oldIds[m.reply] !== m) m.reply = oldIds[m.reply].id;
+		});
+		// Read up to a few from the end, here and there: news to show
+		mc.read = {};
+		mc.channels.concat(mc.contacts).forEach(function (c) {
+			var mine = all.filter(function (m) { return m.conv === c.conv; }), back = rnd(3) ? 0 : 1 + rnd(14);
+			if (c.conv === "#0") back = 23;
+			if (mine.length) mc.read[c.conv] = mine[Math.max(0, mine.length - 1 - back)].id;
+		});
 	}
 	// A message as the daemon gives it: a reply with what it answers
 	function demoMcMsg(m) {
@@ -589,10 +664,13 @@
 		"pirate.meshcore:channels": function () {
 			var used = DEMO_MC.channels.map(function (c) { return c.index; }), free = 0;
 			while (used.indexOf(free) >= 0) free++;
-			return { channels: DEMO_MC.channels.map(demoMcConv), free: free };
+			return { channels: DEMO_MC.channels.map(demoMcConv), free: free < 40 ? free : undefined };
 		},
+		// The newest (limit, 100 if none), or those before one: a page, as the daemon gives them
 		"pirate.meshcore:messages": function (p) {
-			return { seq: DEMO_MC.seq, more: false, messages: DEMO_MC.msgs.filter(function (m) { return m.conv === p.conv; }).map(demoMcMsg) };
+			var all = DEMO_MC.msgs.filter(function (m) { return m.conv === p.conv && (!p.before || m.id < p.before); });
+			var start = Math.max(0, all.length - Math.min(p.limit || 100, 200));
+			return { seq: DEMO_MC.seq, more: start > 0, messages: all.slice(start).map(demoMcMsg) };
 		},
 		"pirate.meshcore:poll": function (p) {
 			return { state: "ready", seq: DEMO_MC.seq, meta: false,
@@ -2049,119 +2127,398 @@
 			year: d.getFullYear() === now.getFullYear() ? undefined : "numeric" });
 	}
 
+	/* Small icons, drawn here (no icon font) */
+	var MC_ICON = {
+		hash: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M6.4 2 5.2 14M10.8 2 9.6 14M2.6 5.6h11.2M2.2 10.4h11.2" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>',
+		lock: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M5.2 7V5.3a2.8 2.8 0 0 1 5.6 0V7" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="3.4" y="7" width="9.2" height="6.8" rx="1.4" fill="currentColor"/></svg>',
+		gear: '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="8" cy="8" r="2.4" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.6v2.1M8 12.3v2.1M1.6 8h2.1M12.3 8h2.1M3.5 3.5l1.5 1.5M11 11l1.5 1.5M3.5 12.5 5 11M11 5l1.5-1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+		plus: '<svg viewBox="0 0 16 16" width="14" height="14"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+		people: '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="6" cy="5.4" r="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.6 13.6c.4-2.4 2.2-3.9 4.4-3.9s4 1.5 4.4 3.9M10.6 3.2a2.4 2.4 0 0 1 0 4.5M12.2 9.9c1.3.5 2.1 1.7 2.3 3.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+		chev: '<svg viewBox="0 0 12 12" width="10" height="10"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+		send: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.2 7.6 13.8 2.4 10.6 13.8 8.1 9.1Z" fill="currentColor"/></svg>',
+		down: '<svg viewBox="0 0 12 12" width="11" height="11"><path d="M6 2v8M2.6 6.6 6 10l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+	};
+	function mcIcon(name, cls) { return el("span", { class: "mc-ic" + (cls ? " " + cls : ""), "aria-hidden": "true", html: MC_ICON[name] }); }
+	// A channel: MeshCore's public one, a #hashtag one (its key from its
+	// name: anyone can join), or private (a key given to those in it)
+	var MC_PUBLIC_KEY = "8b3387e9c5cdea6ac9e5edbaa115cd72";
+	function mcChanKind(c) { return c.secret === MC_PUBLIC_KEY ? "public" : c.name.charAt(0) === "#" ? "hashtag" : "private"; }
+	function mcChanLabel(c) { return mcChanKind(c) === "hashtag" && c.name.length > 1 ? c.name.slice(1) : c.name; }
+	function mcAgo(t) {
+		if (!t) return "";
+		var s = Math.max(0, Date.now() / 1000 - t);
+		if (s < 60) return "just now";
+		if (s < 3600) return Math.floor(s / 60) + " min ago";
+		if (s < 86400) return Math.floor(s / 3600) + " h ago";
+		if (s < 86400 * 30) return Math.floor(s / 86400) + " d ago";
+		return new Date(t * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+	}
+
 	function renderMessenger() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Messenger", "a MeshCore radio on the USB port: its contacts and channels, as MeshCore's app has them"));
+		VIEW.classList.add("view-app");
 
-		var devPanel = panel("MeshCore radio");
-		var devWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
-		devPanel.appendChild(devWrap);
+		/* As Discord has it: the conversations down the left (a search, the
+		   channels, direct messages; your radio at the foot), the open one
+		   beside them, filling the window, each scrolling on its own; on a
+		   phone, one or the other */
+		var search = el("input", { class: "inp mc-find", type: "search", placeholder: "Find or start a conversation",
+			"aria-label": "Find or start a conversation (Ctrl+K)", autocomplete: "off", spellcheck: "false" });
+		var nav = el("nav", { class: "mc-nav", "aria-label": "Conversations" });
+		var mePanel = el("div", { class: "mc-mepanel" });
+		var side = el("aside", { class: "mc-side" }, el("div", { class: "mc-findwrap" }, search), nav, mePanel);
+		var main = el("section", { class: "mc-main" });
+		var app = el("div", { class: "mc-app" }, side, main);
+		VIEW.appendChild(app);
 
-		var chatPanel = panel();
-		chatPanel.style.marginTop = "14px";
-		var listCol = el("div", { class: "mc-list" });
+		// The open conversation: its head, its messages, the composer
 		var threadHead = el("div", { class: "mc-thead" });
 		var threadBody = el("div", { class: "mc-msgs", "aria-live": "polite" });
-		var input = el("textarea", { class: "inp mc-input", rows: "2", placeholder: "a message", maxlength: "150" });
-		var count = el("span", { class: "status mc-count" });
-		var sendBtn = btn("Send", { primary: true, onclick: send });
-		var sendStatus = el("span", { class: "status" });
+		var jumpBtn = el("button", { type: "button", class: "mc-jump", onclick: function () { toBottom(); } });
+		jumpBtn.hidden = true;
+		var input = el("textarea", { class: "mc-input", rows: "1", placeholder: "Message", "aria-label": "Message" });
+		var count = el("span", { class: "mc-count" });
+		var sendBtn = el("button", { type: "button", class: "mc-send", title: "Send (Enter)", "aria-label": "Send", onclick: send }, mcIcon("send"));
+		var sendStatus = el("div", { class: "status mc-cstatus" });
 		var replyBar = el("div", { class: "mc-replybar" });
 		replyBar.hidden = true;
-		var composer = el("div", { class: "mc-compose" }, replyBar, input, el("div", { class: "toolbar" }, sendBtn, count, sendStatus));
-		var threadCol = el("div", { class: "mc-thread" }, threadHead, threadBody, composer);
-		var chat = el("div", { class: "mc-chat" }, listCol, threadCol);
-		chatPanel.appendChild(chat);
+		var vThread = el("div", { class: "mc-view" }, threadHead,
+			el("div", { class: "mc-msgwrap" }, threadBody, jumpBtn),
+			el("div", { class: "mc-compose" }, replyBar, el("div", { class: "mc-box" }, input, count, sendBtn), sendStatus));
+		var vPage = el("div", { class: "mc-view mc-page" });   // contacts, your radio, a channel's settings, a new channel
+		var vNote = el("div", { class: "mc-view mc-note" });   // no radio, connecting, no service
+		main.appendChild(vThread); main.appendChild(vPage); main.appendChild(vNote);
+		vThread.hidden = vPage.hidden = true;
+		vNote.appendChild(el("div", { class: "muted", text: "Loading…" }));
 
-		var chanPanel = panel("Channels");
-		chanPanel.style.marginTop = "14px";
-		var chanWrap = el("div");
-		var chName = el("input", { class: "inp", type: "text", placeholder: "#hashtag, or a name" });
-		var chKey = el("input", { class: "inp", type: "text", spellcheck: "false", placeholder: "its key, if you have one (32 hex digits)" });
-		var chStatus = el("span", { class: "status" });
-		chanPanel.appendChild(chanWrap);
-		chanPanel.appendChild(el("h4", { class: "sub-h2", text: "Add a channel" }));
-		chanPanel.appendChild(el("div", { class: "form" },
-			el("label", {}, el("span", { class: "lbl", text: "Name" }), chName),
-			el("label", {}, el("span", { class: "lbl", text: "Key" }), chKey)));
-		chanPanel.appendChild(el("div", { class: "toolbar" }, btn("Add channel", { primary: true, onclick: addChannel }), chStatus));
-		chanPanel.appendChild(el("p", { class: "descr", text:
-			"A #hashtag channel's key comes from its name: anyone who knows the name can join, so it isn't private. Another name gets a random key, private to those you give it to; or give the key someone shared." }));
+		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, timer = null;
+		var mode = null, open = null, page = null;      // a thread (its conv), a page, or a note
+		var thread = [], byId = {}, shown = {}, more = false, loadingOlder = false, unreadFrom = 0, newBelow = 0, jumpWas = "";
+		var replyTo = null, radioLine = null, radioStatus = null, contactsFill = null;
+		var cv = { kind: "all", q: "", sort: "recent", n: 100 };   // the contacts page: which, found how, in what order, how many
+		var collapsed = {};
+		try { collapsed = JSON.parse(localStorage.getItem("pirate_mc_collapsed") || "{}") || {}; } catch (e) {}
+		var TOUCH = !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
 
-		var conPanel = panel("Contacts");
-		conPanel.style.marginTop = "14px";
-		var conWrap = el("div");
-		conPanel.appendChild(conWrap);
-		conPanel.appendChild(el("p", { class: "descr", text:
-			"Contacts come from adverts heard on the mesh: send one from here and others add you. A route is the path messages last took; forget it and the next goes out to the whole mesh to find a new one." }));
-
-		VIEW.appendChild(devPanel); VIEW.appendChild(chatPanel); VIEW.appendChild(chanPanel); VIEW.appendChild(conPanel);
-
-		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, open = null, shown = {}, thread = [], timer = null;
-		var replyTo = null;   // the message the composer answers
-		function alive() { return VIEW.contains(chat); }
+		function alive() { return VIEW.contains(app); }
 		function failed(e) {
 			if (String(e.message || e) === "unauthorized") { onError(e); return true; }
 			return false;
 		}
 		function line(node, text, kind) { node.textContent = text; node.className = "status" + (kind ? " " + kind : ""); }
+		function showMain(which) {
+			vThread.hidden = which !== "thread";
+			vPage.hidden = which !== "page";
+			vNote.hidden = which !== "note";
+		}
+		function backBtn() {
+			return el("button", { type: "button", class: "linkbtn mc-back", "aria-label": "All conversations", text: "←",
+				onclick: function () { app.classList.remove("mc-open"); } });
+		}
+		function chanOf(conv) { for (var i = 0; i < channels.length; i++) if (channels[i].conv === conv) return channels[i]; return null; }
+		function contactOf(conv) { for (var i = 0; i < contacts.length; i++) if (contacts[i].conv === conv) return contacts[i]; return null; }
+		function convName(conv) { var c = chanOf(conv) || contactOf(conv); return c ? c.name : conv; }
+		function full() { return !!st && (!!st.contacts_full || (!!st.max_contacts && contacts.length >= st.max_contacts)); }
+		function route(c) { return c.flood ? "no route yet" : c.hops ? c.hops + " hop" + (c.hops === 1 ? "" : "s") : "direct"; }
+		function chanIcon(c, cls) { return mcIcon(mcChanKind(c) === "private" ? "lock" : "hash", cls); }
+		var KIND_TEXT = {
+			"public": "MeshCore's public channel: everyone on the mesh reads it",
+			hashtag: "a #hashtag channel: anyone who knows its name reads it",
+			"private": "private: only those with its key read it"
+		};
 
-		/* The radio */
-		function showDevice(s) {
-			st = s;
-			clear(devWrap);
-			if (s.state === "absent") {
-				devWrap.appendChild(el("div", { class: "placeholder" },
+		/* The list: channels and direct messages, or what the search finds */
+		function badgeEl(n) { return el("span", { class: "mc-unread", text: n > 99 ? "99+" : String(n) }); }
+		function isOpen(conv) { return mode === "thread" && open === conv; }
+		function chanItem(c) {
+			return el("div", { class: "mc-item" + (isOpen(c.conv) ? " active" : "") + (c.unread ? " news" : "") },
+				el("button", { type: "button", class: "mc-itemmain", onclick: function () { openConv(c.conv); } },
+					chanIcon(c, "mc-ci"), el("span", { class: "mc-name", text: mcChanLabel(c) }), c.unread ? badgeEl(c.unread) : null),
+				el("button", { type: "button", class: "mc-itembtn", title: "Channel settings", "aria-label": c.name + ": settings",
+					onclick: function () { openPage("chan:" + c.index); } }, mcIcon("gear")));
+		}
+		function dmItem(c, sub) {
+			return el("div", { class: "mc-item" + (isOpen(c.conv) ? " active" : "") + (c.unread ? " news" : "") },
+				el("button", { type: "button", class: "mc-itemmain", onclick: function () { openConv(c.conv); } },
+					mcFace(c.name, false, "sm"), el("span", { class: "mc-name", text: c.name }),
+					c.unread ? badgeEl(c.unread) : el("span", { class: "mc-itemsub", text: sub != null ? sub : mcAgo(c.last_message) })));
+		}
+		function byLast(a, b) { return (b.last_message || 0) - (a.last_message || 0); }
+		function section(key, title, items, make, empty, extra) {
+			var shut = !!collapsed[key], unread = 0;
+			items.forEach(function (c) { unread += c.unread || 0; });
+			nav.appendChild(el("div", { class: "mc-sec" },
+				el("button", { type: "button", class: "mc-sechead" + (shut ? " shut" : ""), "aria-expanded": shut ? "false" : "true",
+					onclick: function () {
+						collapsed[key] = !shut;
+						try { localStorage.setItem("pirate_mc_collapsed", JSON.stringify(collapsed)); } catch (e) {}
+						renderSide();
+					} },
+					mcIcon("chev", "mc-chev"), el("span", { text: title }), shut && unread ? badgeEl(unread) : null),
+				extra || null));
+			// Shut, it still shows the open one and those with news, as Discord's do
+			if (shut) items = items.filter(function (c) { return c.unread || isOpen(c.conv); });
+			else if (!items.length && empty) nav.appendChild(el("div", { class: "mc-none muted", text: empty }));
+			items.forEach(function (c) { nav.appendChild(make(c)); });
+		}
+		function renderSide() {
+			var keep = nav.scrollTop;
+			clear(nav);
+			if (!st || st.state !== "ready") return;
+			var q = search.value.trim().toLowerCase();
+			var people = contacts.filter(function (c) { return c.type === "chat"; });
+			var dms = people.filter(function (c) { return c.last_message; }).sort(byLast);
+			if (q) return renderFound(q, people, dms);
+			nav.appendChild(el("div", { class: "mc-item mc-home" + (mode === "page" && page === "contacts" ? " active" : "") },
+				el("button", { type: "button", class: "mc-itemmain", onclick: function () { openPage("contacts"); } },
+					mcIcon("people", "mc-ci"), el("span", { class: "mc-name", text: "Contacts" }),
+					el("span", { class: "mc-itemsub" + (full() ? " warn" : ""), text: contacts.length + (full() ? " · full" : "") }))));
+			section("channels", "Channels", channels, chanItem, "None yet",
+				el("button", { type: "button", class: "mc-secbtn", title: "Add a channel", "aria-label": "Add a channel",
+					onclick: function () { openPage("addch"); } }, mcIcon("plus")));
+			section("dms", "Direct messages", dms, function (c) { return dmItem(c); }, "None yet: find someone above, or in Contacts");
+			nav.scrollTop = keep;
+		}
+		function renderFound(q, people, dms) {
+			function has(c) { return c.name.toLowerCase().indexOf(q) >= 0; }
+			var ch = channels.filter(has), dm = dms.filter(has);
+			var others = people.filter(function (c) { return !c.last_message && has(c); })
+				.sort(function (a, b) { return (b.last_advert || 0) - (a.last_advert || 0); });
+			function grp(title, items, make, extra) {
+				if (!items.length) return;
+				nav.appendChild(el("div", { class: "mc-sec" }, el("div", { class: "mc-sechead plain" }, el("span", { text: title })), extra || null));
+				items.forEach(function (c) { nav.appendChild(make(c)); });
+			}
+			grp("Channels", ch, chanItem);
+			grp("Direct messages", dm, function (c) { return dmItem(c); });
+			grp("Start a conversation", others.slice(0, 40), function (c) { return dmItem(c, c.last_advert ? "heard " + mcAgo(c.last_advert) : ""); },
+				others.length > 40 ? el("span", { class: "mc-itemsub", text: "40 of " + others.length }) : null);
+			if (!ch.length && !dm.length && !others.length)
+				nav.appendChild(el("div", { class: "mc-none muted", text: "Nothing called that. People come with their adverts: send yours (your radio, the gear below) and others add you." }));
+		}
+		search.addEventListener("input", renderSide);
+		search.addEventListener("keydown", function (ev) {
+			if (ev.key === "Enter") {
+				var b = nav.querySelector(".mc-itemmain");
+				if (b) { ev.preventDefault(); b.click(); }
+			} else if (ev.key === "Escape" && search.value) { ev.preventDefault(); search.value = ""; renderSide(); }
+		});
+		// Ctrl+K (or Cmd+K): to the search, as Discord's quick switcher
+		function onKey(ev) {
+			if (!alive()) { document.removeEventListener("keydown", onKey); return; }
+			if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === "k" || ev.key === "K")) {
+				ev.preventDefault();
+				app.classList.remove("mc-open");
+				search.focus();
+				search.select();
+			}
+		}
+		document.addEventListener("keydown", onKey);
+		// Read when seen: a thread open in a tab out of sight stays unread
+		function onVis() {
+			if (!alive()) { document.removeEventListener("visibilitychange", onVis); return; }
+			if (!document.hidden) markRead(true);
+		}
+		document.addEventListener("visibilitychange", onVis);
+		// From a phone's width to a wide one with nothing open: the first channel beside the list
+		function onResize() {
+			if (!alive()) { window.removeEventListener("resize", onResize); return; }
+			if (mode === "none" && window.innerWidth > 860 && st && st.state === "ready") openFirst();
+		}
+		window.addEventListener("resize", onResize);
+
+		/* Your radio, at the foot of the list */
+		function battPct(mv) { return Math.max(0, Math.min(100, Math.round((mv - 3300) / 9))); }
+		function showMe() {
+			clear(mePanel);
+			if (!st || st.state !== "ready") {
+				mePanel.appendChild(el("div", { class: "mc-meinfo" }, el("div", { class: "mc-mename muted",
+					text: !st ? "Radio" : st.state === "connecting" ? "Connecting…" : "No radio plugged in" })));
+				return;
+			}
+			var g = st.gps || {}, bits = [];
+			if (st.battery_mv) bits.push(battPct(st.battery_mv) + "%");
+			if (g.available) bits.push(!g.enabled ? "GPS off" : g.live ? "GPS fix" : "GPS, no fix");
+			mePanel.appendChild(mcFace(st.name, true));
+			mePanel.appendChild(el("div", { class: "mc-meinfo" },
+				el("div", { class: "mc-mename", text: st.name }),
+				el("div", { class: "mc-mesub" }, bits.join(" · "),
+					st.share_location ? el("span", { class: "mc-mewarn", title: "Its adverts carry where it is",
+						text: (bits.length ? " · " : "") + "sharing location" }) : null)));
+			mePanel.appendChild(el("button", { type: "button", class: "mc-iconbtn" + (mode === "page" && page === "radio" ? " on" : ""),
+				title: "Your radio", "aria-label": "Your radio: its settings", onclick: function () { openPage("radio"); } }, mcIcon("gear")));
+		}
+
+		/* No radio, connecting, or no service: said where the conversation goes */
+		function showNote(s, err) {
+			cancelReply();
+			mode = "note"; open = null; page = null;
+			clear(nav); clear(vNote);
+			showMain("note");
+			app.classList.add("mc-open");
+			if (err) vNote.appendChild(el("div", { class: "placeholder" }, el("b", { text: "The Messenger can't reach the radio." }), el("div", { text: err })));
+			else if (s.state === "absent") {
+				vNote.appendChild(el("div", { class: "placeholder" },
 					el("b", { text: "No MeshCore radio is plugged in." }),
 					el("div", { text: "Plug one into the USB port, running MeshCore's companion firmware for USB (for a LilyGo T-Echo: \"Companion (USB)\" on flasher.meshcore.co.uk)." })));
-				if (s.error) devWrap.appendChild(alertEl("warn", s.error));
-				chat.hidden = true; chanPanel.hidden = conPanel.hidden = true;
-				return;
+				if (s.error) vNote.appendChild(alertEl("warn", s.error));
+			} else vNote.appendChild(el("div", { class: "placeholder" }, el("b", { text: "Connecting to the radio on " + devLabel(s.device) + "…" })));
+		}
+
+		/* Pages beside the list, in the conversation's place */
+		function openPage(p) {
+			cancelReply();
+			mode = "page"; page = p; open = null;
+			if (search.value) search.value = "";
+			app.classList.add("mc-open");
+			showMain("page");
+			radioLine = null;
+			renderPage();
+			renderSide();
+			showMe();
+		}
+		function pageHead(icon, title, sub) {
+			return el("div", { class: "mc-thead" }, backBtn(), icon, el("strong", { text: title }),
+				sub ? el("span", { class: "mc-hsub muted", text: sub }) : null);
+		}
+		function renderPage() {
+			contactsFill = null;
+			radioStatus = null;
+			if (page === "contacts") return renderContacts();
+			if (page === "radio") return renderRadio();
+			if (page === "addch") return renderAddChannel();
+			if (page && page.indexOf("chan:") === 0) return renderChannel(+page.slice(5));
+		}
+		function openFirst() {
+			var wide = window.innerWidth > 860;
+			if (wide && channels.length) return openConv(channels[0].conv);
+			if (wide) return openPage("contacts");
+			cancelReply();
+			mode = "none"; open = null; page = null;
+			showMain("none");
+			app.classList.remove("mc-open");
+			renderSide();
+		}
+
+		// Contacts: everyone heard, to find, sort, message or remove
+		var CKINDS = [["all", "All"], ["chat", "People"], ["repeater", "Repeaters"], ["room", "Rooms"], ["sensor", "Sensors"]];
+		var KIND_NAME = { chat: "person", repeater: "repeater", room: "room", sensor: "sensor" };
+		function renderContacts() {
+			clear(vPage);
+			var n = { all: contacts.length };
+			contacts.forEach(function (c) { n[c.type] = (n[c.type] || 0) + 1; });
+			vPage.appendChild(pageHead(mcIcon("people", "mc-hic"), "Contacts",
+				contacts.length + (st && st.max_contacts ? " of the " + st.max_contacts + " the radio keeps" : "")));
+			var tabs = el("div", { class: "mc-tabs", role: "tablist" });
+			CKINDS.forEach(function (k) {
+				if (k[0] !== "all" && !n[k[0]]) return;
+				tabs.appendChild(el("button", { type: "button", role: "tab", class: "mc-tab" + (cv.kind === k[0] ? " on" : ""),
+					"aria-selected": cv.kind === k[0] ? "true" : "false",
+					onclick: function () { cv.kind = k[0]; cv.n = 100; renderContacts(); } },
+					k[1], el("span", { class: "mc-tabn", text: String(n[k[0]] || 0) })));
+			});
+			var q = el("input", { class: "inp mc-cfind", type: "search", placeholder: "Search contacts", "aria-label": "Search contacts" });
+			q.value = cv.q;
+			var sort = el("select", { class: "sel mc-csort", "aria-label": "In what order" },
+				el("option", { value: "recent", text: "Heard most recently" }),
+				el("option", { value: "stale", text: "Heard longest ago" }),
+				el("option", { value: "name", text: "By name" }),
+				el("option", { value: "near", text: "Fewest hops" }));
+			sort.value = cv.sort;
+			q.addEventListener("input", function () { cv.q = q.value; cv.n = 100; fill(); });
+			sort.addEventListener("change", function () { cv.sort = sort.value; cv.n = 100; fill(); });
+			vPage.appendChild(el("div", { class: "mc-cbar" }, tabs, el("div", { class: "mc-cfilters" }, q, sort)));
+			if (full()) vPage.appendChild(el("div", { class: "mc-cnote" }, alertEl("warn",
+				"The radio's contact list is full (" + contacts.length + " of " + st.max_contacts + "): it adds no one new until some go. \"Heard longest ago\" puts the stale ones first.")));
+			var listEl = el("div", { class: "mc-clist" });
+			vPage.appendChild(listEl);
+			function fill() {
+				var keep = listEl.scrollTop, ql = cv.q.trim().toLowerCase();
+				clear(listEl);
+				var list = contacts.filter(function (c) {
+					return (cv.kind === "all" || c.type === cv.kind) && (!ql || c.name.toLowerCase().indexOf(ql) >= 0);
+				});
+				list.sort(cv.sort === "name" ? function (a, b) { return a.name.localeCompare(b.name); }
+					: cv.sort === "stale" ? function (a, b) { return (a.last_advert || 0) - (b.last_advert || 0); }
+					: cv.sort === "near" ? function (a, b) { return (a.flood ? 99 : a.hops || 0) - (b.flood ? 99 : b.hops || 0) || (b.last_advert || 0) - (a.last_advert || 0); }
+					: function (a, b) { return (b.last_advert || 0) - (a.last_advert || 0); });
+				if (!list.length) listEl.appendChild(el("div", { class: "mc-none muted",
+					text: contacts.length ? "No one called that." : "No contacts yet: they come with adverts heard on the mesh." }));
+				list.slice(0, cv.n).forEach(function (c) { listEl.appendChild(contactRow(c)); });
+				if (list.length > cv.n) listEl.appendChild(el("div", { class: "mc-more" },
+					btn("Show more (" + (list.length - cv.n) + " left)", { onclick: function () { cv.n += 200; fill(); } })));
+				listEl.scrollTop = keep;
 			}
-			if (s.state !== "ready") {
-				devWrap.appendChild(el("div", { class: "muted", text: "Connecting to the radio on " + devLabel(s.device) + "…" }));
-				chat.hidden = true; chanPanel.hidden = conPanel.hidden = true;
-				return;
-			}
-			chat.hidden = false; chanPanel.hidden = conPanel.hidden = false;
-			var r = s.radio || {}, g = s.gps || {};
-			devWrap.appendChild(el("div", { class: "drive-head" },
-				el("strong", { text: s.name || "MeshCore" }),
-				badge(s.model || "MeshCore", "sec-neutral"),
-				s.firmware ? badge("MeshCore " + s.firmware, "sec-ok") : null,
-				s.unread ? badge(s.unread + " unread", "sec-warn") : null));
-			devWrap.appendChild(kvEl([
+			contactsFill = fill;
+			fill();
+		}
+		function contactRow(c) {
+			var person = c.type === "chat";
+			return el("div", { class: "mc-crow" },
+				person ? mcFace(c.name, false, "sm") : mcTile(c.name, "sm"),
+				el("div", { class: "mc-cmain" },
+					el("div", { class: "mc-cname" }, el("span", { class: "mc-cn", text: c.name }),
+						person ? null : el("span", { class: "mc-kind", text: KIND_NAME[c.type] || c.type })),
+					el("div", { class: "mc-csub", text: route(c) + " · " + (c.last_advert ? "heard " + mcAgo(c.last_advert) : "not heard yet") })),
+				el("div", { class: "mc-cacts" },
+					person ? btn("Message", { cls: "small", onclick: function () { openConv(c.conv); } }) : null,
+					c.flood ? null : btn("Forget route", { cls: "small", onclick: function () { contactOp("contact_reset_path", c); } }),
+					btn("Remove", { cls: "small reset", onclick: function () {
+						if (window.confirm("Remove " + c.name + " from the radio's contacts? An advert from them adds them back.")) contactOp("contact_remove", c);
+					} })));
+		}
+		function contactOp(method, c) {
+			call("pirate.meshcore", method, { key: c.key }).then(function (r) {
+				if (r.error) window.alert(r.error);
+				refreshAll();
+			}).catch(function (e) { if (!failed(e)) window.alert(String(e.message || e)); });
+		}
+
+		// Your radio: what it is, its adverts and name, its GPS
+		function renderRadio() {
+			clear(vPage);
+			var s = st, r = s.radio || {}, g = s.gps || {};
+			vPage.appendChild(pageHead(mcFace(s.name, true, "sm"), s.name, (s.model || "MeshCore") + (s.firmware ? " · MeshCore " + s.firmware : "")));
+			var body = el("div", { class: "mc-pagebody" });
+			vPage.appendChild(body);
+			if (s.share_location)
+				body.appendChild(alertEl("warn", "This radio shares its location in its adverts: everyone on the mesh sees where it is. MeshCore's app turns that off."));
+			body.appendChild(kvEl([
 				["Battery", mcBattery(s.battery_mv)],
 				["Radio", r.freq_khz ? (r.freq_khz / 1000) + " MHz · " + (r.bw_hz / 1000) + " kHz · SF" + r.sf + " · CR" + r.cr + " · " + r.tx_power + " dBm" : null],
 				["Port", devLabel(s.device)],
-				["Key", s.key ? el("code", { text: s.key }) : null],
-				["Contacts", s.contacts + (s.max_contacts ? " of " + s.max_contacts : "") + (s.contacts_full ? " (full)" : "")]
+				["Key", s.key ? el("code", { class: "mc-key", text: s.key }) : null],
+				["Contacts", contacts.length + (s.max_contacts ? " of " + s.max_contacts : "") + (full() ? " (full)" : "")],
+				["Channels", channels.length + (s.max_channels ? " of " + s.max_channels : "")]
 			]));
-			var gpsLine = el("span", { class: "status" });
-			if (!g.available) gpsLine.textContent = "no GPS on this radio";
-			else if (!g.enabled) gpsLine.textContent = "GPS off";
-			else if (g.live) gpsLine.textContent = "GPS fix: " + g.lat.toFixed(5) + ", " + g.lon.toFixed(5) + " (tags the Wi-Fi survey)";
-			else gpsLine.textContent = "GPS on, no fix yet";
-			devWrap.appendChild(el("div", { class: "toolbar" },
+			body.appendChild(el("h4", { class: "sub-h2", text: "On the mesh" }));
+			body.appendChild(el("div", { class: "toolbar" },
 				btn("Advert to neighbours", { onclick: function () { advert(false); } }),
 				btn("Advert to the whole mesh", { onclick: function () { advert(true); } }),
-				btn("Rename", { onclick: rename }),
-				g.available ? btn(g.enabled ? "GPS off" : "GPS on", { onclick: function () { gps(!g.enabled); } }) : null,
-				gpsLine));
-			if (s.share_location)
-				devWrap.appendChild(alertEl("warn", "This radio shares its location in its adverts: everyone on the mesh sees where it is. MeshCore's app turns that off."));
-			var actStatus = el("span", { class: "status" });
-			devWrap.appendChild(actStatus);
-			devWrap.actStatus = actStatus;
+				btn("Rename", { onclick: rename })));
+			body.appendChild(el("p", { class: "descr", text: "An advert says your radio is here, so others can add you: to those in range, or passed on across the whole mesh. Its name is what they see." }));
+			if (g.available) {
+				body.appendChild(el("h4", { class: "sub-h2", text: "GPS" }));
+				body.appendChild(el("div", { class: "toolbar" },
+					btn(g.enabled ? "GPS off" : "GPS on", { onclick: function () { gps(!g.enabled); } }),
+					el("span", { class: "status", text: !g.enabled ? "off" : g.live ? "a fix: " + g.lat.toFixed(5) + ", " + g.lon.toFixed(5) + " (it tags the Wi-Fi survey)" : "on, no fix yet" })));
+			}
+			radioStatus = el("div", { class: "status" });
+			if (radioLine) line(radioStatus, radioLine[0], radioLine[1]);
+			body.appendChild(radioStatus);
 		}
 		function act(p, ok) {
-			var a = devWrap.actStatus;
-			if (a) line(a, "…");
+			radioLine = ["…"];
+			if (radioStatus) line(radioStatus, "…");
 			return p.then(function (r) {
-				if (r.error) { if (a) line(a, r.error, "err"); return; }
-				if (a) line(a, ok, "ok-text");
+				radioLine = r.error ? [r.error, "err"] : [ok, "ok-text"];
+				if (radioStatus) line(radioStatus, radioLine[0], radioLine[1]);
 				refreshAll();
-			}).catch(function (e) { if (!failed(e) && a) line(a, String(e.message || e), "err"); });
+			}).catch(function (e) {
+				if (failed(e)) return;
+				radioLine = [String(e.message || e), "err"];
+				if (radioStatus) line(radioStatus, radioLine[0], radioLine[1]);
+			});
 		}
 		function advert(flood) { act(call("pirate.meshcore", "advert", { flood: flood }), flood ? "advert sent to the whole mesh" : "advert sent to its neighbours"); }
 		function gps(on) { act(call("pirate.meshcore", "gps", { enabled: on }), on ? "GPS on: give it a few minutes for a fix" : "GPS off"); }
@@ -2171,35 +2528,114 @@
 			act(call("pirate.meshcore", "set_name", { name: n.trim() }), "renamed: send an advert so others see it");
 		}
 
-		/* Conversations */
-		function convName(conv) {
-			var i;
-			for (i = 0; i < channels.length; i++) if (channels[i].conv === conv) return channels[i].name;
-			for (i = 0; i < contacts.length; i++) if (contacts[i].conv === conv) return contacts[i].name;
-			return conv;
-		}
-		function showList() {
-			clear(listCol);
-			function item(conv, name, sub, unread, face) {
-				var b = el("button", { type: "button", class: "mc-item" + (open === conv ? " active" : ""),
-					onclick: function () { openConv(conv); } },
-					face,
-					el("span", { class: "mc-name", text: name }),
-					unread ? el("span", { class: "mc-unread", text: String(unread) }) : null,
-					el("span", { class: "mc-sub", text: sub }));
-				listCol.appendChild(b);
+		// A new channel, and a channel's settings
+		function renderAddChannel() {
+			clear(vPage);
+			vPage.appendChild(pageHead(mcIcon("plus", "mc-hic"), "Add a channel",
+				channels.length + " of " + ((st && st.max_channels) || 40) + " slots used"));
+			var body = el("div", { class: "mc-pagebody" });
+			var chName = el("input", { class: "inp", type: "text", placeholder: "#hashtag, or a name" });
+			var chKey = el("input", { class: "inp", type: "text", spellcheck: "false", placeholder: "its key, if you were given one (32 hex digits)" });
+			var status = el("span", { class: "status" });
+			body.appendChild(el("div", { class: "form form-wide" },
+				el("label", {}, el("span", { class: "lbl", text: "Name" }), chName),
+				el("label", {}, el("span", { class: "lbl", text: "Key" }), chKey)));
+			body.appendChild(el("div", { class: "toolbar" }, btn("Add channel", { primary: true, onclick: add }), status));
+			body.appendChild(el("p", { class: "descr", text:
+				"A #hashtag channel's key comes from its name: anyone who knows the name can join, so it isn't private. Another name gets a random key, private to those you give it to; or give the key someone shared." }));
+			vPage.appendChild(body);
+			chName.addEventListener("keydown", function (ev) { if (ev.key === "Enter") add(); });
+			if (!TOUCH) chName.focus();
+			function add() {
+				var n = chName.value.trim(), k = chKey.value.trim().toLowerCase(), slot = freeSlot;
+				if (!n) return line(status, "give it a name", "err");
+				if (k && !/^[0-9a-f]{32}$/.test(k)) return line(status, "a key is 32 hex digits", "err");
+				if (slot == null) return line(status, "the radio's channel slots are all taken: remove one first", "err");
+				line(status, "adding…");
+				call("pirate.meshcore", "channel_set", { index: slot, name: n, secret: k || undefined }).then(function (r) {
+					if (r.error) return line(status, r.error, "err");
+					line(status, "added: " + n, "ok-text");
+					setTimeout(function () {
+						refreshLists().then(function () {
+							var c = channels.filter(function (x) { return x.index === slot; })[0];
+							if (alive() && c && page === "addch") openConv(c.conv);
+						});
+					}, 600);
+				}).catch(function (e) { if (!failed(e)) line(status, String(e.message || e), "err"); });
 			}
-			listCol.appendChild(el("div", { class: "nav-grp mc-grp", text: "Channels" }));
-			channels.forEach(function (c) { item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : "", c.unread, mcTile(c.name, "sm")); });
-			var chats = contacts.filter(function (c) { return c.type === "chat"; });
-			chats.sort(function (a, b) { return (b.last_message || 0) - (a.last_message || 0) || (b.last_advert || 0) - (a.last_advert || 0); });
-			listCol.appendChild(el("div", { class: "nav-grp mc-grp", text: "Contacts" }));
-			if (!chats.length) listCol.appendChild(el("div", { class: "muted mc-none", text: "No contacts yet: they come with adverts." }));
-			chats.forEach(function (c) {
-				item(c.conv, c.name, c.last_message ? mcTime(c.last_message) : (c.flood ? "no route yet" : c.hops ? c.hops + " hop" + (c.hops === 1 ? "" : "s") : "direct"),
-					c.unread, mcFace(c.name, false, "sm"));
-			});
 		}
+		function renderChannel(idx) {
+			clear(vPage);
+			var c = channels.filter(function (x) { return x.index === idx; })[0];
+			if (!c) {
+				vPage.appendChild(pageHead(null, "Channel", null));
+				vPage.appendChild(el("div", { class: "mc-pagebody" }, el("p", { class: "muted", text: "That channel is gone." })));
+				return;
+			}
+			var kind = mcChanKind(c), status = el("span", { class: "status" });
+			vPage.appendChild(pageHead(chanIcon(c, "mc-hic"), mcChanLabel(c), KIND_TEXT[kind]));
+			var key = el("code", { class: "mc-key", text: "••••••••••••••••" }), showing = false;
+			var body = el("div", { class: "mc-pagebody" });
+			body.appendChild(kvEl([
+				["Name", c.name],
+				["Kind", { "public": "MeshCore's public channel", hashtag: "#hashtag (its key from its name)", "private": "private" }[kind]],
+				["Slot", String(c.index)],
+				["Key", el("span", {}, key, " ", el("button", { type: "button", class: "linkbtn", text: "show", onclick: function () {
+					showing = !showing;
+					key.textContent = showing ? c.secret : "••••••••••••••••";
+					this.textContent = showing ? "hide" : "show";
+				} }))]
+			]));
+			body.appendChild(el("p", { class: "descr", text: kind === "private"
+				? "To bring someone in, give them its name and key: they add it as a channel whose key they were given."
+				: kind === "hashtag" ? "Anyone who adds " + c.name + " reads it: its key comes from its name." : "Every MeshCore radio has it." }));
+			body.appendChild(el("div", { class: "toolbar" },
+				btn("Open it", { primary: true, onclick: function () { openConv(c.conv); } }),
+				btn("Remove channel", { cls: "reset", onclick: function () { removeChannel(c, status); } }), status));
+			vPage.appendChild(body);
+		}
+		function removeChannel(c, status) {
+			if (!window.confirm("Remove the channel " + c.name + "? Its messages here stay; the radio forgets its key.")) return;
+			call("pirate.meshcore", "channel_set", { index: c.index, name: "" }).then(function (r) {
+				if (r.error) return line(status, r.error, "err");
+				setTimeout(function () { refreshLists().then(function () { if (alive()) openFirst(); }); }, 600);
+			}).catch(function (e) { if (!failed(e)) line(status, String(e.message || e), "err"); });
+		}
+
+		/* The open conversation */
+		function showThreadHead() {
+			clear(threadHead);
+			threadHead.appendChild(backBtn());
+			var ch = chanOf(open), c = contactOf(open);
+			if (ch) {
+				threadHead.appendChild(chanIcon(ch, "mc-hic"));
+				threadHead.appendChild(el("strong", { text: mcChanLabel(ch) }));
+				threadHead.appendChild(el("span", { class: "mc-hsub muted", text: KIND_TEXT[mcChanKind(ch)] }));
+				threadHead.appendChild(el("button", { type: "button", class: "mc-iconbtn mc-hbtn", title: "Channel settings", "aria-label": "Channel settings",
+					onclick: function () { openPage("chan:" + ch.index); } }, mcIcon("gear")));
+			} else if (c) {
+				threadHead.appendChild(mcFace(c.name, false, "sm"));
+				threadHead.appendChild(el("strong", { text: c.name }));
+				threadHead.appendChild(el("span", { class: "mc-hsub muted",
+					text: (c.flood ? "no route yet: messages go out to the whole mesh" : route(c)) + (c.last_advert ? " · heard " + mcAgo(c.last_advert) : "") }));
+			} else threadHead.appendChild(el("strong", { text: open }));
+		}
+		// The top of a conversation, when there's nothing before
+		function startEl() {
+			var ch = chanOf(open);
+			if (ch) return el("div", { class: "mc-start" },
+				el("div", { class: "mc-startic" }, chanIcon(ch)),
+				el("h3", { text: "Welcome to " + (mcChanKind(ch) === "private" ? "" : "#") + mcChanLabel(ch) }),
+				el("p", { class: "muted", text: "The start of " + ch.name + " on this router. " + {
+					"public": "MeshCore's public channel: everyone on the mesh reads it.",
+					hashtag: "A #hashtag channel: anyone who knows its name reads it.",
+					"private": "Private: only those with its key read it."
+				}[mcChanKind(ch)] }));
+			var name = convName(open);
+			return el("div", { class: "mc-start" }, mcFace(name, false, "lg"), el("h3", { text: name }),
+				el("p", { class: "muted", text: "The start of your messages with " + name + " here." }));
+		}
+
 		// A reply goes with "@[Name] " first, as the daemon writes it: the room that takes
 		function answerName(m) { return m.from || sender(m); }
 		function maxBytes() {
@@ -2209,15 +2645,33 @@
 		}
 		function updateCount() {
 			var n = utf8len(input.value), m = maxBytes();
-			count.textContent = n + " / " + m;
-			count.className = "status mc-count" + (n > m ? " err" : "");
-			sendBtn.disabled = !open || !input.value.trim() || n > m;
+			count.textContent = n ? n + " / " + m : "";
+			count.className = "mc-count" + (n > m ? " err" : n > m - 20 ? " near" : "");
+			sendBtn.disabled = mode !== "thread" || !open || !input.value.trim() || n > m;
 		}
-		input.addEventListener("input", updateCount);
+		function grow() {
+			input.style.height = "auto";
+			input.style.height = Math.min(input.scrollHeight, 168) + "px";
+		}
+		input.addEventListener("input", function () { grow(); updateCount(); });
 		input.addEventListener("keydown", function (ev) {
-			if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); if (!sendBtn.disabled) send(); }
+			if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); if (!sendBtn.disabled) send(); }
 			else if (ev.key === "Escape" && replyTo) { ev.preventDefault(); cancelReply(); }
 		});
+
+		function statusEl(m) {
+			var s = m.status, t = { queued: "queued", sent: "sent", delivered: "delivered", unconfirmed: "not confirmed", failed: "failed" }[s] || s;
+			var span = el("span", { class: "mc-st mc-" + s, text: t + (s === "delivered" && m.trip_ms ? " · " + m.trip_ms + " ms" : "") +
+				(m.attempt ? " · try " + (m.attempt + 1) : "") });
+			if ((s === "unconfirmed" || s === "failed") && m.conv.charAt(0) === "c")
+				span.appendChild(el("button", { type: "button", class: "linkbtn mc-retry", text: " retry", onclick: function () { resend(m); } }));
+			return span;
+		}
+		// Who sent it: you, or the name it came with (a direct message's, the contact's)
+		function sender(m) {
+			if (m.out) return (st && st.name) || m.from || "you";
+			return m.from || (m.conv.charAt(0) === "#" ? "someone" : convName(m.conv));
+		}
 
 		/* Replies, as MeshCore's apps write them: "@[Name] " first (MeshCore
 		   Open's with "#" and a time). Which message one answers: ours, as we
@@ -2227,12 +2681,12 @@
 		// A reply answers a message the daemon found; "@[Name]" answering none is a mention
 		function isReply(m) { return !!m.reply; }
 		function answers(m) {
-			var mm = MENTION.exec(m.text || ""), t = null, i, mine = (st && st.name) || "";
+			var mm = MENTION.exec(m.text || ""), t, mine = (st && st.name) || "";
 			if (!m.reply) return null;
-			for (i = thread.length - 1; i >= 0 && !t; i--) if (thread[i].id === m.reply) t = thread[i];
+			t = byId[m.reply];
 			if (t) return { msg: t, name: sender(t), out: !!t.out, text: plain(t.text) };
 			if (m.reply_text != null)
-				return { name: m.reply_out ? mine || m.reply_from : m.reply_from || (mm && mm[1]) || "someone", out: !!m.reply_out, text: plain(m.reply_text) };
+				return { id: m.reply, name: m.reply_out ? mine || m.reply_from : m.reply_from || (mm && mm[1]) || "someone", out: !!m.reply_out, text: plain(m.reply_text) };
 			return { name: mm ? mm[1] : "someone", out: !!mm && mm[1] === mine, text: null };
 		}
 		function mentionOf(m) {
@@ -2259,37 +2713,25 @@
 			replyBar.hidden = true;
 			updateCount();
 		}
-		// To the message a reply answers, if it's among those shown: a flash where it is
-		function jumpTo(id) {
+		// To the message a reply answers: older ones fetched until it's there, then a flash where it is
+		function jumpTo(id, tries) {
 			var n = shown[id];
-			if (!n) return;
-			threadBody.scrollTop = Math.max(0, n.offsetTop - threadBody.clientHeight / 3);
-			n.classList.remove("mc-flash");
-			void n.offsetWidth;
-			n.classList.add("mc-flash");
-			setTimeout(function () { n.classList.remove("mc-flash"); }, 1700);
+			if (n) {
+				threadBody.scrollTop = Math.max(0, n.offsetTop - threadBody.clientHeight / 3);
+				n.classList.remove("mc-flash");
+				void n.offsetWidth;
+				n.classList.add("mc-flash");
+				setTimeout(function () { n.classList.remove("mc-flash"); }, 1700);
+			} else if (more && (tries || 0) < 20 && thread.length && id < thread[0].id)
+				loadOlder().then(function (got) { if (got) jumpTo(id, (tries || 0) + 1); });
 		}
-		var TOUCH = !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
 
-		function statusEl(m) {
-			var s = m.status, t = { queued: "queued", sent: "sent", delivered: "delivered", unconfirmed: "not confirmed", failed: "failed" }[s] || s;
-			var span = el("span", { class: "mc-st mc-" + s, text: t + (s === "delivered" && m.trip_ms ? " · " + m.trip_ms + " ms" : "") +
-				(m.attempt ? " · try " + (m.attempt + 1) : "") });
-			if ((s === "unconfirmed" || s === "failed") && m.conv.charAt(0) === "c")
-				span.appendChild(el("button", { type: "button", class: "linkbtn mc-retry", text: " retry", onclick: function () { resend(m); } }));
-			return span;
-		}
-		// Who sent it: you, or the name it came with (a direct message's, the contact's)
-		function sender(m) {
-			if (m.out) return (st && st.name) || m.from || "you";
-			return m.from || (m.conv.charAt(0) === "#" ? "someone" : convName(m.conv));
-		}
 		// One sender's messages run together, as a chat app has them: a new
 		// group for another sender, another day, after a few minutes' quiet,
-		// or a reply (it carries what it answers above it)
+		// a reply (what it answers goes above it), or where the news starts
 		function startsGroup(prev, m) {
 			return !prev || !prev.out !== !m.out || sender(prev) !== sender(m) ||
-				!mcSameDay(prev.ts, m.ts) || Math.abs(m.ts - prev.ts) > 420 || isReply(m);
+				!mcSameDay(prev.ts, m.ts) || Math.abs(m.ts - prev.ts) > 420 || isReply(m) || m.id === unreadFrom;
 		}
 		function signal(m) {
 			var s = [];
@@ -2308,24 +2750,18 @@
 			if (!m.out) mcColour(row, who);
 			// What it answers, above it: their face, their name, the start of it
 			if (rep) {
-				var rn = el("span", { class: "mc-rname", text: "@" + rep.name });
+				var rn = el("span", { class: "mc-rname", text: "@" + rep.name }), to = rep.msg ? rep.msg.id : rep.id;
 				if (rep.out) rn.classList.add("mine"); else mcColour(rn, rep.name);
 				row.appendChild(el("span", { class: "mc-conn", "aria-hidden": "true" }));
-				row.appendChild(el("button", { type: "button", class: "mc-rline", title: rep.msg ? "Show the message it answers" : "",
-					onclick: function () { if (rep.msg) jumpTo(rep.msg.id); } },
+				row.appendChild(el("button", { type: "button", class: "mc-rline", title: to ? "Show the message it answers" : "",
+					onclick: function () { if (to) jumpTo(to); } },
 					mcFace(rep.name, rep.out, "xxs"), rn,
 					el("span", { class: "mc-rtext" + (rep.text == null ? " gone" : ""), text: rep.text == null ? "a message not kept here" : rep.text || " " })));
 			}
-			// Reply: on hover (a tap, on a phone), as a chat app has it
+			// Reply: on hover (a tap, on a phone)
 			if (m.out || m.from || m.conv.charAt(0) !== "#")
 				row.appendChild(el("div", { class: "mc-acts" },
 					el("button", { type: "button", class: "mc-act", title: "Reply", onclick: function (ev) { ev.stopPropagation(); startReply(m); } }, "↩ Reply")));
-			if (TOUCH) row.addEventListener("click", function (ev) {
-				if (ev.target.closest("button, a")) return;
-				var was = threadBody.querySelector(".mc-sel");
-				if (was && was !== row) was.classList.remove("mc-sel");
-				row.classList.toggle("mc-sel");
-			});
 			row.appendChild(el("div", { class: "mc-gut" },
 				head ? mcFace(who, m.out) : el("span", { class: "mc-gtime", title: when, text: mcHM(m.ts) })));
 			var body = el("div", { class: "mc-body" });
@@ -2341,69 +2777,142 @@
 			row.appendChild(body);
 			return row;
 		}
+		// A tap on a phone shows a message's actions (there's no hover)
+		threadBody.addEventListener("click", function (ev) {
+			if (!TOUCH || ev.target.closest("button, a")) return;
+			var row = ev.target.closest(".mc-row"), was = threadBody.querySelector(".mc-sel");
+			if (was && was !== row) was.classList.remove("mc-sel");
+			if (row) row.classList.toggle("mc-sel");
+		});
+
+		function setThread(list) {
+			thread = list;
+			byId = {};
+			list.forEach(function (m) { byId[m.id] = m; });
+		}
+		// Where the news starts: the first of the last so many that came
+		function firstUnread(u) {
+			for (var i = thread.length - 1, n = 0; i >= 0 && u > 0; i--)
+				if (!thread[i].out && ++n === u) return thread[i].id;
+			return 0;
+		}
+		function dayEl(t) { return el("div", { class: "mc-day", role: "separator" }, el("span", { text: mcDay(t) })); }
+		function appendMsg(m, prev) {
+			if (!prev || !mcSameDay(prev.ts, m.ts)) threadBody.appendChild(dayEl(m.ts));
+			if (m.id === unreadFrom) threadBody.appendChild(el("div", { class: "mc-newline", role: "separator", "aria-label": "New messages" }, el("span", { text: "New" })));
+			shown[m.id] = threadBody.appendChild(msgEl(m, startsGroup(prev, m)));
+		}
+		function renderThread() {
+			clear(threadBody);
+			shown = {};
+			threadBody.appendChild(more ? el("div", { class: "mc-older muted", text: "Older messages, as you scroll up…" }) : startEl());
+			if (!thread.length) threadBody.appendChild(el("div", { class: "mc-none muted", text: "No messages yet." }));
+			var prev = null;
+			thread.forEach(function (m) { appendMsg(m, prev); prev = m; });
+		}
+		function nearBottom() { return threadBody.scrollHeight - threadBody.scrollTop - threadBody.clientHeight < 90; }
+		function toBottom() {
+			threadBody.scrollTop = threadBody.scrollHeight;
+			newBelow = 0;
+			jumpBtn.hidden = true;
+			jumpWas = "";
+		}
+		function showJump() {
+			var label = newBelow ? newBelow + " new message" + (newBelow === 1 ? "" : "s") : "Jump to the newest";
+			if (label === jumpWas && !jumpBtn.hidden) return;
+			jumpWas = label;
+			clear(jumpBtn).appendChild(document.createTextNode(label + " "));
+			jumpBtn.appendChild(mcIcon("down"));
+			jumpBtn.classList.toggle("news", newBelow > 0);
+			jumpBtn.hidden = false;
+		}
+		threadBody.addEventListener("scroll", function () {
+			if (threadBody.scrollTop < 240 && more && !loadingOlder) loadOlder();
+			if (nearBottom()) { newBelow = 0; jumpBtn.hidden = true; jumpWas = ""; }
+			else if (newBelow || threadBody.scrollHeight - threadBody.scrollTop - threadBody.clientHeight > threadBody.clientHeight * 1.5) showJump();
+		});
+		// Older messages, a page at a time, as Discord fetches them: kept where you were
+		function loadOlder() {
+			if (!more || loadingOlder || !thread.length) return Promise.resolve(false);
+			loadingOlder = true;
+			var conv = open;
+			return call("pirate.meshcore", "messages", { conv: conv, before: thread[0].id, limit: 100 }).then(function (r) {
+				loadingOlder = false;
+				if (!alive() || !isOpen(conv)) return false;
+				var older = r.messages || [], h = threadBody.scrollHeight, top = threadBody.scrollTop;
+				setThread(older.concat(thread));
+				more = !!r.more && older.length > 0;
+				renderThread();
+				threadBody.scrollTop = threadBody.scrollHeight - h + top;
+				return older.length > 0;
+			}, function () { loadingOlder = false; return false; });
+		}
 		// Into the open thread: a new one at the end (under its day), a changed
 		// one (its delivery) where it is
 		function placeMsg(m) {
-			var i, at = -1, node;
-			for (i = thread.length - 1; i >= 0 && at < 0; i--) if (thread[i].id === m.id) at = i;
-			if (at >= 0) {
-				thread[at] = m;
-				node = msgEl(m, startsGroup(thread[at - 1], m));
-				threadBody.replaceChild(node, shown[m.id]);
+			var old = byId[m.id], node;
+			if (old) {
+				var i = thread.indexOf(old);
+				thread[i] = m;
+				byId[m.id] = m;
+				node = msgEl(m, startsGroup(thread[i - 1], m));
+				if (shown[m.id]) threadBody.replaceChild(node, shown[m.id]);
 				shown[m.id] = node;
 				return;
 			}
-			var prev = thread[thread.length - 1];
-			var near = threadBody.scrollHeight - threadBody.scrollTop - threadBody.clientHeight < 60;
-			if (!prev) clear(threadBody);
-			if (!prev || !mcSameDay(prev.ts, m.ts))
-				threadBody.appendChild(el("div", { class: "mc-day", role: "separator" }, el("span", { text: mcDay(m.ts) })));
+			var near = nearBottom(), prev = thread[thread.length - 1];
 			thread.push(m);
-			shown[m.id] = threadBody.appendChild(msgEl(m, startsGroup(prev, m)));
-			if (near || m.out) threadBody.scrollTop = threadBody.scrollHeight;
+			byId[m.id] = m;
+			if (!prev) renderThread(); else appendMsg(m, prev);
+			if (near || m.out) toBottom();
+			else { newBelow++; showJump(); }
 		}
 		function openConv(conv) {
 			if (conv !== open) cancelReply();
-			open = conv;
-			shown = {}; thread = [];
-			showList();
-			clear(threadHead);
-			var c = contacts.filter(function (x) { return x.conv === conv; })[0];
-			threadHead.appendChild(el("button", { type: "button", class: "linkbtn mc-back", text: "← all", onclick: function () {
-				chat.classList.remove("mc-open");
-			} }));
-			threadHead.appendChild(c ? mcFace(c.name, false, "sm") : mcTile(convName(conv), "sm"));
-			threadHead.appendChild(el("strong", { text: convName(conv) }));
-			if (c) threadHead.appendChild(el("span", { class: "muted", text: c.flood ? "no route yet: messages go out to the whole mesh" : c.hops ? c.hops + " hop" + (c.hops === 1 ? "" : "s") : "direct" }));
-			input.placeholder = "Message " + convName(conv);
-			chat.classList.add("mc-open");
-			clear(threadBody).appendChild(el("div", { class: "muted mc-none", text: "Loading…" }));
-			call("pirate.meshcore", "messages", { conv: conv, limit: 100 }).then(function (r) {
-				if (!alive() || open !== conv) return;
-				clear(threadBody);
-				shown = {}; thread = [];
-				var list = r.messages || [];
-				if (!list.length) threadBody.appendChild(el("div", { class: "muted mc-none", text: "No messages yet." }));
-				list.forEach(placeMsg);
-				threadBody.scrollTop = threadBody.scrollHeight;
+			var c = chanOf(conv) || contactOf(conv), u = (c && c.unread) || 0;
+			mode = "thread"; page = null; open = conv;
+			if (search.value) search.value = "";
+			app.classList.add("mc-open");
+			showMain("thread");
+			renderSide();
+			showMe();
+			showThreadHead();
+			var ch = chanOf(conv);
+			input.placeholder = "Message " + (ch ? (mcChanKind(ch) === "private" ? "" : "#") + mcChanLabel(ch) : convName(conv));
+			setThread([]);
+			shown = {}; more = false; unreadFrom = 0; newBelow = 0;
+			jumpBtn.hidden = true; jumpWas = "";
+			line(sendStatus, "");
+			clear(threadBody).appendChild(el("div", { class: "mc-none muted", text: "Loading…" }));
+			call("pirate.meshcore", "messages", { conv: conv, limit: Math.min(200, Math.max(100, u + 30)) }).then(function (r) {
+				if (!alive() || !isOpen(conv)) return;
+				setThread(r.messages || []);
+				more = !!r.more;
+				unreadFrom = firstUnread(u);
+				renderThread();
+				// To where the news starts, if that's up a way; else the newest
+				var d = unreadFrom && threadBody.querySelector(".mc-newline");
+				if (d && threadBody.scrollHeight - d.offsetTop > threadBody.clientHeight) threadBody.scrollTop = Math.max(0, d.offsetTop - 80);
+				else toBottom();
+				if (threadBody.scrollHeight <= threadBody.clientHeight && more) loadOlder();
 				markRead();
 			}).catch(function (e) { if (!failed(e)) clear(threadBody).appendChild(warnEl(e)); });
 			updateCount();
-			input.focus();
+			if (!TOUCH) input.focus();
 		}
 		// The open conversation is read: on the router too, when it had news
 		function markRead(force) {
-			if (!open) return;
-			var c = channels.concat(contacts).filter(function (x) { return x.conv === open; })[0];
+			if (mode !== "thread" || !open || document.hidden) return;
+			var c = chanOf(open) || contactOf(open);
 			if (force || (c && c.unread)) {
 				if (c) c.unread = 0;
-				showList();
+				renderSide();
 				call("pirate.meshcore", "read", { conv: open }).catch(function () {});
 			}
 		}
 		function send() {
 			var text = input.value.trim(), to = open;
-			if (!to || !text) return;
+			if (!to || !text || mode !== "thread") return;
 			sendBtn.disabled = true;
 			line(sendStatus, "");
 			var p = { to: to, text: text };
@@ -2411,6 +2920,7 @@
 			call("pirate.meshcore", "send", p).then(function (r) {
 				if (r.error) { line(sendStatus, r.error, "err"); updateCount(); return; }
 				input.value = "";
+				grow();
 				cancelReply();
 				updateCount();
 				poll();
@@ -2423,79 +2933,26 @@
 			}).catch(function (e) { if (!failed(e)) line(sendStatus, String(e.message || e), "err"); });
 		}
 
-		/* Channels and contacts */
-		function showChannels() {
-			clear(chanWrap);
-			chanWrap.appendChild(tableEl(["Channel", "Slot", "Key", ""], channels.map(function (c) {
-				var key = el("code", { class: "mc-key", text: "••••••••" });
-				var showing = false;
-				return [el("strong", { text: c.name }), String(c.index),
-					el("span", {}, key, " ", el("button", { type: "button", class: "linkbtn", text: "show", onclick: function () {
-						showing = !showing;
-						key.textContent = showing ? c.secret : "••••••••";
-						this.textContent = showing ? "hide" : "show";
-					} })),
-					btn("Remove", { cls: "small reset", onclick: function () { removeChannel(c); } })];
-			})));
-		}
-		function addChannel() {
-			var n = chName.value.trim(), k = chKey.value.trim().toLowerCase();
-			if (!n) return line(chStatus, "give it a name", "err");
-			if (k && !/^[0-9a-f]{32}$/.test(k)) return line(chStatus, "a key is 32 hex digits", "err");
-			if (freeSlot == null) return line(chStatus, "the radio's channel slots are all taken: remove one first", "err");
-			line(chStatus, "adding…");
-			call("pirate.meshcore", "channel_set", { index: freeSlot, name: n, secret: k || undefined }).then(function (r) {
-				if (r.error) return line(chStatus, r.error, "err");
-				chName.value = chKey.value = "";
-				line(chStatus, "added: " + n, "ok-text");
-				setTimeout(refreshAll, 600);
-			}).catch(function (e) { if (!failed(e)) line(chStatus, String(e.message || e), "err"); });
-		}
-		function removeChannel(c) {
-			if (!window.confirm("Remove the channel " + c.name + "? Its messages here stay; the radio forgets its key.")) return;
-			call("pirate.meshcore", "channel_set", { index: c.index, name: "" }).then(function (r) {
-				if (r.error) return line(chStatus, r.error, "err");
-				if (open === c.conv) open = null;
-				setTimeout(refreshAll, 600);
-			}).catch(function (e) { if (!failed(e)) line(chStatus, String(e.message || e), "err"); });
-		}
-		function showContacts() {
-			clear(conWrap);
-			if (!contacts.length) { conWrap.appendChild(el("div", { class: "placeholder", text: "No contacts yet." })); return; }
-			conWrap.appendChild(tableEl(["Name", "Kind", "Route", "Last advert", ""], contacts.map(function (c) {
-				return [el("span", { class: "mc-tname" }, c.type === "chat" ? mcFace(c.name, false, "xs") : mcTile(c.name, "xs"), el("strong", { text: c.name })),
-					c.type, c.flood ? "none yet" : c.hops ? c.hops + " hop" + (c.hops === 1 ? "" : "s") : "direct",
-					c.last_advert ? mcTime(c.last_advert) : "—",
-					el("span", { class: "fz-acts" },
-						c.flood ? null : btn("Forget route", { cls: "small", onclick: function () { contactOp("contact_reset_path", c); } }),
-						btn("Remove", { cls: "small reset", onclick: function () {
-							if (window.confirm("Remove " + c.name + " from the radio's contacts? An advert from them adds them back.")) contactOp("contact_remove", c);
-						} }))];
-			})));
-		}
-		function contactOp(method, c) {
-			call("pirate.meshcore", method, { key: c.key }).then(function (r) {
-				if (r.error) window.alert(r.error);
-				refreshAll();
-			}).catch(function (e) { if (!failed(e)) window.alert(String(e.message || e)); });
-		}
-
 		/* Keeping up: everything, then what changed every few seconds */
 		function refreshAll() {
 			return call("pirate.meshcore", "status").then(function (s) {
 				if (!alive()) return;
-				showDevice(s);
+				st = s;
 				seq = Math.max(seq, s.seq || 0);
-				if (s.state !== "ready") return;
+				showMe();
+				if (s.state !== "ready") { showNote(s); return; }
 				return refreshLists().then(function () {
-					// On a phone, the list first; beside it, the first channel
-					if (alive() && !open && channels.length && window.innerWidth > 860) openConv(channels[0].conv);
+					if (!alive()) return;
+					if (mode === null || mode === "note") openFirst();
+					else if (mode === "page" && page === "radio") renderRadio();
+					else if (mode === "thread") { showThreadHead(); updateCount(); }
 				});
 			}).catch(function (e) {
-				if (failed(e)) return;
-				clear(devWrap).appendChild(alertEl("warn", String(e.message || e) === "ubus status 4"
-					? "The MeshCore service isn't running on this router (pirate-meshcore)." : String(e.message || e)));
-				chat.hidden = true; chanPanel.hidden = conPanel.hidden = true;
+				if (failed(e) || !alive()) return;
+				st = null;
+				showMe();
+				showNote(null, String(e.message || e) === "ubus status 4"
+					? "The MeshCore service isn't running on this router (pirate-meshcore)." : String(e.message || e));
 			});
 		}
 		function poll() {
@@ -2510,13 +2967,13 @@
 		// New and changed messages: the open thread's shown, the others'
 		// counted afresh (the lists come again, with their unread)
 		function catchUp(p) {
-			var msgs = p.messages || [], elsewhere = false;
-			if (p.truncated && open) return openConv(open);
+			var msgs = p.messages || [], elsewhere = false, here = false;
+			if (p.truncated && mode === "thread") return openConv(open);
 			msgs.forEach(function (m) {
-				if (m.conv === open) placeMsg(m);
+				if (isOpen(m.conv)) { placeMsg(m); if (!m.out) here = true; }
 				else if (!m.out) elsewhere = true;
 			});
-			if (msgs.some(function (m) { return m.conv === open && !m.out; })) markRead(true);
+			if (here) markRead(true);
 			if (elsewhere) refreshLists();
 		}
 		function refreshLists() {
@@ -2525,13 +2982,16 @@
 				contacts = r[0].contacts || [];
 				channels = r[1].channels || [];
 				freeSlot = r[1].free != null ? r[1].free : null;
-				showList(); showChannels(); showContacts();
+				if (mode === "thread" && open) { var c = chanOf(open) || contactOf(open); if (c && !document.hidden) c.unread = 0; }
+				renderSide();
+				if (contactsFill) contactsFill();
 			}).catch(function () {});
 		}
 		function loop() {
 			if (!alive()) { timer = null; return; }
 			poll().then(function () { timer = setTimeout(loop, 3000); });
 		}
+		showMe();
 		updateCount();
 		refreshAll().then(function () { timer = setTimeout(loop, 3000); });
 	}
@@ -3917,6 +4377,7 @@
 	function setTab(id) {
 		id = ALIASES[id] || id;
 		current = id;
+		VIEW.classList.remove("view-app");   // the Messenger's: the whole window
 		renderTabs();
 		try { location.hash = id; } catch (e) {}
 		if (id === "dashboard") return loadDashboard();
