@@ -412,6 +412,12 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   decoder yet: they say so. MCO Advanced's other kinds of channel data
   (its compressed text, MCMP and MCOtxt) show as the placeholder MCO
   Advanced shows for a kind it can't read.
+- **MeshMapper's wardriving pings** (in #wardriving: `MM:` and a
+  10-character tag), shown as pings, each with how it was heard (its SNR,
+  its hops). The tag is keyed, so only MeshMapper's server reads it (it
+  names the sender's session and ping, not where they are); a ping sent
+  with its sender's position (`MM:tag:lat,lon`, MeshMapper's "Broadcast My
+  Coordinates") shows that, how far from you, and a map.
 - **Channels** (# for public and #hashtag ones, a lock for private ones):
   add a #hashtag one (its key comes from its name), a private one (a random
   key) or one whose key you were given; a channel's gear shows its key, to

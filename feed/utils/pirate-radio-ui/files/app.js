@@ -123,7 +123,8 @@
 			],
 			channels: [
 				{ index: 0, conv: "#0", name: "Public", secret: "8b3387e9c5cdea6ac9e5edbaa115cd72" },
-				{ index: 1, conv: "#1", name: "#test", secret: "9cd8fcf22a47333b591d96a2b848b73f" }
+				{ index: 1, conv: "#1", name: "#test", secret: "9cd8fcf22a47333b591d96a2b848b73f" },
+				{ index: 4, conv: "#4", name: "#wardriving", secret: "e3c26491e9cd321e3a6be50d57d54acf" }
 			],
 			msgs: []
 		};
@@ -170,6 +171,12 @@
 		var readA = mine("ca1a1a1a1a1a1", "great, hearing it at -92", 1700, "delivered", { trip_ms: 850 }).id;
 		mine("cb0b0b0b0b0b0", "still on for saturday?", 3600, "unconfirmed", { flood: true });
 		said("#1", "Carol", "test from the bridge", 120, 4.25, 3);
+		// MeshMapper's wardriving pings (made-up tags): Bob's, as they come; Kiwi
+		// broadcasting where they are
+		said("#4", "Bob", "MM:Xq3vR7tLpA", 900, -4, 6);
+		said("#4", "Bob", "MM:k2Hd9wQz_m", 840, -7.5, 5);
+		said("#4", "Bob", "MM:fG8sLwP1rB", 780, -10, 7);
+		said("#4", "Kiwi 🇳🇿", "MM:Tn0aY4c-Ue:37.39876,-122.05432", 300, 2.25, 3);
 		mc.read["#0"] = read0;
 		mc.read["ca1a1a1a1a1a1"] = readA;
 		mc.add = add;
@@ -2277,6 +2284,7 @@
 		var t = String(text || "").trim(), only = mcOnlyMedia(t);
 		if (MC_IMG.test(t)) return "Image";
 		if (mcPlaceholder(t)) return "A message this can't read";
+		if (mcMapperPing(t)) return "MeshMapper ping";
 		return only ? (only.gif ? "GIF" : "Image") : null;
 	}
 
@@ -2345,6 +2353,18 @@
 		if (m[1] === "0100") return "A MeshCore Open message in a format this can't read";
 		var kinds = { 1: "an image (MCOimg)", 2: "compressed text (MCMP)", 3: "text (MCOtxt)" };
 		return "MCO Advanced's " + (kinds[m[2]] || "kind " + (m[2] || "?")) + (m[3] != null ? ", version " + m[3] : "") + ", in a form this can't read";
+	}
+	/* MeshMapper's wardriving pings, as its app sends them to #wardriving:
+	   "MM:" and a 10-character tag (its session's and ping's, keyed: only
+	   MeshMapper's server reads it), then ":lat,lon" when its user
+	   broadcasts where they are. Shown as a ping: how it was heard is the news */
+	var MC_MMAP = /^MM:([A-Za-z0-9_-]{10})(?::(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?))?$/;
+	function mcMapperPing(text) {
+		var m = MC_MMAP.exec(String(text || "").trim()), lat, lon;
+		if (!m) return null;
+		lat = +m[2];
+		lon = +m[3];
+		return { tag: m[1], pos: m[2] != null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat: lat, lon: lon } : null };
 	}
 	function mcCount(s, c) { return s.split(c).length - 1; }
 	function mcLinkify(text, media) {
@@ -2975,6 +2995,22 @@
 					el("a", { class: "mc-maplink", href: map, target: "_blank", rel: "noopener noreferrer", text: "Map ↗" })),
 				el("div", { class: "muted mc-cardmeta", text: (d ? distText(d.m) + " " + d.way + " of you · " : "") + from }));
 		}
+		// A MeshMapper ping: said so, how it was heard (a message that heads its
+		// group has that above it), and where it was sent from, if its user shares that
+		function pingEl(p, sig) {
+			var box = el("span", { class: "mc-words mc-ping",
+				title: "A MeshMapper wardriving ping (MM:" + p.tag + "). Its tag is its session's and ping's, keyed: only MeshMapper's server reads it" },
+				el("span", { class: "mc-ping-k", text: "📡 MeshMapper ping" }),
+				sig ? el("span", { class: "mc-sig", text: sig }) : null);
+			if (p.pos) {
+				var mine = myPos(), d = mine ? distance(mine, p.pos) : null, la = p.pos.lat.toFixed(5), lo = p.pos.lon.toFixed(5);
+				box.appendChild(el("span", { class: "mc-ping-pos" },
+					"sent from " + la + ", " + lo + (d ? " (" + distText(d.m) + " " + d.way + " of you)" : ""),
+					el("a", { class: "mc-maplink", href: "https://www.openstreetmap.org/?mlat=" + la + "&mlon=" + lo + "#map=15/" + la + "/" + lo,
+						target: "_blank", rel: "noopener noreferrer", text: "Map ↗" })));
+			}
+			return box;
+		}
 		var TELEM = { voltage: "Battery", percentage: "Battery", temperature: "Temperature", humidity: "Humidity", pressure: "Pressure",
 			altitude: "Altitude", light: "Light", current: "Current", power: "Power", energy: "Energy", distance: "Distance",
 			concentration: "Concentration", direction: "Heading", frequency: "Frequency" };
@@ -3276,8 +3312,10 @@
 			// only an image: the image, its link back if it won't load)
 			var words = men ? " " + men.rest : rep ? plain(m.text) : m.text, media = [], only = mcOnlyMedia(words);
 			var trimmed = String(words).trim(), mco = MC_IMG.test(trimmed) ? trimmed : null, ph = mcPlaceholder(trimmed), wordsEl;
+			var ping = !men && !rep && !mco && !ph ? mcMapperPing(trimmed) : null;
 			if (ph) wordsEl = el("span", { class: "mc-words mc-ph", text: ph });
 			else if (mco) wordsEl = el("span", { class: "mc-words mc-hide" });
+			else if (ping) wordsEl = pingEl(ping, head ? "" : sig);
 			else wordsEl = el("span", { class: "mc-words" + (only ? " mc-hide" : "") }, mcLinkify(words, media));
 			if (!ph && !mco && only && !media.length) {
 				// meshcore-open's "g:ID": its page's link, should the GIF not load
@@ -3289,7 +3327,7 @@
 				men ? el("span", { class: "mc-mention" + (men.me ? " me" : ""), "data-mention": men.name, role: "button", tabindex: "0", text: "@" + men.name }) : null,
 				wordsEl,
 				m.out ? statusEl(m) : null,
-				!head && sig ? el("span", { class: "mc-sig mc-hover", text: sig }) : null));
+				!head && sig && !ping ? el("span", { class: "mc-sig mc-hover", text: sig }) : null));
 			if (media.length) {
 				var embeds = el("div", { class: "mc-embeds" });
 				media.forEach(function (x) { embeds.appendChild(mcEmbed(x, function () { wordsEl.classList.remove("mc-hide"); })); });
