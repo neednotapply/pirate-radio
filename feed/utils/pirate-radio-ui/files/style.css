@@ -118,8 +118,11 @@ body {
 	min-height: 46px;
 	padding: 12px 28px 0;
 }
+/* The sidebar's button, at any width: on a wide screen it shrinks the
+   sidebar away and back; on a phone it opens the drawer */
 .menu-btn {
-	display: none;
+	display: inline-grid;
+	flex: none;
 	appearance: none;
 	place-items: center;
 	width: 36px;
@@ -135,6 +138,11 @@ body {
 .top-title { display: none; font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
 .scrim { display: none; }
+@media (min-width: 861px) {
+	.side-shut .shell { grid-template-columns: minmax(0, 1fr); }
+	.side-shut .side { display: none; }
+	.side-shut .top-title { display: block; }
+}
 
 /* ---- pills & badges ---- */
 .pill {
@@ -494,7 +502,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .view.view-app { max-width: none; padding: 4px 16px 16px; }
 .mc-app {
 	display: grid; grid-template-columns: 268px minmax(0, 1fr);
-	height: calc(100vh - 66px); height: calc(100dvh - 66px); min-height: 420px;
+	height: calc(100vh - 68px); height: calc(100dvh - 68px); min-height: 420px;
 	border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--panel);
 }
 .mc-ic { display: inline-grid; place-items: center; flex: none; line-height: 0; }
