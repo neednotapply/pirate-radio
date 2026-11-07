@@ -5068,31 +5068,18 @@
 		$("top-title").textContent = here;
 	}
 
-	// On a phone the sidebar is a drawer, opened from the strip at the top;
-	// on a wide screen the same button shrinks it away and back, as asked
-	// last time (kept in this browser)
-	var NARROW = window.matchMedia ? window.matchMedia("(max-width: 860px)") : { matches: false };
+	// The sections: a drawer at any width, opened from the strip at the top,
+	// over the page (which stays as it is); a section chosen, a click beside
+	// it or Escape puts it away
 	function menu(open) {
 		document.body.classList.toggle("menu-open", open);
-		if (NARROW.matches) $("menu-btn").setAttribute("aria-expanded", open ? "true" : "false");
+		$("menu-btn").setAttribute("aria-expanded", open ? "true" : "false");
 	}
-	function sideShut(shut) {
-		document.body.classList.toggle("side-shut", shut);
-		try { localStorage.setItem("pirate_side_shut", shut ? "1" : "0"); } catch (e) {}
-		sideLabel();
-	}
-	function sideLabel() {
-		var b = $("menu-btn"), open = NARROW.matches ? document.body.classList.contains("menu-open") : !document.body.classList.contains("side-shut");
-		b.setAttribute("aria-expanded", open ? "true" : "false");
-		b.title = NARROW.matches ? "Sections" : open ? "Shrink the sidebar away" : "Bring the sidebar back";
-	}
-	try { if (localStorage.getItem("pirate_side_shut") === "1") document.body.classList.add("side-shut"); } catch (e) {}
-	sideLabel();
-	if (NARROW.addEventListener) NARROW.addEventListener("change", sideLabel);
+	$("menu-btn").title = "Sections";
+	// (What shrank the docked sidebar, kept in this browser, is no more)
+	try { localStorage.removeItem("pirate_side_shut"); } catch (e) {}
 	$("menu-btn").addEventListener("click", function () {
-		if (NARROW.matches) menu(!document.body.classList.contains("menu-open"));
-		else sideShut(!document.body.classList.contains("side-shut"));
-		sideLabel();
+		menu(!document.body.classList.contains("menu-open"));
 	});
 	$("scrim").addEventListener("click", function () { menu(false); });
 	document.addEventListener("keydown", function (ev) {

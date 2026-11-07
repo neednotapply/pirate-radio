@@ -28,7 +28,6 @@
 	--mono: ui-monospace, "Cascadia Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 	--sans: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
 	--r: 2px;
-	--side-w: 216px;
 	color-scheme: dark;
 }
 
@@ -52,22 +51,27 @@ body {
 
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-/* ---- the shell: sidebar and main column ---- */
-.shell {
-	display: grid;
-	grid-template-columns: var(--side-w) minmax(0, 1fr);
-	min-height: 100vh;
-}
+/* ---- the shell: the page, and the sections in a drawer over it ---- */
+.shell { min-height: 100vh; }
+/* The sections: a drawer, at any width, that slides in over the page (and
+   leaves it as it is) from the strip at the top, and away again */
 .side {
-	position: sticky;
-	top: 0;
-	height: 100vh;
+	position: fixed;
+	top: 0; bottom: 0; left: 0;
+	z-index: 30;
+	width: min(264px, 84vw);
 	overflow-y: auto;
 	background: var(--side);
 	border-right: 1px solid var(--line);
 	padding: 18px 0 28px;
 	scrollbar-width: thin;
+	transform: translateX(-100%);
+	visibility: hidden;
+	transition: transform .18s ease-out, visibility 0s linear .18s;
 }
+.menu-open .side { transform: none; visibility: visible; transition: transform .18s ease-out; box-shadow: 8px 0 24px rgba(0, 0, 0, .35); }
+.scrim { display: none; position: fixed; inset: 0; z-index: 25; background: rgba(0, 0, 0, .55); }
+.menu-open .scrim { display: block; }
 .main-col { min-width: 0; }
 
 .brand { display: flex; align-items: center; gap: 10px; padding: 0 18px 14px; min-width: 0; }
@@ -110,16 +114,19 @@ body {
 .nav-item.active { background: var(--panel-2); color: var(--hi); box-shadow: inset 2px 0 0 var(--accent); }
 .nav-item:focus-visible { outline-offset: -2px; }
 
-/* ---- the strip above each page ---- */
+/* ---- the strip above each page: the drawer's button, where you are ---- */
 .topbar {
+	position: sticky;
+	top: 0;
+	z-index: 10;
 	display: flex;
 	align-items: center;
 	gap: 10px;
-	min-height: 46px;
-	padding: 12px 28px 0;
+	padding: 6px 28px;
+	background: var(--side);
+	border-bottom: 1px solid var(--line);
 }
-/* The sidebar's button, at any width: on a wide screen it shrinks the
-   sidebar away and back; on a phone it opens the drawer */
+/* The drawer's button */
 .menu-btn {
 	display: inline-grid;
 	flex: none;
@@ -135,14 +142,8 @@ body {
 	cursor: pointer;
 }
 .menu-btn:hover { border-color: var(--line-3); color: var(--hi); }
-.top-title { display: none; font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.top-title { font-weight: 600; color: var(--hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .top-right { margin-left: auto; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.scrim { display: none; }
-@media (min-width: 861px) {
-	.side-shut .shell { grid-template-columns: minmax(0, 1fr); }
-	.side-shut .side { display: none; }
-	.side-shut .top-title { display: block; }
-}
 
 /* ---- pills & badges ---- */
 .pill {
@@ -502,7 +503,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .view.view-app { max-width: none; padding: 4px 16px 16px; }
 .mc-app {
 	display: grid; grid-template-columns: 268px minmax(0, 1fr);
-	height: calc(100vh - 68px); height: calc(100dvh - 68px); min-height: 420px;
+	height: calc(100vh - 69px); height: calc(100dvh - 69px); min-height: 420px;
 	border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; background: var(--panel);
 }
 .mc-ic { display: inline-grid; place-items: center; flex: none; line-height: 0; }
@@ -905,32 +906,10 @@ a { color: var(--link); }
 .fz-back { grid-column: 4; grid-row: 3; }
 .fz-acts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
-/* ---- a phone: the sidebar becomes a drawer ---- */
+/* ---- a phone: everything closer in, the Messenger one column ---- */
 @media (max-width: 860px) {
-	.shell { display: block; }
-	.side {
-		position: fixed;
-		top: 0; bottom: 0; left: 0;
-		width: min(264px, 84vw);
-		height: auto;
-		z-index: 30;
-		transform: translateX(-100%);
-		visibility: hidden;
-		transition: transform .18s ease-out, visibility 0s linear .18s;
-	}
-	.menu-open .side { transform: none; visibility: visible; transition: transform .18s ease-out; }
-	.scrim { position: fixed; inset: 0; z-index: 25; background: rgba(0, 0, 0, .55); }
-	.menu-open .scrim { display: block; }
-	.topbar {
-		position: sticky;
-		top: 0;
-		z-index: 10;
-		padding: 6px 12px;
-		background: var(--side);
-		border-bottom: 1px solid var(--line);
-	}
-	.menu-btn { display: inline-grid; flex: none; }
-	.top-title { display: block; flex-shrink: 0; max-width: 40vw; }
+	.topbar { padding: 6px 12px; }
+	.top-title { flex-shrink: 0; max-width: 40vw; }
 	.top-right .pill { max-width: 46vw; }
 	.view { padding: 16px 16px 48px; }
 	.view-head h2 { font-size: 20px; }
