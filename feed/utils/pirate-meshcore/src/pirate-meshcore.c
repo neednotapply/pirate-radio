@@ -82,22 +82,27 @@
 enum {
 	CMD_APP_START = 1, CMD_SEND_TXT_MSG = 2, CMD_SEND_CHANNEL_TXT_MSG = 3, CMD_GET_CONTACTS = 4,
 	CMD_SET_DEVICE_TIME = 6, CMD_SEND_SELF_ADVERT = 7, CMD_SET_ADVERT_NAME = 8,
-	CMD_ADD_UPDATE_CONTACT = 9, CMD_SYNC_NEXT_MESSAGE = 10, CMD_RESET_PATH = 13, CMD_REMOVE_CONTACT = 15,
-	CMD_GET_BATT_AND_STORAGE = 20, CMD_DEVICE_QUERY = 22, CMD_GET_CHANNEL = 31,
-	CMD_SET_CHANNEL = 32, CMD_SEND_TRACE_PATH = 36, CMD_SEND_TELEMETRY_REQ = 39,
-	CMD_GET_CUSTOM_VARS = 40, CMD_SET_CUSTOM_VAR = 41, CMD_SEND_PATH_DISCOVERY_REQ = 52,
+	CMD_ADD_UPDATE_CONTACT = 9, CMD_SYNC_NEXT_MESSAGE = 10, CMD_SET_RADIO_PARAMS = 11,
+	CMD_SET_RADIO_TX_POWER = 12, CMD_RESET_PATH = 13, CMD_SET_ADVERT_LATLON = 14, CMD_REMOVE_CONTACT = 15,
+	CMD_REBOOT = 19, CMD_GET_BATT_AND_STORAGE = 20, CMD_SET_TUNING_PARAMS = 21, CMD_DEVICE_QUERY = 22,
+	CMD_SEND_LOGIN = 26, CMD_SEND_STATUS_REQ = 27, CMD_LOGOUT = 29, CMD_GET_CHANNEL = 31,
+	CMD_SET_CHANNEL = 32, CMD_SEND_TRACE_PATH = 36, CMD_SET_OTHER_PARAMS = 38, CMD_SEND_TELEMETRY_REQ = 39,
+	CMD_GET_CUSTOM_VARS = 40, CMD_SET_CUSTOM_VAR = 41, CMD_GET_TUNING_PARAMS = 43,
+	CMD_SEND_PATH_DISCOVERY_REQ = 52, CMD_GET_STATS = 56, CMD_SET_AUTOADD_CONFIG = 58,
+	CMD_GET_AUTOADD_CONFIG = 59, CMD_RUN_CLI_COMMAND = 66,
 };
 /* Answers */
 enum {
 	RESP_OK = 0, RESP_ERR = 1, RESP_CONTACTS_START = 2, RESP_CONTACT = 3, RESP_END_OF_CONTACTS = 4,
 	RESP_SELF_INFO = 5, RESP_SENT = 6, RESP_CONTACT_MSG = 7, RESP_CHANNEL_MSG = 8,
 	RESP_NO_MORE_MESSAGES = 10, RESP_BATT = 12, RESP_DEVICE_INFO = 13, RESP_CONTACT_MSG_V3 = 16,
-	RESP_CHANNEL_MSG_V3 = 17, RESP_CHANNEL_INFO = 18, RESP_CUSTOM_VARS = 21, RESP_CHANNEL_DATA = 27,
+	RESP_CHANNEL_MSG_V3 = 17, RESP_CHANNEL_INFO = 18, RESP_CUSTOM_VARS = 21, RESP_TUNING = 23,
+	RESP_STATS = 24, RESP_AUTOADD = 25, RESP_CHANNEL_DATA = 27, RESP_CLI_REPLY = 29,
 };
 /* News */
 enum {
 	PUSH_ADVERT = 0x80, PUSH_PATH_UPDATED = 0x81, PUSH_SEND_CONFIRMED = 0x82, PUSH_MSG_WAITING = 0x83,
-	PUSH_TRACE_DATA = 0x89, PUSH_NEW_ADVERT = 0x8a, PUSH_TELEMETRY = 0x8b, PUSH_PATH_DISCOVERY = 0x8d,
+	PUSH_LOGIN_OK = 0x85, PUSH_LOGIN_FAIL = 0x86, PUSH_STATUS = 0x87, PUSH_LOG_RX = 0x88, PUSH_TRACE_DATA = 0x89, PUSH_NEW_ADVERT = 0x8a, PUSH_TELEMETRY = 0x8b, PUSH_PATH_DISCOVERY = 0x8d,
 	PUSH_CONTACT_DELETED = 0x8f, PUSH_CONTACTS_FULL = 0x90,
 };
 
@@ -137,6 +142,7 @@ static void buf_drop(struct buf *b, size_t n)
 
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static void wr32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+static uint16_t rd16(const uint8_t *p) { return p[0] | p[1] << 8; }
 
 static void hex(char *out, const uint8_t *p, size_t n)
 {
@@ -274,14 +280,17 @@ enum state { ST_ABSENT, ST_CONNECTING, ST_READY };
 
 enum op_kind {
 	OP_QUERY, OP_APPSTART, OP_TIME, OP_CONTACTS, OP_CHANNEL, OP_VARS, OP_BATT, OP_SYNC,
-	OP_SEND, OP_SEND_CH, OP_ADVERT, OP_NAME, OP_SETVAR, OP_SETCH, OP_REMOVE, OP_RESETPATH,
-	OP_TRACE, OP_DISCOVER, OP_TELEM, OP_SETCONTACT,
+	OP_SEND, OP_SEND_CH, OP_ADVERT, OP_NAME, OP_SETVAR, OP_SETPARAMS, OP_SETCH, OP_REMOVE, OP_RESETPATH,
+	OP_TRACE, OP_DISCOVER, OP_TELEM, OP_SETCONTACT, OP_SETRADIO, OP_SETTX, OP_SETPOS, OP_SETTUNING,
+	OP_GETTUNING, OP_SETAUTOADD, OP_GETAUTOADD, OP_STATS, OP_CLI, OP_REBOOT, OP_LOGIN, OP_STATUSREQ,
+	OP_SENDCLI, OP_LOGOUT,
 };
 
 /* A request whose answer comes later, as news: a trace (matched by its
- * tag), a route found or a contact's telemetry (by the contact's key); the
- * ubus call waits for it, or for its time to run out */
-enum ask_kind { ASK_TRACE, ASK_DISCOVER, ASK_TELEM };
+ * tag), a route found, a contact's telemetry, a login, a repeater's status
+ * or its command line's answer (by the contact's key); the ubus call waits
+ * for it, or for its time to run out */
+enum ask_kind { ASK_TRACE, ASK_DISCOVER, ASK_TELEM, ASK_LOGIN, ASK_STATUS, ASK_CLI };
 struct ask {
 	bool used;
 	enum ask_kind kind;
@@ -337,6 +346,28 @@ static struct {
 	uint32_t freq, bw;
 	char name[MAX_NAME + 1];
 } self;
+/* Its tuning (in thousandths, as it gives them) and how it adds contacts:
+ * asked for when it's ready, kept as it answers or as we set them */
+static struct {
+	bool have;
+	uint32_t rx_delay, airtime;
+} tuning;
+static struct {
+	bool have;
+	uint8_t config;       /* bits: 0 make room (overwrite the oldest), 1 chat, 2 repeater, 3 room, 4 sensor */
+	uint8_t max_hops;     /* 0 any distance; n: heard over up to n - 1 hops */
+} autoadd;
+/* How it's doing, as it last said (MeshCore's stats, three kinds) */
+static struct {
+	bool core, radio, pkts;
+	uint16_t batt_mv, err_flags;
+	uint32_t uptime;
+	uint8_t queue;
+	int16_t noise;
+	int8_t rssi, snr4;
+	uint32_t tx_air, rx_air;
+	uint32_t recv, sent, sent_flood, sent_direct, recv_flood, recv_direct, recv_errors;
+} stats;
 static struct {
 	bool have;
 	unsigned mv;
@@ -362,6 +393,31 @@ static unsigned store_lines;
 static void out_flush(void);
 static void op_next(void);
 static void dev_fail(const char *why);
+static void on_cli_reply(const uint8_t *key6, const uint8_t *text, size_t len);
+
+/* A command line's answers nobody waited for (late, or to another app's
+ * command): kept a while, for the terminal */
+#define MAX_CLI_LOG 16
+struct cli_entry {
+	uint32_t id, rx;
+	uint8_t key[6];
+	char text[MAX_TEXT + 1];
+};
+static struct cli_entry cli_log[MAX_CLI_LOG];
+static uint32_t cli_seq;
+
+/* The packets it hears, raw, as it tells them (each with its SNR and
+ * RSSI): the last few hundred, for the packet log. Not news to the page's
+ * messages: their own count */
+#define MAX_PKTS 256
+struct pkt {
+	uint32_t id, rx;
+	int8_t snr4, rssi;
+	uint8_t len;
+	uint8_t raw[MAX_FRAME];
+};
+static struct pkt pkts[MAX_PKTS];
+static uint32_t pkt_seq;
 
 static int64_t now_ms(void)
 {
@@ -1164,12 +1220,28 @@ static void op_finish(struct op *o, const char *err)
 	op_next();
 }
 
+/* An answer with something in it, for its call; then on to the next */
+static void op_reply(struct op *o, struct blob_buf *b)
+{
+	if (o->has_req) {
+		ubus_send_reply(UBUS, &o->req, b->head);
+		ubus_complete_deferred_request(UBUS, &o->req, UBUS_STATUS_OK);
+		o->has_req = false;
+	}
+	op_finish(o, NULL);
+}
+
 static void op_next(void)
 {
 	if (cur || fd < 0 || broken || list_empty(&ops))
 		return;
 	cur = list_first_entry(&ops, struct op, list);
 	frame_send(cur->frame, cur->len);
+	/* A restart says nothing back: it's gone, and comes back */
+	if (cur->kind == OP_REBOOT) {
+		op_finish(cur, NULL);
+		return;
+	}
 	uloop_timeout_set(&op_t, OP_TIMEOUT_MS);
 }
 
@@ -1302,6 +1374,12 @@ static void on_message(const uint8_t *f, size_t n)
 		if (n < o + 12)
 			return;
 		txt_type = f[o + 7];
+		if (txt_type == 1) {
+			/* A command line's answer (MeshCore's CLI data): for the
+			 * terminal, not the conversation */
+			on_cli_reply(f + o, f + o + 12, n > o + 12 ? n - o - 12 : 0);
+			return;
+		}
 		c = contact_by_prefix(f + o, 6);
 		m = msg_new();
 		conv_of_key(m->conv, f + o);
@@ -1513,6 +1591,9 @@ static const char *const ask_late[] = {
 	[ASK_TRACE] = "no answer: the trace didn't come back (a repeater on the way may be out of reach)",
 	[ASK_DISCOVER] = "no answer: they didn't reply (out of reach, or not listening)",
 	[ASK_TELEM] = "no answer: they may not share telemetry with you, or be out of reach",
+	[ASK_LOGIN] = "no answer to the login: out of reach, or not listening",
+	[ASK_STATUS] = "no answer: log in first (it may give its status only to those logged in), or it's out of reach",
+	[ASK_CLI] = "no answer to that command (yet): log in as its admin first, or it's out of reach",
 };
 
 static void ask_cb(struct uloop_timeout *t)
@@ -1564,6 +1645,32 @@ static struct ask *ask_find(enum ask_kind kind, uint32_t tag, const uint8_t *key
 		    (key6 ? !memcmp(asks[i].key, key6, 6) : asks[i].tag == tag))
 			return &asks[i];
 	return NULL;
+}
+
+/* A command line's answer: for the call waiting on it, or kept a while */
+static void on_cli_reply(const uint8_t *key6, const uint8_t *text, size_t len)
+{
+	struct ask *a = ask_find(ASK_CLI, 0, key6);
+	struct blob_buf b = { 0 };
+	char r[MAX_TEXT + 1];
+
+	field_str(r, sizeof(r), text, len);
+	if (!a) {
+		int i = cli_seq % MAX_CLI_LOG;
+
+		cli_log[i].id = ++cli_seq;
+		cli_log[i].rx = time(NULL);
+		memcpy(cli_log[i].key, key6, 6);
+		snprintf(cli_log[i].text, sizeof(cli_log[i].text), "%s", r);
+		return;
+	}
+	blob_buf_init(&b, 0);
+	blobmsg_add_u8(&b, "ok", 1);
+	blobmsg_add_u32(&b, "ms", (uint32_t)(now_ms() - a->start));
+	blobmsg_add_string(&b, "reply", r);
+	ask_done(a, &b);
+	blob_buf_free(&b);
+	ask_arm();
 }
 
 /* A route's length in bytes: its hops times their ids' size (0xff: none) */
@@ -1817,6 +1924,181 @@ static void on_telemetry(const uint8_t *f, size_t n)
 	ask_arm();
 }
 
+static void on_stats(const uint8_t *f, size_t n)
+{
+	switch (f[1]) {
+	case 0:
+		if (n >= 11) {
+			stats.batt_mv = rd16(f + 2);
+			stats.uptime = rd32(f + 4);
+			stats.err_flags = rd16(f + 8);
+			stats.queue = f[10];
+			stats.core = true;
+		}
+		break;
+	case 1:
+		if (n >= 14) {
+			stats.noise = (int16_t)rd16(f + 2);
+			stats.rssi = (int8_t)f[4];
+			stats.snr4 = (int8_t)f[5];
+			stats.tx_air = rd32(f + 6);
+			stats.rx_air = rd32(f + 10);
+			stats.radio = true;
+		}
+		break;
+	case 2:
+		if (n >= 30) {
+			stats.recv = rd32(f + 2);
+			stats.sent = rd32(f + 6);
+			stats.sent_flood = rd32(f + 10);
+			stats.sent_direct = rd32(f + 14);
+			stats.recv_flood = rd32(f + 18);
+			stats.recv_direct = rd32(f + 22);
+			stats.recv_errors = rd32(f + 26);
+			stats.pkts = true;
+		}
+		break;
+	}
+}
+
+static void add_stats(struct blob_buf *b)
+{
+	void *t;
+
+	blobmsg_add_u8(b, "ok", 1);
+	if (stats.core) {
+		t = blobmsg_open_table(b, "core");
+		blobmsg_add_u32(b, "battery_mv", stats.batt_mv);
+		blobmsg_add_u32(b, "uptime", stats.uptime);
+		blobmsg_add_u32(b, "errors", stats.err_flags);
+		blobmsg_add_u32(b, "queue", stats.queue);
+		blobmsg_close_table(b, t);
+	}
+	if (stats.radio) {
+		t = blobmsg_open_table(b, "radio");
+		blobmsg_add_u32(b, "noise_floor", (uint32_t)(int32_t)stats.noise);
+		blobmsg_add_u32(b, "last_rssi", (uint32_t)(int32_t)stats.rssi);
+		blobmsg_add_double(b, "last_snr", stats.snr4 / 4.0);
+		blobmsg_add_u32(b, "tx_air", stats.tx_air);
+		blobmsg_add_u32(b, "rx_air", stats.rx_air);
+		blobmsg_close_table(b, t);
+	}
+	if (stats.pkts) {
+		t = blobmsg_open_table(b, "packets");
+		blobmsg_add_u32(b, "received", stats.recv);
+		blobmsg_add_u32(b, "sent", stats.sent);
+		blobmsg_add_u32(b, "sent_flood", stats.sent_flood);
+		blobmsg_add_u32(b, "sent_direct", stats.sent_direct);
+		blobmsg_add_u32(b, "received_flood", stats.recv_flood);
+		blobmsg_add_u32(b, "received_direct", stats.recv_direct);
+		blobmsg_add_u32(b, "receive_errors", stats.recv_errors);
+		blobmsg_close_table(b, t);
+	}
+}
+
+static void stats_reply(struct op *o)
+{
+	struct blob_buf b = { 0 };
+
+	blob_buf_init(&b, 0);
+	add_stats(&b);
+	op_reply(o, &b);
+	blob_buf_free(&b);
+}
+
+/* What it has now, after its command line (where "set ..." changes it) */
+static void settings_refresh(void)
+{
+	static const uint8_t gt[] = { CMD_GET_TUNING_PARAMS }, ga[] = { CMD_GET_AUTOADD_CONFIG },
+		gv[] = { CMD_GET_CUSTOM_VARS };
+	uint8_t fr[19] = { CMD_APP_START };
+
+	memcpy(fr + 8, "PirateRadio", 11);
+	if (!op_queued(OP_APPSTART))
+		op_add1(OP_APPSTART, fr, sizeof(fr));
+	op_add1(OP_GETTUNING, gt, 1);
+	op_add1(OP_GETAUTOADD, ga, 1);
+	op_add1(OP_VARS, gv, 1);
+}
+
+/* A login's answer: taken (as an admin, or with less), or refused */
+static void on_login(const uint8_t *f, size_t n)
+{
+	struct blob_buf b = { 0 };
+	struct ask *a;
+
+	if (n < 8 || !(a = ask_find(ASK_LOGIN, 0, f + 2)))
+		return;
+	if (f[0] == PUSH_LOGIN_FAIL) {
+		ask_fail(a, "it refused the login: a wrong password, or not one it knows");
+		ask_arm();
+		return;
+	}
+	blob_buf_init(&b, 0);
+	blobmsg_add_u8(&b, "ok", 1);
+	blobmsg_add_u32(&b, "ms", (uint32_t)(now_ms() - a->start));
+	blobmsg_add_u8(&b, "admin", f[1] != 0);
+	/* Newer firmware: its permissions, the low two bits a role (0 guest,
+	 * 1 read only, 2 read and write, 3 admin) */
+	if (n >= 13)
+		blobmsg_add_u32(&b, "role", f[12] & 3);
+	if (n >= 14)
+		blobmsg_add_u32(&b, "firmware_level", f[13]);
+	ask_done(a, &b);
+	blob_buf_free(&b);
+	ask_arm();
+}
+
+/* A repeater's (or room's, or sensor's) status: its RepeaterStats, as far
+ * as its firmware's go */
+static void on_remote_status(const uint8_t *f, size_t n)
+{
+	struct blob_buf b = { 0 };
+	const uint8_t *s = f + 8;
+	struct ask *a;
+	size_t l;
+
+	if (n < 8 || !(a = ask_find(ASK_STATUS, 0, f + 2)))
+		return;
+	l = n - 8;
+	blob_buf_init(&b, 0);
+	blobmsg_add_u8(&b, "ok", 1);
+	blobmsg_add_u32(&b, "ms", (uint32_t)(now_ms() - a->start));
+	if (l >= 8) {
+		blobmsg_add_u32(&b, "battery_mv", rd16(s));
+		blobmsg_add_u32(&b, "queue", rd16(s + 2));
+		blobmsg_add_u32(&b, "noise_floor", (uint32_t)(int32_t)(int16_t)rd16(s + 4));
+		blobmsg_add_u32(&b, "last_rssi", (uint32_t)(int32_t)(int16_t)rd16(s + 6));
+	}
+	if (l >= 24) {
+		blobmsg_add_u32(&b, "received", rd32(s + 8));
+		blobmsg_add_u32(&b, "sent", rd32(s + 12));
+		blobmsg_add_u32(&b, "air_secs", rd32(s + 16));
+		blobmsg_add_u32(&b, "uptime", rd32(s + 20));
+	}
+	if (l >= 40) {
+		blobmsg_add_u32(&b, "sent_flood", rd32(s + 24));
+		blobmsg_add_u32(&b, "sent_direct", rd32(s + 28));
+		blobmsg_add_u32(&b, "received_flood", rd32(s + 32));
+		blobmsg_add_u32(&b, "received_direct", rd32(s + 36));
+	}
+	if (l >= 44) {
+		blobmsg_add_u32(&b, "errors", rd16(s + 40));
+		blobmsg_add_double(&b, "last_snr", (int16_t)rd16(s + 42) / 4.0);
+	}
+	if (l >= 48) {
+		blobmsg_add_u32(&b, "direct_dups", rd16(s + 44));
+		blobmsg_add_u32(&b, "flood_dups", rd16(s + 46));
+	}
+	if (l >= 52)
+		blobmsg_add_u32(&b, "rx_air_secs", rd32(s + 48));
+	if (l >= 56)
+		blobmsg_add_u32(&b, "receive_errors", rd32(s + 52));
+	ask_done(a, &b);
+	blob_buf_free(&b);
+	ask_arm();
+}
+
 static void on_push(const uint8_t *f, size_t n)
 {
 	int i;
@@ -1881,6 +2163,25 @@ static void on_push(const uint8_t *f, size_t n)
 	case PUSH_TELEMETRY:
 		on_telemetry(f, n);
 		break;
+	case PUSH_LOGIN_OK:
+	case PUSH_LOGIN_FAIL:
+		on_login(f, n);
+		break;
+	case PUSH_STATUS:
+		on_remote_status(f, n);
+		break;
+	case PUSH_LOG_RX:
+		if (n >= 3) {
+			struct pkt *k = &pkts[pkt_seq % MAX_PKTS];
+
+			k->id = ++pkt_seq;
+			k->rx = time(NULL);
+			k->snr4 = (int8_t)f[1];
+			k->rssi = (int8_t)f[2];
+			k->len = n - 3 > MAX_FRAME ? MAX_FRAME : n - 3;
+			memcpy(k->raw, f + 3, k->len);
+		}
+		break;
 	}
 }
 
@@ -1891,6 +2192,12 @@ static void became_ready(void)
 	state = ST_READY;
 	meta_seq = ++seq;
 	logmsg("%s: ready: %s, %d contacts, %d channels", dev_path, self.name, ncontacts, nchannels);
+	{
+		static const uint8_t gt[] = { CMD_GET_TUNING_PARAMS }, ga[] = { CMD_GET_AUTOADD_CONFIG };
+
+		op_add1(OP_GETTUNING, gt, 1);
+		op_add1(OP_GETAUTOADD, ga, 1);
+	}
 	uloop_timeout_set(&batt_t, BATT_MS);
 	uloop_timeout_set(&ack_t, 1000);
 	if (gps_on)
@@ -1994,6 +2301,14 @@ static void on_frame(const uint8_t *f, size_t n)
 		}
 		if (o->kind == OP_TIME) {
 			op_finish(o, NULL);   /* its clock was ahead: it keeps it */
+			return;
+		}
+		if (o->kind == OP_STATS) {
+			/* A kind newer than its firmware: what it has of the rest */
+			if (o->has_req)
+				stats_reply(o);
+			else
+				op_finish(o, NULL);
 			return;
 		}
 		if (o->kind == OP_SETCONTACT && (o->arg & 0x100)) {
@@ -2128,8 +2443,19 @@ static void on_frame(const uint8_t *f, size_t n)
 	case OP_REMOVE:
 	case OP_RESETPATH:
 	case OP_SETCONTACT:
+	case OP_LOGOUT:
 		if (code == RESP_OK)
 			op_finish(o, NULL);
+		break;
+	case OP_LOGIN:
+	case OP_STATUSREQ:
+	case OP_SENDCLI:
+		/* Sent: its answer comes later, as news (a command line's, as a message) */
+		if (code == RESP_SENT && n >= 10) {
+			enum ask_kind k = o->kind == OP_LOGIN ? ASK_LOGIN : o->kind == OP_STATUSREQ ? ASK_STATUS : ASK_CLI;
+
+			op_finish(o, ask_start(o, k, rd32(f + 2), rd32(f + 6)) ? NULL : "too many requests waiting for answers");
+		}
 		break;
 	case OP_TRACE:
 	case OP_DISCOVER:
@@ -2151,6 +2477,92 @@ static void on_frame(const uint8_t *f, size_t n)
 			op_finish(o, NULL);
 		}
 		break;
+	case OP_SETPARAMS:
+		if (code == RESP_OK) {
+			if (self.have) {
+				self.manual_add = o->frame[1];
+				self.telemetry = o->frame[2];
+				self.adv_loc = o->frame[3];
+				self.multi_acks = o->frame[4];
+			}
+			meta_seq = ++seq;
+			op_finish(o, NULL);
+		}
+		break;
+	case OP_SETRADIO:
+		if (code == RESP_OK) {
+			self.freq = rd32(o->frame + 1);
+			self.bw = rd32(o->frame + 5);
+			self.sf = o->frame[9];
+			self.cr = o->frame[10];
+			meta_seq = ++seq;
+			op_finish(o, NULL);
+		}
+		break;
+	case OP_SETTX:
+		if (code == RESP_OK) {
+			self.tx_power = o->frame[1];
+			meta_seq = ++seq;
+			op_finish(o, NULL);
+		}
+		break;
+	case OP_SETPOS:
+		if (code == RESP_OK) {
+			self.lat = (int32_t)rd32(o->frame + 1);
+			self.lon = (int32_t)rd32(o->frame + 5);
+			set_position(self.lat, self.lon);
+			meta_seq = ++seq;
+			op_finish(o, NULL);
+		}
+		break;
+	case OP_SETTUNING:
+	case OP_GETTUNING:
+		if ((o->kind == OP_SETTUNING && code == RESP_OK) || (o->kind == OP_GETTUNING && code == RESP_TUNING && n >= 9)) {
+			const uint8_t *p = o->kind == OP_SETTUNING ? o->frame + 1 : f + 1;
+
+			tuning.rx_delay = rd32(p);
+			tuning.airtime = rd32(p + 4);
+			tuning.have = true;
+			meta_seq = ++seq;
+			op_finish(o, NULL);
+		}
+		break;
+	case OP_SETAUTOADD:
+	case OP_GETAUTOADD:
+		if ((o->kind == OP_SETAUTOADD && code == RESP_OK) || (o->kind == OP_GETAUTOADD && code == RESP_AUTOADD && n >= 3)) {
+			const uint8_t *p = o->kind == OP_SETAUTOADD ? o->frame + 1 : f + 1;
+
+			autoadd.config = p[0];
+			autoadd.max_hops = p[1];
+			autoadd.have = true;
+			meta_seq = ++seq;
+			op_finish(o, NULL);
+		}
+		break;
+	case OP_STATS:
+		if (code == RESP_STATS && n >= 2) {
+			on_stats(f, n);
+			if (o->has_req)
+				stats_reply(o);
+			else
+				op_finish(o, NULL);
+		}
+		break;
+	case OP_CLI:
+		if (code == RESP_CLI_REPLY) {
+			struct blob_buf b = { 0 };
+			char r[MAX_FRAME + 1];
+
+			field_str(r, sizeof(r), f + 1, n - 1);
+			blob_buf_init(&b, 0);
+			blobmsg_add_u8(&b, "ok", 1);
+			blobmsg_add_string(&b, "reply", r);
+			op_reply(o, &b);
+			blob_buf_free(&b);
+			settings_refresh();
+		}
+		break;
+	case OP_REBOOT:
 	case OP_QUERY:
 		break;
 	}
@@ -2364,6 +2776,7 @@ static void close_cb(struct uloop_timeout *t)
 			ask_fail(&asks[i], why);
 	uloop_timeout_cancel(&ask_t);
 	have_info = self.have = batt.have = contacts_loaded = contacts_full = false;
+	tuning.have = autoadd.have = stats.core = stats.radio = stats.pkts = false;
 	gps_known = gps_on = pos_have = false;
 	pos_lat = pos_lon = 0;
 	pos_moved = 0;
@@ -2425,7 +2838,9 @@ static void refresh_cb(struct uloop_timeout *t)
 
 enum {
 	A_TO, A_TEXT, A_ID, A_CONV, A_SINCE, A_BEFORE, A_LIMIT, A_NAME, A_ENABLED, A_FLOOD,
-	A_KEY, A_INDEX, A_SECRET, A_REPLY, A_EMOJI, A_FAVORITE,
+	A_KEY, A_INDEX, A_SECRET, A_REPLY, A_EMOJI, A_FAVORITE, A_FREQ, A_BW, A_SF, A_CR, A_DBM,
+	A_LAT, A_LON, A_AUTOADD, A_TELBASE, A_TELLOC, A_TELENV, A_ACKS, A_SHARELOC, A_OVERWRITE,
+	A_CHAT, A_REPEATER, A_ROOM, A_SENSOR, A_MAXHOPS, A_RXDELAY, A_AIRTIME, A_COMMAND, A_PASSWORD,
 	__A_MAX
 };
 
@@ -2447,6 +2862,29 @@ static const struct blobmsg_policy pol_all[__A_MAX] = {
 	[A_REPLY] = { "reply", BLOBMSG_TYPE_UNSPEC },
 	[A_EMOJI] = { "emoji", BLOBMSG_TYPE_UNSPEC },
 	[A_FAVORITE] = { "favorite", BLOBMSG_TYPE_UNSPEC },
+	[A_FREQ] = { "freq_khz", BLOBMSG_TYPE_UNSPEC },
+	[A_BW] = { "bw_hz", BLOBMSG_TYPE_UNSPEC },
+	[A_SF] = { "sf", BLOBMSG_TYPE_UNSPEC },
+	[A_CR] = { "cr", BLOBMSG_TYPE_UNSPEC },
+	[A_DBM] = { "dbm", BLOBMSG_TYPE_UNSPEC },
+	[A_LAT] = { "lat", BLOBMSG_TYPE_UNSPEC },
+	[A_LON] = { "lon", BLOBMSG_TYPE_UNSPEC },
+	[A_AUTOADD] = { "auto_add", BLOBMSG_TYPE_UNSPEC },
+	[A_TELBASE] = { "telemetry_base", BLOBMSG_TYPE_UNSPEC },
+	[A_TELLOC] = { "telemetry_location", BLOBMSG_TYPE_UNSPEC },
+	[A_TELENV] = { "telemetry_environment", BLOBMSG_TYPE_UNSPEC },
+	[A_ACKS] = { "extra_acks", BLOBMSG_TYPE_UNSPEC },
+	[A_SHARELOC] = { "share_location", BLOBMSG_TYPE_UNSPEC },
+	[A_OVERWRITE] = { "overwrite_oldest", BLOBMSG_TYPE_UNSPEC },
+	[A_CHAT] = { "chat", BLOBMSG_TYPE_UNSPEC },
+	[A_REPEATER] = { "repeater", BLOBMSG_TYPE_UNSPEC },
+	[A_ROOM] = { "room", BLOBMSG_TYPE_UNSPEC },
+	[A_SENSOR] = { "sensor", BLOBMSG_TYPE_UNSPEC },
+	[A_MAXHOPS] = { "max_hops", BLOBMSG_TYPE_UNSPEC },
+	[A_RXDELAY] = { "rx_delay", BLOBMSG_TYPE_UNSPEC },
+	[A_AIRTIME] = { "airtime_factor", BLOBMSG_TYPE_UNSPEC },
+	[A_COMMAND] = { "command", BLOBMSG_TYPE_UNSPEC },
+	[A_PASSWORD] = { "password", BLOBMSG_TYPE_UNSPEC },
 };
 static struct blob_attr *tb[__A_MAX];
 
@@ -2469,6 +2907,29 @@ static const struct blobmsg_policy p_favorite[] = { { "key", BLOBMSG_TYPE_STRING
 static const struct blobmsg_policy p_channel[] = {
 	{ "index", BLOBMSG_TYPE_INT32 }, { "name", BLOBMSG_TYPE_STRING }, { "secret", BLOBMSG_TYPE_STRING },
 };
+static const struct blobmsg_policy p_radio[] = {
+	{ "freq_khz", BLOBMSG_TYPE_INT32 }, { "bw_hz", BLOBMSG_TYPE_INT32 }, { "sf", BLOBMSG_TYPE_INT32 },
+	{ "cr", BLOBMSG_TYPE_INT32 },
+};
+static const struct blobmsg_policy p_tx[] = { { "dbm", BLOBMSG_TYPE_INT32 } };
+static const struct blobmsg_policy p_position[] = { { "lat", BLOBMSG_TYPE_DOUBLE }, { "lon", BLOBMSG_TYPE_DOUBLE } };
+static const struct blobmsg_policy p_params[] = {
+	{ "auto_add", BLOBMSG_TYPE_BOOL }, { "telemetry_base", BLOBMSG_TYPE_INT32 },
+	{ "telemetry_location", BLOBMSG_TYPE_INT32 }, { "telemetry_environment", BLOBMSG_TYPE_INT32 },
+	{ "extra_acks", BLOBMSG_TYPE_INT32 }, { "share_location", BLOBMSG_TYPE_BOOL },
+};
+static const struct blobmsg_policy p_autoadd[] = {
+	{ "chat", BLOBMSG_TYPE_BOOL }, { "repeater", BLOBMSG_TYPE_BOOL }, { "room", BLOBMSG_TYPE_BOOL },
+	{ "sensor", BLOBMSG_TYPE_BOOL }, { "overwrite_oldest", BLOBMSG_TYPE_BOOL }, { "max_hops", BLOBMSG_TYPE_INT32 },
+};
+static const struct blobmsg_policy p_tuning[] = {
+	{ "rx_delay", BLOBMSG_TYPE_DOUBLE }, { "airtime_factor", BLOBMSG_TYPE_DOUBLE },
+};
+static const struct blobmsg_policy p_cli[] = { { "command", BLOBMSG_TYPE_STRING } };
+static const struct blobmsg_policy p_login[] = { { "key", BLOBMSG_TYPE_STRING }, { "password", BLOBMSG_TYPE_STRING } };
+static const struct blobmsg_policy p_remote_cli[] = { { "key", BLOBMSG_TYPE_STRING }, { "command", BLOBMSG_TYPE_STRING } };
+static const struct blobmsg_policy p_cli_log[] = { { "key", BLOBMSG_TYPE_STRING }, { "since", BLOBMSG_TYPE_INT32 } };
+static const struct blobmsg_policy p_packets[] = { { "since", BLOBMSG_TYPE_INT32 }, { "limit", BLOBMSG_TYPE_INT32 } };
 
 static void parse(struct blob_attr *msg)
 {
@@ -2522,6 +2983,32 @@ static int arg_bool(int i)
 	if (s)
 		return !strcmp(s, "1") || !strcmp(s, "true");
 	return arg_num(i, &v) ? v != 0 : -1;
+}
+
+/* A number with a fraction: one sent as a whole number, or as a string, too */
+static bool arg_double(int i, double *v)
+{
+	struct blob_attr *a = tb[i];
+	const char *s;
+	char *e;
+	int64_t n;
+
+	if (!a)
+		return false;
+	if (blobmsg_type(a) == BLOBMSG_TYPE_DOUBLE) {
+		*v = blobmsg_get_double(a);
+		return true;
+	}
+	if (blobmsg_type(a) == BLOBMSG_TYPE_STRING) {
+		s = blobmsg_get_string(a);
+		*v = strtod(s, &e);
+		return *s && !*e;
+	}
+	if (arg_num(i, &n)) {
+		*v = (double)n;
+		return true;
+	}
+	return false;
 }
 
 static int reply_error(struct ubus_context *c, struct ubus_request_data *req, const char *err)
@@ -3267,6 +3754,390 @@ static int m_gps(struct ubus_context *c, struct ubus_object *obj, struct ubus_re
 	return op_deferred(c, req, OP_SETVAR, f, 6, on);
 }
 
+/* Whether the radio's adverts carry where it is (MeshCore's advert location
+ * policy, SELF_INFO byte 45). CMD_SET_OTHER_PARAMS is positional, so the other
+ * params ride along at their current values; only the policy byte changes. */
+static int m_set_location(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			  const char *method, struct blob_attr *msg)
+{
+	uint8_t f[5];
+	int on;
+
+	(void)obj; (void)method;
+	parse(msg);
+	on = arg_bool(A_ENABLED);
+	if (on < 0)
+		return reply_error(c, req, "enabled: true or false");
+	if (!self.have)
+		return reply_error(c, req, "the radio hasn't said what it does yet");
+	f[0] = CMD_SET_OTHER_PARAMS;
+	f[1] = self.manual_add;
+	f[2] = self.telemetry;
+	f[3] = on ? 1 : 0;
+	f[4] = self.multi_acks;
+	return op_deferred(c, req, OP_SETPARAMS, f, 5, on);
+}
+
+/* ---------- the radio's settings ---------- */
+
+/* Not ready, or not yet said what it has: why not */
+static const char *no_settings(void)
+{
+	const char *err = not_ready();
+
+	if (err)
+		return err;
+	return self.have ? NULL : "the radio hasn't said what it does yet";
+}
+
+/* Everything the settings page shows, as the radio last said it */
+static int m_settings(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		      const char *method, struct blob_attr *msg)
+{
+	char k[2 * PUB_KEY + 1];
+	const char *err = no_settings();
+	void *t;
+
+	(void)obj; (void)method; (void)msg;
+	if (err)
+		return reply_error(c, req, err);
+	blob_buf_init(&rb, 0);
+	blobmsg_add_string(&rb, "name", self.name);
+	hex(k, self.key, PUB_KEY);
+	blobmsg_add_string(&rb, "key", k);
+	blobmsg_add_u32(&rb, "protocol", fw_ver);
+	blobmsg_add_u8(&rb, "cli", fw_ver >= 14);
+	blobmsg_add_u8(&rb, "stats", fw_ver >= 8);
+	t = blobmsg_open_table(&rb, "radio");
+	blobmsg_add_u32(&rb, "freq_khz", self.freq);
+	blobmsg_add_u32(&rb, "bw_hz", self.bw);
+	blobmsg_add_u32(&rb, "sf", self.sf);
+	blobmsg_add_u32(&rb, "cr", self.cr);
+	blobmsg_add_u32(&rb, "tx_power", (uint32_t)(int32_t)(int8_t)self.tx_power);
+	blobmsg_add_u32(&rb, "max_tx_power", self.max_tx);
+	blobmsg_close_table(&rb, t);
+	if (self.lat || self.lon) {
+		t = blobmsg_open_table(&rb, "position");
+		add_coord(&rb, "lat", self.lat);
+		add_coord(&rb, "lon", self.lon);
+		blobmsg_close_table(&rb, t);
+	}
+	blobmsg_add_u8(&rb, "gps", gps_on);
+	blobmsg_add_u8(&rb, "share_location", self.adv_loc != 0);
+	blobmsg_add_u8(&rb, "auto_add", !(self.manual_add & 1));
+	blobmsg_add_u32(&rb, "extra_acks", self.multi_acks);
+	t = blobmsg_open_table(&rb, "telemetry");
+	blobmsg_add_u32(&rb, "base", self.telemetry & 3);
+	blobmsg_add_u32(&rb, "location", self.telemetry >> 2 & 3);
+	blobmsg_add_u32(&rb, "environment", self.telemetry >> 4 & 3);
+	blobmsg_close_table(&rb, t);
+	if (autoadd.have) {
+		t = blobmsg_open_table(&rb, "autoadd");
+		blobmsg_add_u8(&rb, "overwrite_oldest", autoadd.config & 0x01);
+		blobmsg_add_u8(&rb, "chat", !!(autoadd.config & 0x02));
+		blobmsg_add_u8(&rb, "repeater", !!(autoadd.config & 0x04));
+		blobmsg_add_u8(&rb, "room", !!(autoadd.config & 0x08));
+		blobmsg_add_u8(&rb, "sensor", !!(autoadd.config & 0x10));
+		blobmsg_add_u8(&rb, "any_distance", !autoadd.max_hops);
+		if (autoadd.max_hops)
+			blobmsg_add_u32(&rb, "max_hops", autoadd.max_hops - 1);
+		blobmsg_close_table(&rb, t);
+	}
+	if (tuning.have) {
+		t = blobmsg_open_table(&rb, "tuning");
+		blobmsg_add_double(&rb, "rx_delay", tuning.rx_delay / 1000.0);
+		blobmsg_add_double(&rb, "airtime_factor", tuning.airtime / 1000.0);
+		blobmsg_close_table(&rb, t);
+	}
+	ubus_send_reply(c, req, rb.head);
+	return UBUS_STATUS_OK;
+}
+
+/* Its frequency, bandwidth, spreading factor and coding rate: what's left
+ * out, as it is. It takes them at once, so a mesh on others goes quiet */
+static int m_set_radio(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		       const char *method, struct blob_attr *msg)
+{
+	uint8_t f[11];
+	int64_t freq, bw, sf, cr;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = no_settings()))
+		return reply_error(c, req, err);
+	if (!arg_num(A_FREQ, &freq))
+		freq = self.freq;
+	if (!arg_num(A_BW, &bw))
+		bw = self.bw;
+	if (!arg_num(A_SF, &sf))
+		sf = self.sf;
+	if (!arg_num(A_CR, &cr))
+		cr = self.cr;
+	if (freq < 150000 || freq > 2500000)
+		return reply_error(c, req, "freq_khz: 150000 to 2500000 (150 MHz to 2.5 GHz)");
+	if (bw < 7000 || bw > 500000)
+		return reply_error(c, req, "bw_hz: 7000 to 500000 (7 to 500 kHz)");
+	if (sf < 5 || sf > 12)
+		return reply_error(c, req, "sf: 5 to 12");
+	if (cr < 5 || cr > 8)
+		return reply_error(c, req, "cr: 5 to 8");
+	f[0] = CMD_SET_RADIO_PARAMS;
+	wr32(f + 1, (uint32_t)freq);
+	wr32(f + 5, (uint32_t)bw);
+	f[9] = (uint8_t)sf;
+	f[10] = (uint8_t)cr;
+	return op_deferred(c, req, OP_SETRADIO, f, sizeof(f), 0);
+}
+
+static int m_set_tx_power(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			  const char *method, struct blob_attr *msg)
+{
+	uint8_t f[2];
+	int64_t v;
+	int most;
+	const char *err;
+	char e[40];
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = no_settings()))
+		return reply_error(c, req, err);
+	most = self.max_tx ? self.max_tx : 22;
+	if (!arg_num(A_DBM, &v) || v < -9 || v > most) {
+		snprintf(e, sizeof(e), "dbm: -9 to %d", most);
+		return reply_error(c, req, e);
+	}
+	f[0] = CMD_SET_RADIO_TX_POWER;
+	f[1] = (uint8_t)(int8_t)v;
+	return op_deferred(c, req, OP_SETTX, f, sizeof(f), 0);
+}
+
+/* Where it is, set by hand (for its adverts, if it shares where it is):
+ * with its GPS on, the GPS says */
+static int m_set_position(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			  const char *method, struct blob_attr *msg)
+{
+	uint8_t f[9];
+	double lat, lon;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = no_settings()))
+		return reply_error(c, req, err);
+	if (gps_on)
+		return reply_error(c, req, "its GPS is on, and says where it is: turn it off to set a position by hand");
+	if (!arg_double(A_LAT, &lat) || lat < -90 || lat > 90)
+		return reply_error(c, req, "lat: -90 to 90");
+	if (!arg_double(A_LON, &lon) || lon < -180 || lon > 180)
+		return reply_error(c, req, "lon: -180 to 180");
+	f[0] = CMD_SET_ADVERT_LATLON;
+	wr32(f + 1, (uint32_t)(int32_t)(lat * 1e6 + (lat < 0 ? -0.5 : 0.5)));
+	wr32(f + 5, (uint32_t)(int32_t)(lon * 1e6 + (lon < 0 ? -0.5 : 0.5)));
+	return op_deferred(c, req, OP_SETPOS, f, sizeof(f), 0);
+}
+
+/* Its other settings (MeshCore's SET_OTHER_PARAMS, its fields in a row):
+ * whether it adds contacts it hears by itself, who may ask its telemetry
+ * (each of its battery, where it is and its sensors: no one, the contacts
+ * you allow, or anyone), extra acks, and whether its adverts carry where
+ * it is. What's left out stays as it is */
+static int m_set_params(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			const char *method, struct blob_attr *msg)
+{
+	static const char *const tel_err[] = {
+		"telemetry_base: 0 (no one), 1 (contacts you allow) or 2 (anyone)",
+		"telemetry_location: 0 (no one), 1 (contacts you allow) or 2 (anyone)",
+		"telemetry_environment: 0 (no one), 1 (contacts you allow) or 2 (anyone)",
+	};
+	uint8_t f[5];
+	int64_t v;
+	int b, i;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = no_settings()))
+		return reply_error(c, req, err);
+	f[0] = CMD_SET_OTHER_PARAMS;
+	f[1] = self.manual_add;
+	f[2] = self.telemetry;
+	f[3] = self.adv_loc;
+	f[4] = self.multi_acks;
+	if ((b = arg_bool(A_AUTOADD)) >= 0)
+		f[1] = b ? f[1] & ~1 : f[1] | 1;
+	for (i = 0; i < 3; i++) {
+		if (!tb[A_TELBASE + i])
+			continue;
+		if (!arg_num(A_TELBASE + i, &v) || v < 0 || v > 2)
+			return reply_error(c, req, tel_err[i]);
+		f[2] = (uint8_t)((f[2] & ~(3 << 2 * i)) | v << 2 * i);
+	}
+	if (tb[A_ACKS]) {
+		if (!arg_num(A_ACKS, &v) || v < 0 || v > 2)
+			return reply_error(c, req, "extra_acks: 0 to 2");
+		f[4] = (uint8_t)v;
+	}
+	if ((b = arg_bool(A_SHARELOC)) >= 0)
+		f[3] = b;
+	return op_deferred(c, req, OP_SETPARAMS, f, sizeof(f), 0);
+}
+
+/* Which kinds it adds by itself, how far away, and whether it makes room
+ * when its list is full: what's left out stays as it is */
+static int m_set_autoadd(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			 const char *method, struct blob_attr *msg)
+{
+	static const int bit_arg[] = { A_OVERWRITE, A_CHAT, A_REPEATER, A_ROOM, A_SENSOR };
+	uint8_t f[3];
+	int64_t v;
+	int b, i;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (!autoadd.have)
+		return reply_error(c, req, "this radio's firmware doesn't say which contacts it adds");
+	f[0] = CMD_SET_AUTOADD_CONFIG;
+	f[1] = autoadd.config;
+	f[2] = autoadd.max_hops;
+	for (i = 0; i < 5; i++)
+		if ((b = arg_bool(bit_arg[i])) >= 0)
+			f[1] = b ? f[1] | 1 << i : f[1] & ~(1 << i);
+	if (tb[A_MAXHOPS]) {
+		/* MeshCore's own: 0 any distance, n: up to n - 1 hops */
+		if (!arg_num(A_MAXHOPS, &v) || v < -1 || v > 63)
+			return reply_error(c, req, "max_hops: -1 (any distance), or 0 (heard directly) to 63");
+		f[2] = (uint8_t)(v + 1);
+	}
+	return op_deferred(c, req, OP_SETAUTOADD, f, sizeof(f), 0);
+}
+
+/* How long it waits before passing a packet on, scaled by how well it
+ * heard it, and how long it keeps quiet after sending (its airtime factor):
+ * what's left out stays as it is */
+static int m_set_tuning(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			const char *method, struct blob_attr *msg)
+{
+	uint8_t f[9];
+	double rx, af;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (!tuning.have)
+		return reply_error(c, req, "this radio's firmware doesn't say its tuning");
+	rx = tuning.rx_delay / 1000.0;
+	af = tuning.airtime / 1000.0;
+	if (tb[A_RXDELAY] && (!arg_double(A_RXDELAY, &rx) || rx < 0 || rx > 20))
+		return reply_error(c, req, "rx_delay: 0 to 20");
+	if (tb[A_AIRTIME] && (!arg_double(A_AIRTIME, &af) || af < 0 || af > 9))
+		return reply_error(c, req, "airtime_factor: 0 to 9");
+	f[0] = CMD_SET_TUNING_PARAMS;
+	wr32(f + 1, (uint32_t)(rx * 1000 + 0.5));
+	wr32(f + 5, (uint32_t)(af * 1000 + 0.5));
+	return op_deferred(c, req, OP_SETTUNING, f, sizeof(f), 0);
+}
+
+/* How it's doing: its battery, uptime, queue and errors; the noise it
+ * hears, the last packet's signal, and its airtime; the packets it has
+ * heard and sent. Three questions, answered in turn: the call waits for
+ * the last (from protocol 8) */
+static int m_stats(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		   const char *method, struct blob_attr *msg)
+{
+	uint8_t f[2] = { CMD_GET_STATS, 0 };
+	const char *err = not_ready();
+	struct op *o;
+
+	(void)obj; (void)method; (void)msg;
+	if (err)
+		return reply_error(c, req, err);
+	if (fw_ver < 8)
+		return reply_error(c, req, "this radio's firmware keeps no stats (from MeshCore's protocol 8 it does)");
+	if (nops + 3 > MAX_QUEUE)
+		return reply_error(c, req, "the radio is busy: try again in a moment");
+	op_add1(OP_STATS, f, sizeof(f));
+	f[1] = 1;
+	op_add1(OP_STATS, f, sizeof(f));
+	f[1] = 2;
+	if (!(o = op_new(OP_STATS, f, sizeof(f))))
+		return reply_error(c, req, "out of memory");
+	ubus_defer_request(c, req, &o->req);
+	o->has_req = true;
+	op_add(o);
+	return UBUS_STATUS_OK;
+}
+
+/* A line for a command line, trimmed: one line, of two characters or more */
+static const char *cli_line(const char **cmd, size_t *len)
+{
+	const char *s = arg_str(A_COMMAND);
+	size_t n, i;
+
+	while (s && *s == ' ')
+		s++;
+	n = s ? strlen(s) : 0;
+	while (n && s[n - 1] == ' ')
+		n--;
+	if (n < 2)
+		return "command: a line for its command line";
+	if (n > MAX_TEXT)
+		return "command: 160 bytes at most";
+	for (i = 0; i < n; i++)
+		if ((unsigned char)s[i] < 32)
+			return "command: one line, no control characters";
+	*cmd = s;
+	*len = n;
+	return NULL;
+}
+
+/* A line for the radio's own command line (MeshCore's CLI: "ver", "get
+ * radio", "set tx 20", "clock"...), as its phone app has it: from
+ * protocol 14. What it set there, it has here too: asked again after */
+static int m_cli(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		 const char *method, struct blob_attr *msg)
+{
+	uint8_t f[1 + MAX_TEXT];
+	const char *cmd = NULL, *err;
+	size_t n = 0;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (fw_ver < 14)
+		return reply_error(c, req, "this radio's firmware has no command line: it came with MeshCore 1.14 (protocol 14)");
+	if ((err = cli_line(&cmd, &n)))
+		return reply_error(c, req, err);
+	f[0] = CMD_RUN_CLI_COMMAND;
+	memcpy(f + 1, cmd, n);
+	return op_deferred(c, req, OP_CLI, f, 1 + n, 0);
+}
+
+/* Restart the radio: it says nothing back (it's gone a moment, then it
+ * comes back and this connects to it again) */
+static int m_reboot(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		    const char *method, struct blob_attr *msg)
+{
+	static const uint8_t f[] = { CMD_REBOOT, 'r', 'e', 'b', 'o', 'o', 't' };
+	const char *err = not_ready();
+
+	(void)obj; (void)method; (void)msg;
+	if (err)
+		return reply_error(c, req, err);
+	op_add1(OP_REBOOT, f, sizeof(f));
+	blob_buf_init(&rb, 0);
+	blobmsg_add_u8(&rb, "ok", 1);
+	ubus_send_reply(c, req, rb.head);
+	return UBUS_STATUS_OK;
+}
+
 /* A channel into a slot: a hashtag one (its key is the first half of the
  * SHA-256 of its name, so anyone who knows the name can join), one with a
  * key given (32 hex digits), or a new private one (a random key). An empty
@@ -3483,7 +4354,7 @@ static const char *asking(void)
 	int i;
 
 	for (i = 0; i < MAX_ASKS; i++)
-		if (asks[i].used && asks[i].kind != ASK_TRACE) {
+		if (asks[i].used && asks[i].kind != ASK_TRACE && asks[i].kind != ASK_CLI) {
 			const struct contact *c = contact_by_prefix(asks[i].key, PUB_KEY);
 
 			snprintf(s, sizeof(s), "waiting for an answer from %s: one request at a time", c ? c->name : "a contact");
@@ -3578,6 +4449,199 @@ static int m_telemetry(struct ubus_context *c, struct ubus_object *obj, struct u
 	return ask_op(c, req, OP_TELEM, f, sizeof(f), ct);
 }
 
+
+/* ---------- repeaters, rooms and sensors, over the mesh ---------- */
+
+static const char *not_server(const struct contact *ct, const char *what)
+{
+	static char s[80];
+
+	if (ct->type >= 2)
+		return NULL;
+	snprintf(s, sizeof(s), "only repeaters, rooms and sensors %s", what);
+	return s;
+}
+
+/* Log in (its admin password, or a guest's): the answer says if it took
+ * it, and as what. MeshCore keeps one request out at a time */
+static int m_login(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		   const char *method, struct blob_attr *msg)
+{
+	uint8_t f[1 + PUB_KEY + 15];
+	const char *err, *pw;
+	struct contact *ct;
+	size_t pl;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()) || (err = asking()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)) || (err = not_server(ct, "take a login")))
+		return reply_error(c, req, err);
+	pw = arg_str(A_PASSWORD);
+	pl = pw ? strlen(pw) : 0;
+	if (pl > 15)
+		return reply_error(c, req, "password: 15 bytes at most");
+	f[0] = CMD_SEND_LOGIN;
+	memcpy(f + 1, ct->key, PUB_KEY);
+	if (pl)
+		memcpy(f + 1 + PUB_KEY, pw, pl);
+	return ask_op(c, req, OP_LOGIN, f, 1 + PUB_KEY + pl, ct);
+}
+
+static int m_logout(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		    const char *method, struct blob_attr *msg)
+{
+	uint8_t f[1 + PUB_KEY] = { CMD_LOGOUT };
+	struct contact *ct;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)) || (err = not_server(ct, "take a login")))
+		return reply_error(c, req, err);
+	memcpy(f + 1, ct->key, PUB_KEY);
+	return op_deferred(c, req, OP_LOGOUT, f, sizeof(f), 0);
+}
+
+/* Its status: battery, uptime, queue, the noise it hears and its last
+ * signal, airtime, the packets it has heard and passed on */
+static int m_remote_status(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			   const char *method, struct blob_attr *msg)
+{
+	uint8_t f[1 + PUB_KEY] = { CMD_SEND_STATUS_REQ };
+	struct contact *ct;
+	const char *err;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()) || (err = asking()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)) || (err = not_server(ct, "give their status")))
+		return reply_error(c, req, err);
+	memcpy(f + 1, ct->key, PUB_KEY);
+	return ask_op(c, req, OP_STATUSREQ, f, sizeof(f), ct);
+}
+
+/* A line for its command line, over the mesh (log in as its admin first):
+ * its answer comes back as a message, kept out of the conversation, and
+ * the call waits for it */
+static int m_remote_cli(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+			const char *method, struct blob_attr *msg)
+{
+	uint8_t f[13 + MAX_TEXT];
+	struct contact *ct;
+	const char *err, *cmd = NULL;
+	size_t n = 0;
+
+	(void)obj; (void)method;
+	parse(msg);
+	if ((err = not_ready()))
+		return reply_error(c, req, err);
+	if (!(ct = arg_contact(&err)) || (err = not_server(ct, "have a command line")))
+		return reply_error(c, req, err);
+	if (ask_find(ASK_CLI, 0, ct->key))
+		return reply_error(c, req, "still waiting for its answer to the last command");
+	if ((err = cli_line(&cmd, &n)))
+		return reply_error(c, req, err);
+	f[0] = CMD_SEND_TXT_MSG;
+	f[1] = 1;                 /* MeshCore's CLI data */
+	f[2] = 0;
+	wr32(f + 3, (uint32_t)time(NULL));
+	memcpy(f + 7, ct->key, 6);
+	memcpy(f + 13, cmd, n);
+	return ask_op(c, req, OP_SENDCLI, f, 13 + n, ct);
+}
+
+/* Command line answers nobody waited for: since an id, one contact's or all */
+static int m_cli_log(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		     const char *method, struct blob_attr *msg)
+{
+	uint8_t key[PUB_KEY];
+	const char *k;
+	char kh[13];
+	int64_t since = 0;
+	uint32_t i;
+	void *a, *t;
+	int kl = 0;
+
+	(void)obj; (void)method;
+	parse(msg);
+	arg_num(A_SINCE, &since);
+	if ((k = arg_str(A_KEY))) {
+		if (k[0] == 'c' && strlen(k) == 13)
+			k++;
+		if ((kl = unhex(key, sizeof(key), k)) < 6)
+			return reply_error(c, req, "key: a contact's (12 hex digits at least)");
+	}
+	blob_buf_init(&rb, 0);
+	blobmsg_add_u32(&rb, "seq", cli_seq);
+	a = blobmsg_open_array(&rb, "lines");
+	for (i = cli_seq > MAX_CLI_LOG ? cli_seq - MAX_CLI_LOG : 0; i < cli_seq; i++) {
+		const struct cli_entry *e = &cli_log[i % MAX_CLI_LOG];
+
+		if (e->id <= since || (kl && memcmp(e->key, key, 6)))
+			continue;
+		t = blobmsg_open_table(&rb, NULL);
+		blobmsg_add_u32(&rb, "id", e->id);
+		hex(kh, e->key, 6);
+		blobmsg_add_string(&rb, "key", kh);
+		blobmsg_add_u32(&rb, "rx", e->rx);
+		blobmsg_add_string(&rb, "text", e->text);
+		blobmsg_close_table(&rb, t);
+	}
+	blobmsg_close_array(&rb, a);
+	ubus_send_reply(c, req, rb.head);
+	return UBUS_STATUS_OK;
+}
+
+
+/* The packets it heard, raw (MeshCore's own: a header, a route, a payload),
+ * each with its SNR and RSSI: the newest of those after since, up to limit
+ * (100 if none, 256 at most), oldest first */
+static int m_packets(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		     const char *method, struct blob_attr *msg)
+{
+	char h[2 * MAX_FRAME + 1];
+	int64_t since = 0, limit = 100;
+	uint32_t i, start;
+	void *a, *t;
+
+	(void)obj; (void)method;
+	parse(msg);
+	arg_num(A_SINCE, &since);
+	arg_num(A_LIMIT, &limit);
+	if (limit < 1)
+		limit = 1;
+	if (limit > MAX_PKTS)
+		limit = MAX_PKTS;
+	start = pkt_seq > MAX_PKTS ? pkt_seq - MAX_PKTS : 0;
+	if (since > start)
+		start = since > pkt_seq ? pkt_seq : (uint32_t)since;
+	if (pkt_seq - start > limit)
+		start = pkt_seq - (uint32_t)limit;
+	blob_buf_init(&rb, 0);
+	blobmsg_add_u32(&rb, "seq", pkt_seq);
+	a = blobmsg_open_array(&rb, "packets");
+	for (i = start; i < pkt_seq; i++) {
+		const struct pkt *k = &pkts[i % MAX_PKTS];
+
+		t = blobmsg_open_table(&rb, NULL);
+		blobmsg_add_u32(&rb, "id", k->id);
+		blobmsg_add_u32(&rb, "rx", k->rx);
+		blobmsg_add_double(&rb, "snr", k->snr4 / 4.0);
+		blobmsg_add_u32(&rb, "rssi", (uint32_t)(int32_t)k->rssi);
+		hex(h, k->raw, k->len);
+		blobmsg_add_string(&rb, "raw", h);
+		blobmsg_close_table(&rb, t);
+	}
+	blobmsg_close_array(&rb, a);
+	ubus_send_reply(c, req, rb.head);
+	return UBUS_STATUS_OK;
+}
+
 static int m_refresh(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		     const char *method, struct blob_attr *msg)
 {
@@ -3609,6 +4673,23 @@ static const struct ubus_method methods[] = {
 	UBUS_METHOD("advert", m_advert, p_advert),
 	UBUS_METHOD("set_name", m_set_name, p_name),
 	UBUS_METHOD("gps", m_gps, p_enabled),
+	UBUS_METHOD("set_location", m_set_location, p_enabled),
+	UBUS_METHOD_NOARG("settings", m_settings),
+	UBUS_METHOD("set_radio", m_set_radio, p_radio),
+	UBUS_METHOD("set_tx_power", m_set_tx_power, p_tx),
+	UBUS_METHOD("set_position", m_set_position, p_position),
+	UBUS_METHOD("set_params", m_set_params, p_params),
+	UBUS_METHOD("set_autoadd", m_set_autoadd, p_autoadd),
+	UBUS_METHOD("set_tuning", m_set_tuning, p_tuning),
+	UBUS_METHOD_NOARG("stats", m_stats),
+	UBUS_METHOD("cli", m_cli, p_cli),
+	UBUS_METHOD_NOARG("reboot", m_reboot),
+	UBUS_METHOD("login", m_login, p_login),
+	UBUS_METHOD("logout", m_logout, p_key),
+	UBUS_METHOD("remote_status", m_remote_status, p_key),
+	UBUS_METHOD("remote_cli", m_remote_cli, p_remote_cli),
+	UBUS_METHOD("cli_log", m_cli_log, p_cli_log),
+	UBUS_METHOD("packets", m_packets, p_packets),
 	UBUS_METHOD("channel_set", m_channel_set, p_channel),
 	UBUS_METHOD("contact_remove", m_contact_remove, p_key),
 	UBUS_METHOD("contact_reset_path", m_contact_reset_path, p_key),

@@ -400,7 +400,11 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   router keeps which message each of yours answers; for one that comes,
   it's the newest of that person's before it (as MeshCore's app means it),
   or, from MeshCore Open (which adds the time, `@[Name#…]`), the one of
-  theirs at that time. `@[Name]` answering nothing here is a mention.
+  theirs at that time. `@[Name]` answering nothing here is a mention, and
+  a `@[Name]` anywhere in the words — some apps bracket mentions mid-text —
+  shows as an `@Name` you can click, not the raw brackets. Some apps also
+  paste the start of what they answer as a `>`-quoted first line; it's
+  already shown above, so that leading quote is dropped from the body.
 - **Profiles**, as Discord's: click a face or a name (in a thread, a
   mention, a conversation's head, Contacts, your radio at the foot) for
   their card: who they are (their key, when they were last heard); their
@@ -473,13 +477,46 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   someone new, it keeps its favourites.
 - **Its GPS**, on or off. With it on and a fix, its position tags the
   **Wi-Fi survey**'s sightings when no USB GPS (gpsd) has one: no separate
-  GPS needed for wardriving. The radio's adverts carry its position only if
-  it is set to share its location (off by default; the page warns if it is
-  on).
+  GPS needed for wardriving. **Whether the adverts carry its position** is a
+  toggle on this page: off keeps it private (only the radio's name goes out),
+  on lets the mesh see where the radio is (a warning shows while it's on, as
+  MeshCore's own app keeps it off). *Match the mesh* sets it to whatever most
+  radios you've heard do — only other people's radios count, since repeaters
+  and rooms nearly always carry theirs.
+- **Its settings**, on its own page (the gear at your radio): how it's doing
+  (its battery, uptime and queue; the noise it hears and the last packet's
+  signal; its airtime; the packets it has heard and sent), and all an app
+  can set. Its radio: frequency, bandwidth, spreading factor and coding rate,
+  MeshCore's own settings for each region to pick from (with a warning: a
+  radio on other settings than its mesh's goes quiet), and its TX power.
+  Where it is: sharing it, the GPS, a position set by hand. Who may ask for
+  its telemetry (its battery, where it is, its sensors: no one, the contacts
+  you allow, or anyone). The contacts it adds by itself: which kinds, from
+  how far, and whether a full list makes room. Extra acks, its tuning, a
+  restart. An editor open stays as it is while the page keeps up.
+- **A command line** (the `>_` at your radio): MeshCore's own, your radio's
+  (from MeshCore 1.14) — `ver`, `get radio`, `set tx 20`… — what it sets shown
+  on the settings page too. Or a repeater's, room's or sensor's, over the
+  mesh: log in (its admin password, or as a guest, who MeshCore asks to log
+  in over a route rather than flooded), its status (battery, uptime, noise,
+  airtime, packets, duplicates), and its commands (`neighbors`, `clock`,
+  `stats-radio`…). Each one's lines are kept apart, and its answers out of
+  the conversation; one that comes after its command gave up shows too.
+  Restarting, powering off, erasing or retuning one asks first.
+- **The packets it hears** (the wave at your radio): every packet the radio
+  hears, from any radio in range, with its SNR and RSSI, read as far as that
+  goes without keys — an advert's who, what kind and where; the rest, which
+  way they came (flooded or direct, through which repeaters) and whom they're
+  between, by the bytes of keys they carry (a contact's name where one
+  matches, a channel's by its hash). Newest first, by kind, paused, or opened
+  to its bytes; the router keeps the last 256.
 
 `pirate-meshcore` (its own package) speaks MeshCore's companion protocol over
 USB, after MeshCore's documentation and firmware (both MIT; the code here is
-Pirate Radio's own). Its reactions follow MeshCore One's documented format
+Pirate Radio's own): its messages and contacts, and its settings, its own
+command line (`CMD_RUN_CLI_COMMAND`), repeaters' remote admin (a login, their
+status, their command line as CLI data) and the raw packets it hears (its RX
+log). Its reactions follow MeshCore One's documented format
 and meshcore-open's; meshcore-open's table of reaction emoji
 (`src/mco_emoji.h`) is its own, MIT. A channel's binary data (MeshCore's
 GROUP_DATA) is read as MCO Advanced lays it out (its `CHANNEL_APP_DATA`):

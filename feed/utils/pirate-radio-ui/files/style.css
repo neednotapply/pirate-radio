@@ -982,3 +982,85 @@ a { color: var(--link); }
 .lnk:hover { text-decoration: underline; }
 .cam-wrap { margin-top: 12px; border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; background: #000; max-width: 720px; }
 .cam { display: block; width: 100%; height: auto; }
+
+/* Messenger: your radio's settings, its command line, the packets it hears */
+.mc-setstatus { position: sticky; top: 0; z-index: 2; margin: -4px 0 8px; padding: 4px 0; background: var(--bg); }
+.mc-setstatus .status:empty { display: none; }
+.mc-setnow { margin: 0 0 10px; color: var(--txt); font-size: 14px; }
+.mc-setline { display: flex; margin: 0 0 10px; }
+.mc-kinds { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 0 0 8px 24px; }
+.mc-kinds.off { opacity: .5; }
+.mc-kindsfar:has(select:disabled) { opacity: .5; }
+.mc-kindsfar { margin-left: 24px; }
+.mc-editor { margin: 0 0 12px; padding: 12px; border: 1px solid var(--line-2); border-radius: var(--r); background: var(--panel-2); }
+.mc-editor .alert { margin: 0 0 12px; }
+.mc-editor .toolbar { margin-bottom: 0; }
+.form.mc-form4 { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.form.mc-form3 { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); }
+.mc-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin: 0 0 12px; }
+.mc-tile { display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--r); background: var(--panel-2); }
+.mc-tl { font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+.mc-tv { font-family: var(--mono); font-size: 13px; color: var(--hi); overflow-wrap: anywhere; }
+
+.mc-console {
+	height: min(52vh, 460px);
+	min-height: 200px;
+	overflow-y: auto;
+	margin: 0 0 8px;
+	padding: 10px 12px;
+	border: 1px solid var(--line-2);
+	border-radius: var(--r);
+	background: #0e1012;
+	color: var(--txt);
+	font: 13px/1.45 var(--mono);
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.mc-console:empty::before { content: "Nothing yet: its answers show here."; color: var(--faint); }
+.mc-tl-cmd { margin-top: 6px; color: var(--accent); }
+.mc-tl-cmd:first-child { margin-top: 0; }
+.mc-tl-err { color: var(--bad); }
+.mc-tlnote, .mc-prompt { color: var(--faint); }
+.mc-cmdrow { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.mc-cmdrow .mc-prompt { font: 16px var(--mono); }
+.mc-cmdrow .inp { flex: 1; min-width: 0; font-family: var(--mono); }
+.mc-cmdchips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.mc-cmdchip { appearance: none; padding: 3px 10px; border: 1px solid var(--line-2); border-radius: 999px; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; }
+.mc-cmdchip:hover, .mc-cmdchip:focus-visible { border-color: var(--accent); color: var(--accent); }
+.mc-loginbar .inp { width: 240px; max-width: 100%; }
+
+.mc-pkts { display: flex; flex-direction: column; margin: 0 0 12px; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.mc-pkts:empty::before { content: "Listening…"; display: block; padding: 14px; color: var(--faint); }
+.mc-pkt {
+	display: grid;
+	grid-template-columns: 74px 118px 112px minmax(0, 1.3fr) minmax(0, 2fr) 46px;
+	gap: 10px;
+	align-items: baseline;
+	padding: 6px 10px;
+	border-top: 1px solid var(--line);
+	font-size: 12.5px;
+	cursor: pointer;
+}
+.mc-pkt:first-child { border-top: 0; }
+.mc-pkt:hover, .mc-pkt:focus-visible { background: var(--panel-2); outline: none; }
+.mc-pt, .mc-psig, .mc-psize { font-family: var(--mono); color: var(--muted); white-space: nowrap; }
+.mc-psize { text-align: right; }
+.mc-ptype { font-weight: 600; color: var(--muted); }
+.mc-proute { color: var(--muted); overflow-wrap: anywhere; }
+.mc-pwhat { color: var(--txt); overflow-wrap: anywhere; }
+.mc-pk-advert .mc-ptype { color: var(--accent); }
+.mc-pk-message .mc-ptype, .mc-pk-request .mc-ptype { color: var(--link); }
+.mc-pk-channel .mc-ptype { color: var(--ok); }
+.mc-pk-trace .mc-ptype, .mc-pk-path .mc-ptype { color: var(--hi); }
+.mc-pdetail { grid-column: 1 / -1; padding: 4px 0 2px; cursor: auto; }
+.mc-pdetail .kv { margin: 4px 0; }
+.mc-praw { margin: 6px 0 0; color: var(--muted); font: 12px/1.5 var(--mono); overflow-wrap: anywhere; user-select: all; }
+@media (max-width: 760px) {
+	.mc-pkt { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "t ty sz" "sig sig sig" "rt rt rt" "w w w"; gap: 2px 8px; }
+	.mc-pt { grid-area: t; }
+	.mc-ptype { grid-area: ty; }
+	.mc-psize { grid-area: sz; }
+	.mc-psig { grid-area: sig; }
+	.mc-proute { grid-area: rt; }
+	.mc-pwhat { grid-area: w; }
+}

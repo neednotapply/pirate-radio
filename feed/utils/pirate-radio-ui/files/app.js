@@ -111,12 +111,12 @@
 		var now = Math.floor(Date.now() / 1000), seq = 20, id = 0;
 		function key(b) { var s = ""; for (var i = 0; i < 32; i++) s += b; return s; }
 		var mc = {
-			seq: seq, name: "🏴‍☠️ Pirate Radio", gps: false, read: {},
+			seq: seq, name: "🏴‍☠️ Pirate Radio", gps: false, share: true, read: {},
 			contacts: [
 				{ key: key("a1"), conv: "ca1a1a1a1a1a1", name: "Alice", type: "chat", hops: 1, path: [{ id: "c2", name: "Hilltop Repeater" }],
 					last_advert: now - 900, lat: 37.4302, lon: -122.0712, favorite: true },
 				{ key: key("b0"), conv: "cb0b0b0b0b0b0", name: "Bob", type: "chat", flood: true, last_advert: now - 7200 },
-				{ key: key("d4"), conv: "cd4d4d4d4d4d4", name: "🦜 Polly", type: "chat", hops: 0, last_advert: now - 2400, lat: 37.4249, lon: -122.0911 },
+				{ key: key("d4"), conv: "cd4d4d4d4d4d4", name: "🦜 Polly", type: "chat", hops: 0, last_advert: now - 2400 },
 				{ key: key("e5"), conv: "ce5e5e5e5e5e5", name: "Kiwi 🇳🇿", type: "chat", hops: 3,
 					path: [{ id: "c2", name: "Hilltop Repeater" }, { id: "4f" }, { id: "9a" }], last_advert: now - 2100 },
 				{ key: key("c2"), conv: "cc2c2c2c2c2c2", name: "Hilltop Repeater", type: "repeater", hops: 0, last_advert: now - 300, favorite: true }
@@ -159,6 +159,12 @@
 		var drive = mine("#0", "I'll drive up on saturday and check its battery", 1480, "sent");
 		var alice = said("#0", "Alice", "@[" + mc.name + "] count me in", 1200, 9.5, 1);
 		alice.reply = drive.id;
+		// A reply whose client prepended a ">"-quote of what it answers; the body
+		// shows only the new words (the quote is dropped, shown above).
+		var quoted = said("#0", "Bob", "@[Alice]\n>count me i..\nnice, i'll bring the spare antenna", 1100, -4.5, 2);
+		quoted.reply = alice.id;
+		// A trailing bracketed mention: renders as an "@Name" chip, not literal.
+		said("#0", "Alice", "welcome to the mesh @[Bob]", 1040, 9.5, 1);
 		var read0 = alice.id;
 		said("#0", "Bob", "same, if the weather holds", 600, -6, 2);
 		said("#0", "🦜 Polly", "https://giphy.com/gifs/8kejjglzkEprO", 560, 6, 0);
@@ -180,9 +186,78 @@
 		mc.read["#0"] = read0;
 		mc.read["ca1a1a1a1a1a1"] = readA;
 		mc.add = add;
+		// Its settings (as the settings page sets them), repeaters logged in to, packets heard
+		mc.cfg = { freq: 910525, bw: 62500, sf: 7, cr: 5, tx: 22, tel: 18, autoAdd: true, aa: 0x1e, hops: 0, acks: 0, rx: 0, af: 1000,
+			lat: null, lon: null, since: Date.now() };
+		mc.logins = {};
+		mc.pkts = [];
+		mc.pktSeq = mc.pktAt = 0;
 		if (/[?&]mcbig\b/.test(location.search)) demoMcBig(mc, now);
 		return mc;
 	})();
+	/* The demo's packets, built as MeshCore's are, from its contacts: adverts
+	   (who, what kind, where), channels' and direct messages, acks, paths,
+	   requests, over a hop or two */
+	function demoHex(n) { var s = ""; for (var i = 0; i < n; i++) s += ("0" + Math.floor(Math.random() * 256).toString(16)).slice(-2); return s; }
+	function demoLe32(v) { var s = ""; for (var i = 0; i < 4; i++) s += ("0" + (v >>> 8 * i & 255).toString(16)).slice(-2); return s; }
+	function demoUtf8(t) {
+		return unescape(encodeURIComponent(t)).split("").map(function (c) { return ("0" + c.charCodeAt(0).toString(16)).slice(-2); }).join("");
+	}
+	function demoMcPacket(at) {
+		var mc = DEMO_MC, cs = mc.contacts, c = cs[Math.floor(Math.random() * cs.length)], r = Math.random();
+		var hops = Math.floor(Math.random() * 3), flood = Math.random() < 0.6, reps = ["c2", "4f", "9a", "e1"], path = "", i;
+		for (i = 0; i < hops; i++) path += reps[(i + c.key.charCodeAt(1)) % reps.length];
+		function hdr(type) { return ("0" + (type << 2 | (flood ? 1 : 2)).toString(16)).slice(-2) + ("0" + hops.toString(16)).slice(-2) + path; }
+		var hex;
+		if (r < 0.25) {
+			var f = 0x80 | (c.type === "repeater" ? 2 : 1) | (c.lat != null ? 0x10 : 0);
+			hex = hdr(4) + c.key + demoLe32(at - 30) + demoHex(64) + ("0" + f.toString(16)).slice(-2) +
+				(c.lat != null ? demoLe32(Math.round(c.lat * 1e6) >>> 0) + demoLe32(Math.round(c.lon * 1e6) >>> 0) : "") + demoUtf8(c.name);
+		} else if (r < 0.45) hex = hdr(5) + mcChanHash(mc.channels[0].secret) + demoHex(2) + demoHex(16 + Math.floor(Math.random() * 40));
+		else if (r < 0.65) hex = hdr(2) + c.key.slice(0, 2) + cs[Math.floor(Math.random() * cs.length)].key.slice(0, 2) + demoHex(2) + demoHex(16 + Math.floor(Math.random() * 24));
+		else if (r < 0.8) hex = hdr(3) + demoHex(4);
+		else if (r < 0.9) hex = hdr(8) + c.key.slice(0, 2) + cs[0].key.slice(0, 2) + demoHex(2) + demoHex(12);
+		else hex = hdr(0) + c.key.slice(0, 2) + "e7" + demoHex(2) + demoHex(16);
+		return { snr: Math.round((Math.random() * 20 - 8) * 4) / 4, rssi: -60 - Math.floor(Math.random() * 60), raw: hex };
+	}
+	// After a moment, as an answer over the mesh comes
+	function demoLater(ms, v) { return new Promise(function (res) { setTimeout(function () { res(v); }, ms); }); }
+	function demoMcSettings() {
+		var c = DEMO_MC.cfg;
+		return { name: DEMO_MC.name, key: "e7f3a91c0d5b2846" + "aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55", protocol: 14, cli: true, stats: true,
+			radio: { freq_khz: c.freq, bw_hz: c.bw, sf: c.sf, cr: c.cr, tx_power: c.tx, max_tx_power: 22 },
+			position: !DEMO_MC.gps && c.lat != null ? { lat: c.lat, lon: c.lon } : undefined, gps: DEMO_MC.gps,
+			share_location: DEMO_MC.share, auto_add: c.autoAdd, extra_acks: c.acks,
+			telemetry: { base: c.tel & 3, location: c.tel >> 2 & 3, environment: c.tel >> 4 & 3 },
+			autoadd: { overwrite_oldest: !!(c.aa & 1), chat: !!(c.aa & 2), repeater: !!(c.aa & 4), room: !!(c.aa & 8), sensor: !!(c.aa & 16),
+				any_distance: !c.hops, max_hops: c.hops ? c.hops - 1 : undefined },
+			tuning: { rx_delay: c.rx / 1000, airtime_factor: c.af / 1000 } };
+	}
+	function demoMcCli(cmd) {
+		var c = DEMO_MC.cfg, m;
+		if (cmd === "ver") return "v1.18.0 (Build: 15-Oct-2026)";
+		if (cmd === "board") return "LilyGo T-Echo";
+		if (cmd === "get name") return "> " + DEMO_MC.name;
+		if (cmd === "get radio") return "> " + mcMHz(c.freq) + "," + mcKHz(c.bw) + "," + c.sf + "," + c.cr;
+		if (cmd === "get tx") return "> " + c.tx;
+		if ((m = /^set tx (-?\d+)$/.exec(cmd))) { c.tx = Math.max(-9, Math.min(22, +m[1])); return "OK"; }
+		if ((m = /^set name (.+)$/.exec(cmd))) { DEMO_MC.name = m[1]; return "OK"; }
+		if (cmd === "reboot") return "";
+		return "Unknown command";
+	}
+	function demoMcRemoteCli(cmd) {
+		var r = {
+			"ver": "MeshCore v1.18.0 (Build: 12-Oct-2026)",
+			"clock": "06:12 - 8/11/2026 UTC",
+			"neighbors": "4f22a81c:12:-6.25\n9a07e13d:340:2.50\ne1b9c004:1820:-11.75",
+			"stats-core": "{\"battery_mv\":3950,\"uptime_secs\":86400,\"errors\":0,\"queue_len\":1}",
+			"stats-radio": "{\"noise_floor\":-105,\"last_rssi\":-70,\"last_snr\":10.00,\"tx_air_secs\":3000,\"rx_air_secs\":9000}",
+			"stats-packets": "{\"recv\":5000,\"sent\":4800,\"flood_tx\":2000,\"direct_tx\":2800,\"flood_rx\":3500,\"direct_rx\":1500}",
+			"get radio": "> 910.525,62.5,7,5", "get tx": "> 22", "get name": "> Hilltop Repeater", "get role": "> repeater",
+			"advert": "OK - Advert sent"
+		};
+		return r[cmd] != null ? r[cmd] : "Unknown command";
+	}
 	function demoMcConv(c) {
 		var unread = 0, last = 0, upto = DEMO_MC.read[c.conv] || 0;
 		DEMO_MC.msgs.forEach(function (m) {
@@ -783,7 +858,8 @@
 			return { state: "ready", seq: DEMO_MC.seq, meta: 1, device: "/dev/ttyACM0", model: "LilyGo T-Echo",
 				firmware: "v1.18.0", build: "15-Oct-2026", protocol: 9, max_contacts: 350, max_channels: 40,
 				name: DEMO_MC.name, key: "e7f3a91c0d5b2846" + "aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55",
-				share_location: false, radio: { freq_khz: 910525, bw_hz: 62500, sf: 7, cr: 5, tx_power: 22, max_tx_power: 22 },
+				share_location: DEMO_MC.share, radio: { freq_khz: DEMO_MC.cfg.freq, bw_hz: DEMO_MC.cfg.bw, sf: DEMO_MC.cfg.sf, cr: DEMO_MC.cfg.cr,
+					tx_power: DEMO_MC.cfg.tx, max_tx_power: 22 },
 				battery_mv: 4012, storage_used_kb: 128, storage_total_kb: 4096,
 				contacts: DEMO_MC.contacts.length, channels: DEMO_MC.channels.length, unread: unread,
 				gps: { available: true, enabled: DEMO_MC.gps, live: DEMO_MC.gps, lat: p.lat, lon: p.lon, age: 3 } };
@@ -857,6 +933,96 @@
 		"pirate.meshcore:advert": { ok: true },
 		"pirate.meshcore:set_name": function (p) { DEMO_MC.name = p.name; return { ok: true }; },
 		"pirate.meshcore:gps": function (p) { DEMO_MC.gps = !!p.enabled; return { ok: true }; },
+		"pirate.meshcore:set_location": function (p) { DEMO_MC.share = !!p.enabled; return { ok: true }; },
+		"pirate.meshcore:settings": function () { return demoMcSettings(); },
+		"pirate.meshcore:set_radio": function (p) {
+			var c = DEMO_MC.cfg;
+			if (p.sf != null && (p.sf < 5 || p.sf > 12)) return { error: "sf: 5 to 12" };
+			if (p.freq_khz != null) c.freq = p.freq_khz;
+			if (p.bw_hz != null) c.bw = p.bw_hz;
+			if (p.sf != null) c.sf = p.sf;
+			if (p.cr != null) c.cr = p.cr;
+			return { ok: true };
+		},
+		"pirate.meshcore:set_tx_power": function (p) {
+			if (!(p.dbm >= -9 && p.dbm <= 22)) return { error: "dbm: -9 to 22" };
+			DEMO_MC.cfg.tx = p.dbm;
+			return { ok: true };
+		},
+		"pirate.meshcore:set_position": function (p) {
+			if (DEMO_MC.gps) return { error: "its GPS is on, and says where it is: turn it off to set a position by hand" };
+			DEMO_MC.cfg.lat = p.lat;
+			DEMO_MC.cfg.lon = p.lon;
+			return { ok: true };
+		},
+		"pirate.meshcore:set_params": function (p) {
+			var c = DEMO_MC.cfg;
+			if (p.auto_add != null) c.autoAdd = !!p.auto_add;
+			if (p.extra_acks != null) c.acks = p.extra_acks;
+			if (p.share_location != null) DEMO_MC.share = !!p.share_location;
+			["telemetry_base", "telemetry_location", "telemetry_environment"].forEach(function (k, i) {
+				if (p[k] != null) c.tel = c.tel & ~(3 << 2 * i) | p[k] << 2 * i;
+			});
+			return { ok: true };
+		},
+		"pirate.meshcore:set_autoadd": function (p) {
+			var c = DEMO_MC.cfg;
+			["overwrite_oldest", "chat", "repeater", "room", "sensor"].forEach(function (k, i) {
+				if (p[k] != null) c.aa = p[k] ? c.aa | 1 << i : c.aa & ~(1 << i);
+			});
+			if (p.max_hops != null) c.hops = p.max_hops + 1;
+			return { ok: true };
+		},
+		"pirate.meshcore:set_tuning": function (p) {
+			if (p.rx_delay != null) DEMO_MC.cfg.rx = Math.round(p.rx_delay * 1000);
+			if (p.airtime_factor != null) DEMO_MC.cfg.af = Math.round(p.airtime_factor * 1000);
+			return { ok: true };
+		},
+		"pirate.meshcore:stats": function () {
+			var up = 3 * 86400 + 4 * 3600 + Math.floor((Date.now() - DEMO_MC.cfg.since) / 1000);
+			return demoLater(500, { ok: true, core: { battery_mv: 4012, uptime: up, errors: 0, queue: 0 },
+				radio: { noise_floor: -112, last_rssi: -80, last_snr: 9.5, tx_air: 128, rx_air: 547 },
+				packets: { received: 1234 + DEMO_MC.pktSeq, sent: 56, sent_flood: 40, sent_direct: 16, received_flood: 1000 + DEMO_MC.pktSeq,
+					received_direct: 234, receive_errors: 7 } });
+		},
+		"pirate.meshcore:cli": function (p) { return demoLater(250, { ok: true, reply: demoMcCli(p.command) }); },
+		"pirate.meshcore:reboot": { ok: true },
+		"pirate.meshcore:login": function (p) {
+			var c = DEMO_MC.contacts.filter(function (x) { return x.key.indexOf(p.key) === 0; })[0];
+			if (!c || c.type === "chat") return { error: "only repeaters, rooms and sensors take a login" };
+			if (p.password !== "password" && p.password !== "") return demoLater(1200, { error: "it refused the login: a wrong password, or not one it knows" });
+			DEMO_MC.logins[c.key] = p.password ? 3 : 0;
+			return demoLater(1200, { ok: true, ms: 1180, admin: !!p.password, role: p.password ? 3 : 0, firmware_level: 2 });
+		},
+		"pirate.meshcore:logout": function (p) {
+			Object.keys(DEMO_MC.logins).forEach(function (k) { if (k.indexOf(p.key) === 0) delete DEMO_MC.logins[k]; });
+			return { ok: true };
+		},
+		"pirate.meshcore:remote_status": function () {
+			return demoLater(1400, { ok: true, ms: 1350, battery_mv: 3950, queue: 1, noise_floor: -105, last_rssi: -70, received: 5000, sent: 4800,
+				air_secs: 3000, uptime: 86400 + 7200, sent_flood: 2000, sent_direct: 2800, received_flood: 3500, received_direct: 1500,
+				errors: 0, last_snr: 10, direct_dups: 12, flood_dups: 340, rx_air_secs: 9000, receive_errors: 3 });
+		},
+		"pirate.meshcore:remote_cli": function (p) {
+			var admin = Object.keys(DEMO_MC.logins).some(function (k) { return k.indexOf(p.key) === 0 && DEMO_MC.logins[k] === 3; });
+			if (!admin) return demoLater(3000, { error: "no answer to that command (yet): log in as its admin first, or it's out of reach" });
+			return demoLater(900, { ok: true, ms: 870, reply: demoMcRemoteCli(p.command) });
+		},
+		"pirate.meshcore:cli_log": function () { return { seq: 0, lines: [] }; },
+		"pirate.meshcore:packets": function (p) {
+			var mc = DEMO_MC, now = Math.floor(Date.now() / 1000), since = p.since || 0, k;
+			// Heard since last asked: a packet every second or two (a minute's, at first)
+			if (!mc.pktAt) mc.pktAt = now - 60;
+			while (mc.pktAt < now) {
+				mc.pktAt += 1 + Math.floor(Math.random() * 3);
+				k = demoMcPacket(mc.pktAt);
+				k.id = ++mc.pktSeq;
+				k.rx = Math.min(mc.pktAt, now);
+				mc.pkts.push(k);
+				if (mc.pkts.length > 256) mc.pkts.shift();
+			}
+			return { seq: mc.pktSeq, packets: mc.pkts.filter(function (x) { return x.id > since; }).slice(-Math.min(p.limit || 100, 256)) };
+		},
 		"pirate.meshcore:channel_set": function (p) {
 			DEMO_MC.channels = DEMO_MC.channels.filter(function (c) { return c.index !== p.index; });
 			if (p.name) DEMO_MC.channels.push({ index: p.index, conv: "#" + p.index, name: p.name,
@@ -2295,6 +2461,8 @@
 		people: '<svg viewBox="0 0 16 16" width="16" height="16"><circle cx="6" cy="5.4" r="2.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M1.6 13.6c.4-2.4 2.2-3.9 4.4-3.9s4 1.5 4.4 3.9M10.6 3.2a2.4 2.4 0 0 1 0 4.5M12.2 9.9c1.3.5 2.1 1.7 2.3 3.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
 		chev: '<svg viewBox="0 0 12 12" width="10" height="10"><path d="M3 4.5 6 7.5 9 4.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 		send: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M2.2 7.6 13.8 2.4 10.6 13.8 8.1 9.1Z" fill="currentColor"/></svg>',
+		term: '<svg viewBox="0 0 16 16" width="16" height="16"><rect x="1.5" y="2.5" width="13" height="11" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M4.2 6.2 6.4 8l-2.2 1.8M8.2 10.4h3.6" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+		pkts: '<svg viewBox="0 0 16 16" width="16" height="16"><path d="M1.4 8.6h2.2l1.6-4.4 2.6 8.4 2.4-6.2 1.4 2.2h2.9" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 		down: '<svg viewBox="0 0 12 12" width="11" height="11"><path d="M6 2v8M2.6 6.6 6 10l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>'
 	};
 	function mcIcon(name, cls) {
@@ -2306,6 +2474,191 @@
 	var MC_PUBLIC_KEY = "8b3387e9c5cdea6ac9e5edbaa115cd72";
 	function mcChanKind(c) { return c.secret === MC_PUBLIC_KEY ? "public" : c.name.charAt(0) === "#" ? "hashtag" : "private"; }
 	function mcChanLabel(c) { return mcChanKind(c) === "hashtag" && c.name.length > 1 ? c.name.slice(1) : c.name; }
+	/* MeshCore's suggested radio settings, region by region, as its app
+	   offers them (from its app API's config, api.meshcore.nz/api/v1/config:
+	   kept here so the page needs no internet). f in kHz, bw in Hz; hs: the
+	   hop ids' size in bytes that mesh uses too, where it says */
+	var MC_PRESETS = [
+		{ t: "Australia", f: 915800, bw: 250000, sf: 10, cr: 5 },
+		{ t: "Australia (Narrow)", f: 916575, bw: 62500, sf: 7, cr: 7 },
+		{ t: "Australia (Mid)", f: 915075, bw: 125000, sf: 9, cr: 5 },
+		{ t: "Australia: SA, WA", f: 923125, bw: 62500, sf: 8, cr: 8 },
+		{ t: "Australia: QLD", f: 923125, bw: 62500, sf: 8, cr: 5 },
+		{ t: "Brazil", f: 923125, bw: 62500, sf: 8, cr: 8 },
+		{ t: "Canada", f: 910525, bw: 62500, sf: 7, cr: 5, hs: 3 },
+		{ t: "Costa Rica", f: 910525, bw: 125000, sf: 11, cr: 5 },
+		{ t: "EU/UK (Narrow)", f: 869618, bw: 62500, sf: 8, cr: 8 },
+		{ t: "EU/UK (Deprecated)", f: 869525, bw: 250000, sf: 11, cr: 5 },
+		{ t: "Czech Republic (Narrow)", f: 869432, bw: 62500, sf: 7, cr: 5, hs: 2 },
+		{ t: "EU 433MHz (Long Range)", f: 433650, bw: 250000, sf: 11, cr: 5 },
+		{ t: "EU 433MHz (Narrow)", f: 433650, bw: 62500, sf: 8, cr: 8 },
+		{ t: "Hungary", f: 869618, bw: 62500, sf: 7, cr: 5, hs: 2 },
+		{ t: "Netherlands", f: 869618, bw: 62500, sf: 7, cr: 5 },
+		{ t: "Netherlands (Limburg)", f: 869618, bw: 62500, sf: 8, cr: 8, hs: 2 },
+		{ t: "New Zealand (Narrow)", f: 917375, bw: 62500, sf: 7, cr: 5, hs: 2 },
+		{ t: "New Zealand (Gisborne)", f: 917375, bw: 250000, sf: 11, cr: 5, hs: 1 },
+		{ t: "Portugal 433", f: 433375, bw: 62500, sf: 9, cr: 6 },
+		{ t: "Portugal 868", f: 869618, bw: 62500, sf: 7, cr: 6 },
+		{ t: "Slovakia", f: 869618, bw: 62500, sf: 7, cr: 5, hs: 2 },
+		{ t: "Switzerland", f: 869618, bw: 62500, sf: 8, cr: 8 },
+		{ t: "Thailand", f: 921000, bw: 62500, sf: 7, cr: 5 },
+		{ t: "USA", f: 910525, bw: 62500, sf: 7, cr: 5 },
+		{ t: "USA - Southern California", f: 927875, bw: 62500, sf: 7, cr: 5, hs: 3 },
+		{ t: "Vietnam (Narrow)", f: 920250, bw: 62500, sf: 8, cr: 5 },
+		{ t: "Vietnam (Deprecated)", f: 920250, bw: 250000, sf: 11, cr: 5 }
+	];
+	// The LoRa bandwidths its radios have, in Hz
+	var MC_BWS = [7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000];
+	function mcMHz(khz) { return (khz / 1000).toFixed(3).replace(/\.?0+$/, ""); }
+	function mcKHz(hz) { return (hz / 1000).toFixed(2).replace(/\.?0+$/, ""); }
+	// Which of MeshCore's presets a radio's settings are, if any (one with no
+	// hop-id size of its own first: that's a setting a radio doesn't say)
+	function mcPresetOf(r) {
+		var m = MC_PRESETS.filter(function (p) { return p.f === r.freq_khz && p.bw === r.bw_hz && p.sf === r.sf && p.cr === r.cr; });
+		m.sort(function (a, b) { return (a.hs ? 1 : 0) - (b.hs ? 1 : 0); });
+		return m[0] || null;
+	}
+	// Seconds, as long as they've been: up 3 d 4 h; 12 min; 40 s
+	function mcLong(s) {
+		s = Math.max(0, Math.round(s || 0));
+		if (s >= 86400) return Math.floor(s / 86400) + " d " + Math.floor(s % 86400 / 3600) + " h";
+		if (s >= 3600) return Math.floor(s / 3600) + " h " + Math.floor(s % 3600 / 60) + " min";
+		if (s >= 60) return Math.floor(s / 60) + " min " + (s % 60) + " s";
+		return s + " s";
+	}
+	/* MeshCore's packets, as its radio hears them (its docs/packet_format.md):
+	   a header (route, payload type, version), transport codes on a scoped
+	   route, a path (its hops' ids, 1-3 bytes each), then the payload - an
+	   advert in the clear (who, what kind, where), the rest addressed by
+	   1-byte hashes of keys (or of a channel's) and encrypted */
+	var MC_PKT_TYPES = ["request", "response", "message", "ack", "advert", "channel", "channel data",
+		"anonymous request", "path", "trace", "multipart", "control", "type 12", "type 13", "type 14", "custom"];
+	var MC_NODE_KINDS = ["", "person", "repeater", "room", "sensor"];
+	function mcHexBytes(hex) {
+		var b = [], i;
+		for (i = 0; i + 1 < hex.length; i += 2) b.push(parseInt(hex.substr(i, 2), 16));
+		return b;
+	}
+	function mcHex(b, from, to) {
+		var s = "", i;
+		for (i = from; i < to; i++) s += (b[i] < 16 ? "0" : "") + b[i].toString(16);
+		return s;
+	}
+	function mcLe32(b, i) { return (b[i] | b[i + 1] << 8 | b[i + 2] << 16 | b[i + 3] << 24) >>> 0; }
+	function mcDecodePacket(hex) {
+		var b = mcHexBytes(hex), p = { size: b.length };
+		if (b.length < 2) { p.short = true; return p; }
+		var h = b[0], i = 1;
+		p.route = h & 3;
+		p.type = h >> 2 & 15;
+		p.ver = h >> 6;
+		p.typeName = MC_PKT_TYPES[p.type];
+		p.flood = p.route < 2;
+		p.scoped = p.route === 0 || p.route === 3;
+		if (p.scoped) {
+			if (b.length < i + 4) { p.short = true; return p; }
+			p.scope = b[i] | b[i + 1] << 8;
+			i += 4;
+		}
+		if (b.length < i + 1) { p.short = true; return p; }
+		var pl = b[i++], hs = (pl >> 6) + 1;
+		p.hops = pl & 63;
+		p.hashSize = hs;
+		p.path = [];
+		if (hs > 3 || b.length < i + p.hops * hs) { p.short = true; return p; }
+		for (var k = 0; k < p.hops; k++) p.path.push(mcHex(b, i + k * hs, i + (k + 1) * hs));
+		i += p.hops * hs;
+		var d = b.slice(i);
+		p.payloadSize = d.length;
+		if (p.ver !== 0) return p;      /* a payload version newer than MeshCore's first: not read here */
+		switch (p.type) {
+		case 4:                         /* advert: key, time, signature, then who it is */
+			if (d.length < 101) { p.short = true; break; }
+			p.key = mcHex(d, 0, 32);
+			p.time = mcLe32(d, 32);
+			var f = d[100], j = 101;
+			p.kind = MC_NODE_KINDS[f & 15] || "kind " + (f & 15);
+			if (f & 0x10) {
+				if (d.length < j + 8) { p.short = true; break; }
+				p.lat = (mcLe32(d, j) | 0) / 1e6;
+				p.lon = (mcLe32(d, j + 4) | 0) / 1e6;
+				j += 8;
+			}
+			if (f & 0x20) j += 2;
+			if (f & 0x40) j += 2;
+			if (f & 0x80) {
+				var name = "";
+				try { name = decodeURIComponent(escape(String.fromCharCode.apply(null, d.slice(j)))); }
+				catch (e) { name = String.fromCharCode.apply(null, d.slice(j)); }
+				p.name = name.replace(/\0[\s\S]*$/, "");
+			}
+			break;
+		case 0: case 1: case 2: case 8: /* request, response, message, path: to, from */
+			if (d.length < 4) { p.short = true; break; }
+			p.dst = mcHex(d, 0, 1);
+			p.src = mcHex(d, 1, 2);
+			break;
+		case 5: case 6:                 /* a channel's: its hash */
+			if (d.length < 3) { p.short = true; break; }
+			p.chan = mcHex(d, 0, 1);
+			break;
+		case 7:                         /* anonymous request (a login): to, and the sender's key */
+			if (d.length < 35) { p.short = true; break; }
+			p.dst = mcHex(d, 0, 1);
+			p.key = mcHex(d, 1, 33);
+			break;
+		case 3:
+			if (d.length >= 4) p.ack = mcHex(d, 0, 4);
+			break;
+		case 9:
+			if (d.length >= 9) p.tag = mcHex(d, 0, 4);
+			break;
+		case 11:
+			if (d.length) p.control = { 8: "discover request", 9: "discover response" }[d[0] >> 4] || "control " + (d[0] >> 4);
+			break;
+		}
+		return p;
+	}
+
+	/* SHA-256, for channels' hashes (the router's page isn't on HTTPS, so
+	   it has no crypto.subtle) */
+	var MC_K256 = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+		0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+		0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+		0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+		0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+		0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+		0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+		0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+	function mcSha256(bytes) {
+		var h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+		var m = bytes.slice(), bits = bytes.length * 8, w = new Array(64), i, j;
+		m.push(0x80);
+		while (m.length % 64 !== 56) m.push(0);
+		for (i = 7; i >= 0; i--) m.push(i > 3 ? 0 : bits >>> (8 * i) & 255);
+		function rotr(x, n) { return x >>> n | x << (32 - n); }
+		for (i = 0; i < m.length; i += 64) {
+			for (j = 0; j < 16; j++) w[j] = m[i + 4 * j] << 24 | m[i + 4 * j + 1] << 16 | m[i + 4 * j + 2] << 8 | m[i + 4 * j + 3];
+			for (j = 16; j < 64; j++) {
+				var s0 = rotr(w[j - 15], 7) ^ rotr(w[j - 15], 18) ^ w[j - 15] >>> 3;
+				var s1 = rotr(w[j - 2], 17) ^ rotr(w[j - 2], 19) ^ w[j - 2] >>> 10;
+				w[j] = w[j - 16] + s0 + w[j - 7] + s1 | 0;
+			}
+			var a = h[0], b = h[1], c = h[2], d = h[3], e = h[4], f = h[5], g = h[6], k = h[7];
+			for (j = 0; j < 64; j++) {
+				var t1 = k + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + (e & f ^ ~e & g) + MC_K256[j] + w[j] | 0;
+				var t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + (a & b ^ a & c ^ b & c) | 0;
+				k = g; g = f; f = e; e = d + t1 | 0; d = c; c = b; b = a; a = t1 + t2 | 0;
+			}
+			h[0] = h[0] + a | 0; h[1] = h[1] + b | 0; h[2] = h[2] + c | 0; h[3] = h[3] + d | 0;
+			h[4] = h[4] + e | 0; h[5] = h[5] + f | 0; h[6] = h[6] + g | 0; h[7] = h[7] + k | 0;
+		}
+		var out = [];
+		for (i = 0; i < 8; i++) out.push(h[i] >>> 24 & 255, h[i] >>> 16 & 255, h[i] >>> 8 & 255, h[i] & 255);
+		return out;
+	}
+	// A channel's hash, as its packets carry it: the first byte of the SHA-256 of its key
+	function mcChanHash(secret) { return mcHex(mcSha256(mcHexBytes(secret)), 0, 1); }
 	/* Links in a message, clickable; the ones known to be images (Giphy's
 	   GIFs, as a page or as meshcore-open's "g:ID"; a link to an image
 	   file) shown under it, as Discord does, loaded by the viewer's
@@ -2438,7 +2791,21 @@
 		return { tag: m[1], pos: m[2] != null && Math.abs(lat) <= 90 && Math.abs(lon) <= 180 ? { lat: lat, lon: lon } : null };
 	}
 	function mcCount(s, c) { return s.split(c).length - 1; }
-	function mcLinkify(text, media) {
+	// A bracketed mention "@[Name]" (some clients' form, also "@[Name#hash]")
+	// rendered inline as an "@Name" chip, like a leading mention, so it reads as
+	// a mention and not literal brackets. Everything else stays plain text.
+	function mcMentionNodes(str, me) {
+		var f = document.createDocumentFragment(), i = 0, mm, re = /@\[([^\]]+?)(?:#\d{10,16})?\]/g;
+		while ((mm = re.exec(str))) {
+			if (mm.index > i) f.appendChild(document.createTextNode(str.slice(i, mm.index)));
+			var nm = mm[1];
+			f.appendChild(el("span", { class: "mc-mention" + (me && nm === me ? " me" : ""), "data-mention": nm, role: "button", tabindex: "0", text: "@" + nm }));
+			i = mm.index + mm[0].length;
+		}
+		if (i < str.length) f.appendChild(document.createTextNode(str.slice(i)));
+		return f;
+	}
+	function mcLinkify(text, media, me) {
 		var frag = document.createDocumentFragment(), last = 0, m;
 		MC_URL.lastIndex = 0;
 		while ((m = MC_URL.exec(text))) {
@@ -2452,14 +2819,14 @@
 				else break;
 			}
 			if (!u || /^www\.$/i.test(u)) continue;
-			if (m.index > last) frag.appendChild(document.createTextNode(text.slice(last, m.index)));
+			if (m.index > last) frag.appendChild(mcMentionNodes(text.slice(last, m.index), me));
 			var href = /^www\./i.test(u) ? "https://" + u : u, img = mcMediaOf(href);
 			frag.appendChild(el("a", { class: "mc-link", href: href, target: "_blank", rel: "noopener noreferrer nofollow", text: u }));
 			if (img && media && media.length < 3) media.push(img);
 			last = m.index + u.length;
 			MC_URL.lastIndex = last;
 		}
-		if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
+		if (last < text.length) frag.appendChild(mcMentionNodes(text.slice(last), me));
 		return frag;
 	}
 	// A link's embed: a player you press play on, a card for a tweet/track, or
@@ -2611,6 +2978,10 @@
 		vNote.appendChild(el("div", { class: "muted", text: "Loading…" }));
 
 		var st = null, contacts = [], channels = [], freeSlot = null, seq = 0, timer = null;
+		// The radio's settings and stats as last asked, an editor open; the command line's; the packet log's
+		var cfg = null, cfgErr = null, editing = null, health = null, healthAt = 0, healthErr = null;
+		var term = { target: "self", logs: {}, hist: [], hpos: 0, auth: {}, since: {}, busy: false, timer: null };
+		var feed = { list: [], since: 0, paused: false, filter: "", timer: null, open: {}, err: null, chash: {} };
 		var mode = null, open = null, page = null;      // a thread (its conv), a page, or a note
 		var thread = [], byId = {}, shown = {}, more = false, loadingOlder = false, unreadFrom = 0, newBelow = 0, jumpWas = "";
 		var rmsgs = {}, reacts = {};   // the thread's reactions; by the message each is to, emoji, who
@@ -2775,6 +3146,10 @@
 						st.share_location ? el("span", { class: "mc-mewarn", title: "Its adverts carry where it is",
 							text: (bits.length ? " · " : "") + "sharing location" }) : null)));
 			mePanel.appendChild(meBtn);
+			mePanel.appendChild(el("button", { type: "button", class: "mc-iconbtn" + (mode === "page" && page === "terminal" ? " on" : ""),
+				title: "Command line", "aria-label": "Command line: your radio's, and repeaters'", onclick: function () { openPage("terminal"); } }, mcIcon("term")));
+			mePanel.appendChild(el("button", { type: "button", class: "mc-iconbtn" + (mode === "page" && page === "packets" ? " on" : ""),
+				title: "Packets it hears", "aria-label": "Packets it hears: the packet log", onclick: function () { openPage("packets"); } }, mcIcon("pkts")));
 			mePanel.appendChild(el("button", { type: "button", class: "mc-iconbtn" + (mode === "page" && page === "radio" ? " on" : ""),
 				title: "Your radio", "aria-label": "Your radio: its settings", onclick: function () { openPage("radio"); } }, mcIcon("gear")));
 		}
@@ -2817,6 +3192,8 @@
 			radioStatus = null;
 			if (page === "contacts") return renderContacts();
 			if (page === "radio") return renderRadio();
+			if (page === "terminal") return renderTerminal();
+			if (page === "packets") return renderPackets();
 			if (page === "addch") return renderAddChannel();
 			if (page && page.indexOf("chan:") === 0) return renderChannel(+page.slice(5));
 		}
@@ -2926,38 +3303,321 @@
 				onclick: function (ev) { ev.stopPropagation(); contactOp("contact_favorite", c, { favorite: !c.favorite }); } }, c.favorite ? "★" : "☆");
 		}
 
-		// Your radio: what it is, its adverts and name, its GPS
-		function renderRadio() {
+		// Your radio: how it's doing, and its settings, each as the radio last
+		// said it (asked again each time this is shown). An editor open is left
+		// alone by the page's own refreshes, until it's saved or put away
+		function sec(title) { return el("h4", { class: "sub-h2", text: title }); }
+		function descr(text) { return el("p", { class: "descr", text: text }); }
+		function loadCfg() {
+			return call("pirate.meshcore", "settings").then(function (c) {
+				if (!alive()) return;
+				if (c.error) { cfg = null; cfgErr = c.error; }
+				else { cfg = c; cfgErr = null; }
+				if (mode === "page" && page === "radio") renderRadio(true);
+			}).catch(function (e) {
+				if (failed(e)) return;
+				cfgErr = /status 3\b/.test(String(e.message || e)) ? "old" : String(e.message || e);
+				if (mode === "page" && page === "radio") renderRadio(true);
+			});
+		}
+		function renderRadio(fresh) {
+			if (!fresh) loadCfg();
+			if (editing && vPage.contains(editing)) return;
+			editing = null;
 			clear(vPage);
-			var s = st, r = s.radio || {}, g = s.gps || {};
+			var s = st, c = cfg, g = s.gps || {}, r = (c && c.radio) || s.radio || {};
 			vPage.appendChild(pageHead(mcFace(s.name, true, "sm"), s.name, (s.model || "MeshCore") + (s.firmware ? " · MeshCore " + s.firmware : "")));
-			var body = el("div", { class: "mc-pagebody" });
+			var body = el("div", { class: "mc-pagebody mc-settings" });
 			vPage.appendChild(body);
+			// What the last change did, in sight wherever the page is scrolled to
+			radioStatus = el("div", { class: "status", role: "status" });
+			if (radioLine) line(radioStatus, radioLine[0], radioLine[1]);
+			body.appendChild(el("div", { class: "mc-setstatus" }, radioStatus));
 			if (s.share_location)
 				body.appendChild(alertEl("warn", "This radio shares its location in its adverts: everyone on the mesh sees where it is. MeshCore's app turns that off."));
+			if (cfgErr === "old")
+				body.appendChild(alertEl("warn", "The router's MeshCore service is older than this page: update the router's firmware for the radio's settings, its command line and the packet log."));
+			else if (cfgErr)
+				body.appendChild(alertEl("warn", cfgErr));
+
+			// How it's doing
+			body.appendChild(sec("How it's doing"));
+			var hBox = el("div");
+			body.appendChild(hBox);
+			fillHealth(hBox);
+			body.appendChild(el("div", { class: "toolbar" },
+				btn("Refresh", { onclick: function () { loadHealth(hBox); } }),
+				btn("Packets it hears", { onclick: function () { openPage("packets"); } }),
+				btn("Command line", { onclick: function () { openPage("terminal"); } })));
+			if (cfgErr !== "old" && (!c || c.stats) && Date.now() - healthAt > 20000) loadHealth(hBox);
+
+			// On the mesh
+			body.appendChild(sec("On the mesh"));
 			body.appendChild(kvEl([
 				["Battery", mcBattery(s.battery_mv)],
-				["Radio", r.freq_khz ? (r.freq_khz / 1000) + " MHz · " + (r.bw_hz / 1000) + " kHz · SF" + r.sf + " · CR" + r.cr + " · " + r.tx_power + " dBm" : null],
 				["Port", devLabel(s.device)],
 				["Key", s.key ? el("code", { class: "mc-key", text: s.key }) : null],
 				["Contacts", contacts.length + (s.max_contacts ? " of " + s.max_contacts : "") + (full() ? " (full)" : "")],
 				["Channels", channels.length + (s.max_channels ? " of " + s.max_channels : "")]
 			]));
-			body.appendChild(el("h4", { class: "sub-h2", text: "On the mesh" }));
 			body.appendChild(el("div", { class: "toolbar" },
 				btn("Advert to neighbours", { onclick: function () { advert(false); } }),
 				btn("Advert to the whole mesh", { onclick: function () { advert(true); } }),
 				btn("Rename", { onclick: rename })));
-			body.appendChild(el("p", { class: "descr", text: "An advert says your radio is here, so others can add you: to those in range, or passed on across the whole mesh. Its name is what they see." }));
-			if (g.available) {
-				body.appendChild(el("h4", { class: "sub-h2", text: "GPS" }));
+			body.appendChild(descr("An advert says your radio is here, so others can add you: to those in range, or passed on across the whole mesh. Its name is what they see."));
+
+			// Its radio: the mesh's settings, and how loud
+			body.appendChild(sec("Radio"));
+			if (r.freq_khz) {
+				var pre = mcPresetOf(r);
+				body.appendChild(el("p", { class: "mc-setnow" },
+					el("strong", { text: mcMHz(r.freq_khz) + " MHz" }), " · " + mcKHz(r.bw_hz) + " kHz · SF" + r.sf + " · CR" + r.cr,
+					el("span", { class: "muted", text: pre ? " · MeshCore's " + pre.t + " settings" : " · not one of MeshCore's presets" })));
+			}
+			var radioBox = el("div");
+			body.appendChild(radioBox);
+			var bar = el("div", { class: "toolbar" });
+			if (c) {
+				bar.appendChild(btn("Change…", { onclick: function () { radioEditor(radioBox, r); } }));
+				var most = c.radio.max_tx_power || 22, tx = el("select", { class: "sel", "aria-label": "TX power" });
+				for (var d = most; d >= -9; d--)
+					tx.appendChild(el("option", { value: String(d), text: d + " dBm" + (d === most ? " (its most)" : "") }));
+				tx.value = String(c.radio.tx_power);
+				tx.addEventListener("change", function () { act(call("pirate.meshcore", "set_tx_power", { dbm: +tx.value }), "TX power: " + tx.value + " dBm"); });
+				bar.appendChild(el("label", { class: "chkline" }, "TX power", tx));
+			} else if (r.tx_power != null) bar.appendChild(el("span", { class: "status", text: "TX power " + r.tx_power + " dBm" }));
+			body.appendChild(bar);
+			body.appendChild(descr("Every radio on a mesh has the same frequency, bandwidth, spreading factor and coding rate: change them only to join another mesh, or to follow yours. More TX power reaches further, on more battery."));
+
+			// Where it is, and who's told
+			body.appendChild(sec("Location"));
+			var locBar = el("div", { class: "toolbar" });
+			locBar.appendChild(btn(s.share_location ? "Stop sharing location" : "Share location", { onclick: function () { shareLoc(!s.share_location); } }));
+			var lstat = meshLocStat();
+			if (lstat && lstat.most !== s.share_location)
+				locBar.appendChild(btn("Match the mesh", { primary: true, onclick: function () { shareLoc(lstat.most); } }));
+			body.appendChild(locBar);
+			body.appendChild(descr(s.share_location ? "Your adverts carry where your radio is - everyone on the mesh sees it. MeshCore's own app keeps this off." : "Your adverts carry only your radio's name, not where it is. Turn it on to let the mesh see where you are."));
+			if (lstat) body.appendChild(el("p", { class: "descr muted", text: meshLocSentence(lstat, s.share_location) }));
+			if (g.available)
 				body.appendChild(el("div", { class: "toolbar" },
 					btn(g.enabled ? "GPS off" : "GPS on", { onclick: function () { gps(!g.enabled); } }),
-					el("span", { class: "status", text: !g.enabled ? "off" : g.live ? "a fix: " + g.lat.toFixed(5) + ", " + g.lon.toFixed(5) + " (it tags the Wi-Fi survey)" : "on, no fix yet" })));
+					el("span", { class: "status", text: !g.enabled ? "GPS off" : g.live ? "GPS fix: " + g.lat.toFixed(5) + ", " + g.lon.toFixed(5) + " (it tags the Wi-Fi survey)" : "GPS on, no fix yet" })));
+			if (c && !c.gps) {
+				var pBox = el("div");
+				body.appendChild(el("p", { class: "mc-setnow", text: c.position ? "Set by hand: " + c.position.lat.toFixed(5) + ", " + c.position.lon.toFixed(5) : "No position set by hand." }));
+				body.appendChild(pBox);
+				body.appendChild(el("div", { class: "toolbar" }, btn(c.position ? "Change position…" : "Set a position…", { onclick: function () { positionEditor(pBox, c.position); } })));
+				body.appendChild(descr("With its GPS off, its adverts carry this, when it shares where it is."));
 			}
-			radioStatus = el("div", { class: "status" });
-			if (radioLine) line(radioStatus, radioLine[0], radioLine[1]);
-			body.appendChild(radioStatus);
+
+			if (c) {
+				// Who may ask for its telemetry
+				body.appendChild(sec("Who may ask for its telemetry"));
+				body.appendChild(el("div", { class: "form mc-form3" },
+					telSel("Its battery", "telemetry_base", c.telemetry.base),
+					telSel("Where it is", "telemetry_location", c.telemetry.location),
+					telSel("Its sensors", "telemetry_environment", c.telemetry.environment)));
+				body.appendChild(descr("\"Contacts you allow\": the ones you let, each on its own (in MeshCore's app). Someone asking for its telemetry gets only what this lets them."));
+
+				// The contacts it adds by itself
+				body.appendChild(sec("Contacts it adds"));
+				var auto = el("input", { type: "checkbox" });
+				auto.checked = !!c.auto_add;
+				auto.addEventListener("change", function () { act(call("pirate.meshcore", "set_params", { auto_add: auto.checked }), auto.checked ? "it adds the radios it hears" : "it adds no one by itself"); });
+				body.appendChild(el("label", { class: "chkline mc-setline" }, auto, "Add the radios it hears, by itself"));
+				var aa = c.autoadd;
+				if (aa) {
+					var kinds = el("div", { class: "mc-kinds" + (c.auto_add ? "" : " off") });
+					[["chat", "People"], ["repeater", "Repeaters"], ["room", "Rooms"], ["sensor", "Sensors"]].forEach(function (k) {
+						var cb = el("input", { type: "checkbox" });
+						cb.checked = !!aa[k[0]];
+						cb.disabled = !c.auto_add;
+						cb.addEventListener("change", function () {
+							var p = {};
+							p[k[0]] = cb.checked;
+							act(call("pirate.meshcore", "set_autoadd", p), k[1].toLowerCase() + (cb.checked ? ": added" : ": left out"));
+						});
+						kinds.appendChild(el("label", { class: "chkline" }, cb, k[1]));
+					});
+					body.appendChild(kinds);
+					var far = el("select", { class: "sel", "aria-label": "From how far" }), cur = aa.any_distance ? -1 : aa.max_hops;
+					far.appendChild(el("option", { value: "-1", text: "any distance" }));
+					far.appendChild(el("option", { value: "0", text: "only those heard directly" }));
+					for (var h = 1; h <= 8; h++) far.appendChild(el("option", { value: String(h), text: "up to " + h + " hop" + (h > 1 ? "s" : "") + " away" }));
+					if (cur > 8) far.appendChild(el("option", { value: String(cur), text: "up to " + cur + " hops away" }));
+					far.value = String(cur);
+					far.disabled = !c.auto_add;
+					far.addEventListener("change", function () { act(call("pirate.meshcore", "set_autoadd", { max_hops: +far.value }), "it adds those from " + far.options[far.selectedIndex].text); });
+					body.appendChild(el("div", { class: "toolbar mc-kindsfar" }, el("label", { class: "chkline" }, "From", far)));
+					var over = el("input", { type: "checkbox" });
+					over.checked = !!aa.overwrite_oldest;
+					over.addEventListener("change", function () { act(call("pirate.meshcore", "set_autoadd", { overwrite_oldest: over.checked }), over.checked ? "a full list makes room: the one heard longest ago goes" : "a full list adds no one new"); });
+					body.appendChild(el("label", { class: "chkline mc-setline" }, over, "When its list is full, make room: the one heard longest ago goes (never a favourite)"));
+				}
+				body.appendChild(descr("Off, it adds no one by itself: someone new is added only when you add them. Its list holds " + (s.max_contacts || 350) + "."));
+
+				// Advanced
+				body.appendChild(sec("Advanced"));
+				var acks = el("select", { class: "sel", "aria-label": "Extra acks" });
+				[["0", "none"], ["1", "one"], ["2", "two"]].forEach(function (o) { acks.appendChild(el("option", { value: o[0], text: o[1] })); });
+				acks.value = String(c.extra_acks);
+				acks.addEventListener("change", function () { act(call("pirate.meshcore", "set_params", { extra_acks: +acks.value }), "extra acks: " + acks.options[acks.selectedIndex].text); });
+				var tBox = el("div"), tbar = el("div", { class: "toolbar" }, el("label", { class: "chkline" }, "Extra acks", acks));
+				if (c.tuning) tbar.appendChild(btn("Tuning…", { onclick: function () { tuningEditor(tBox, c.tuning); } }));
+				body.appendChild(tbar);
+				body.appendChild(tBox);
+				body.appendChild(descr("Extra acks: each ack it sends, sent again, so more of its messages are confirmed, at the cost of airtime." +
+					(c.tuning ? " Tuning (RX delay " + c.tuning.rx_delay + ", airtime factor " + c.tuning.airtime_factor + "): how long it waits before passing on what it hears, and how long it keeps quiet after sending; leave them unless your mesh asks otherwise." : "")));
+			}
+
+			// A restart
+			body.appendChild(sec("Restart"));
+			body.appendChild(el("div", { class: "toolbar" }, btn("Restart the radio", { onclick: function () {
+				if (window.confirm("Restart the radio? It's gone for a few seconds, then this connects to it again."))
+					act(call("pirate.meshcore", "reboot"), "restarting: it's back in a few seconds");
+			} })));
+		}
+		function telSel(label, key, val) {
+			var s = el("select", { class: "sel" });
+			[["0", "No one"], ["1", "Contacts you allow"], ["2", "Anyone"]].forEach(function (o) { s.appendChild(el("option", { value: o[0], text: o[1] })); });
+			s.value = String(val);
+			s.addEventListener("change", function () {
+				var p = {};
+				p[key] = +s.value;
+				act(call("pirate.meshcore", "set_params", p), label.toLowerCase() + ": " + s.options[s.selectedIndex].text.toLowerCase() + " may ask");
+			});
+			return el("label", {}, el("span", { class: "lbl", text: label }), s);
+		}
+		// An editor in its place, kept until it's saved or put away
+		function editor(box, parts, save) {
+			var status = el("span", { class: "status" }), form = el("div", { class: "mc-editor" });
+			parts.forEach(function (p) { if (p) form.appendChild(p); });
+			form.appendChild(el("div", { class: "toolbar" }, btn("Save", { primary: true, onclick: function () { save(status, done); } }),
+				btn("Cancel", { onclick: function () { editing = null; renderRadio(true); } }), status));
+			clear(box).appendChild(form);
+			editing = form;
+			function done(ok) {
+				editing = null;
+				radioLine = [ok, "ok-text"];
+				refreshAll();
+			}
+			return status;
+		}
+		function saving(status, p, ok, done) {
+			line(status, "…");
+			p.then(function (x) {
+				if (x.error) return line(status, x.error, "err");
+				done(ok);
+			}).catch(function (e) { if (!failed(e)) line(status, String(e.message || e), "err"); });
+		}
+		function field(label, input) { return el("label", {}, el("span", { class: "lbl", text: label }), input); }
+		function radioEditor(box, r) {
+			var pre = el("select", { class: "sel" }), bw = el("select", { class: "sel" }), sf = el("select", { class: "sel" }), cr = el("select", { class: "sel" });
+			var f = el("input", { class: "inp", type: "number", step: "0.001", min: "150", max: "2500", value: mcMHz(r.freq_khz) });
+			var note = el("p", { class: "descr" }), i;
+			pre.appendChild(el("option", { value: "", text: "MeshCore's settings for a region…" }));
+			MC_PRESETS.forEach(function (p, j) {
+				pre.appendChild(el("option", { value: String(j), text: p.t + ": " + mcMHz(p.f) + " MHz, " + mcKHz(p.bw) + " kHz, SF" + p.sf + ", CR" + p.cr }));
+			});
+			MC_BWS.forEach(function (b) { bw.appendChild(el("option", { value: String(b), text: mcKHz(b) + " kHz" })); });
+			if (MC_BWS.indexOf(r.bw_hz) < 0) bw.appendChild(el("option", { value: String(r.bw_hz), text: mcKHz(r.bw_hz) + " kHz" }));
+			for (i = 5; i <= 12; i++) sf.appendChild(el("option", { value: String(i), text: "SF" + i }));
+			for (i = 5; i <= 8; i++) cr.appendChild(el("option", { value: String(i), text: "CR" + i + " (4/" + i + ")" }));
+			bw.value = String(r.bw_hz);
+			sf.value = String(r.sf);
+			cr.value = String(r.cr);
+			pre.addEventListener("change", function () {
+				var p = MC_PRESETS[+pre.value];
+				if (!p) return;
+				f.value = mcMHz(p.f);
+				bw.value = String(p.bw);
+				sf.value = String(p.sf);
+				cr.value = String(p.cr);
+				note.textContent = p.hs ? "That mesh also uses " + p.hs + "-byte hop ids: set those in MeshCore's own app." : "";
+			});
+			editor(box, [
+				el("div", { class: "form form-wide" }, field("MeshCore's settings, by region", pre)),
+				el("div", { class: "form mc-form4" }, field("Frequency (MHz)", f), field("Bandwidth", bw), field("Spreading factor", sf), field("Coding rate", cr)),
+				note,
+				alertEl("warn", "These have to be your mesh's: on any others your radio stops hearing it, and it you, until they're set back.")
+			], function (status, done) {
+				var khz = Math.round(parseFloat(f.value) * 1000), p = { freq_khz: khz, bw_hz: +bw.value, sf: +sf.value, cr: +cr.value };
+				if (!(khz >= 150000 && khz <= 2500000)) return line(status, "a frequency from 150 to 2500 MHz", "err");
+				var said = mcMHz(khz) + " MHz, " + mcKHz(p.bw_hz) + " kHz, SF" + p.sf + ", CR" + p.cr;
+				if (khz === r.freq_khz && p.bw_hz === r.bw_hz && p.sf === r.sf && p.cr === r.cr) return done("the radio's settings are as they were");
+				if (!window.confirm("Set the radio to " + said + "? If these aren't your mesh's, it goes quiet.")) return;
+				saving(status, call("pirate.meshcore", "set_radio", p), "radio: " + said, done);
+			});
+		}
+		function positionEditor(box, pos) {
+			var la = el("input", { class: "inp", type: "number", step: "0.00001", min: "-90", max: "90", value: pos ? pos.lat.toFixed(5) : "" });
+			var lo = el("input", { class: "inp", type: "number", step: "0.00001", min: "-180", max: "180", value: pos ? pos.lon.toFixed(5) : "" });
+			// This device's location: a browser has it only on a secure page (HTTPS)
+			var here = window.isSecureContext && navigator.geolocation ? btn("This device's location", { onclick: function () {
+				navigator.geolocation.getCurrentPosition(function (p) {
+					la.value = p.coords.latitude.toFixed(5);
+					lo.value = p.coords.longitude.toFixed(5);
+				}, function () {}, { timeout: 10000 });
+			} }) : null;
+			editor(box, [el("div", { class: "form" }, field("Latitude", la), field("Longitude", lo)), here ? el("div", { class: "toolbar" }, here) : null],
+				function (status, done) {
+					var a = parseFloat(la.value), b = parseFloat(lo.value);
+					if (!(a >= -90 && a <= 90) || !(b >= -180 && b <= 180)) return line(status, "a latitude from -90 to 90, a longitude from -180 to 180", "err");
+					saving(status, call("pirate.meshcore", "set_position", { lat: a, lon: b }), "position: " + a.toFixed(5) + ", " + b.toFixed(5), done);
+				});
+		}
+		function tuningEditor(box, t) {
+			var rx = el("input", { class: "inp", type: "number", step: "0.1", min: "0", max: "20", value: String(t.rx_delay) });
+			var af = el("input", { class: "inp", type: "number", step: "0.1", min: "0", max: "9", value: String(t.airtime_factor) });
+			editor(box, [el("div", { class: "form" }, field("RX delay (0 to 20)", rx), field("Airtime factor (0 to 9)", af))],
+				function (status, done) {
+					var a = parseFloat(rx.value), b = parseFloat(af.value);
+					if (!(a >= 0 && a <= 20)) return line(status, "an RX delay from 0 to 20", "err");
+					if (!(b >= 0 && b <= 9)) return line(status, "an airtime factor from 0 to 9", "err");
+					saving(status, call("pirate.meshcore", "set_tuning", { rx_delay: a, airtime_factor: b }), "tuning: RX delay " + a + ", airtime factor " + b, done);
+				});
+		}
+		// How it's doing: its stats, asked for (three questions, one answer)
+		function loadHealth(box) {
+			healthErr = null;
+			if (!health) fillHealth(box);
+			return call("pirate.meshcore", "stats").then(function (h) {
+				if (!alive()) return;
+				if (h.error) healthErr = h.error;
+				else { health = h; healthAt = Date.now(); }
+				if (document.body.contains(box)) fillHealth(box);
+			}).catch(function (e) {
+				if (failed(e)) return;
+				healthErr = /status 3\b/.test(String(e.message || e)) ? "the router's MeshCore service is older than this page" : String(e.message || e);
+				if (document.body.contains(box)) fillHealth(box);
+			});
+		}
+		function tile(label, value) { return el("div", { class: "mc-tile" }, el("span", { class: "mc-tl", text: label }), el("span", { class: "mc-tv", text: value })); }
+		function fillHealth(box) {
+			var h = health, grid = el("div", { class: "mc-tiles" });
+			clear(box);
+			if (!h) {
+				box.appendChild(el("p", { class: "status" + (healthErr ? " err" : ""), text: healthErr || "asking it…" }));
+				return;
+			}
+			if (h.core) {
+				grid.appendChild(tile("Battery", mcBattery(h.core.battery_mv)));
+				grid.appendChild(tile("Up for", mcLong(h.core.uptime)));
+				grid.appendChild(tile("Waiting to send", h.core.queue + " packet" + (h.core.queue === 1 ? "" : "s")));
+			}
+			if (h.radio) {
+				grid.appendChild(tile("Noise floor", h.radio.noise_floor + " dBm"));
+				grid.appendChild(tile("Last heard", h.radio.last_rssi + " dBm · " + h.radio.last_snr + " dB SNR"));
+				grid.appendChild(tile("On the air", "sending " + mcLong(h.radio.tx_air) + " · hearing " + mcLong(h.radio.rx_air)));
+			}
+			if (h.packets) {
+				var p = h.packets;
+				grid.appendChild(tile("Packets heard", p.received + " (" + p.received_flood + " flooded, " + p.received_direct + " direct)" + (p.receive_errors ? ", " + p.receive_errors + " garbled" : "")));
+				grid.appendChild(tile("Packets sent", p.sent + " (" + p.sent_flood + " flooded, " + p.sent_direct + " direct)"));
+			}
+			box.appendChild(grid);
+			if (healthErr) box.appendChild(el("p", { class: "status err", text: healthErr }));
 		}
 		function act(p, ok) {
 			radioLine = ["…"];
@@ -2980,6 +3640,335 @@
 			act(call("pirate.meshcore", "set_name", { name: n.trim() }), "renamed: send an advert so others see it");
 		}
 
+		function shareLoc(on) {
+			act(call("pirate.meshcore", "set_location", { enabled: on }), on ? "sharing location: send an advert so others see it" : "location now private: send an advert to update others");
+		}
+		// What most radios we've heard do with their location, so ours can match
+		// the mesh. Only chat nodes (people) count - repeaters and rooms nearly
+		// always carry theirs, which would drown out the choice people make.
+		function meshLocStat() {
+			var peers = contacts.filter(function (c) { return c.type === "chat" && c.last_advert; });
+			if (!peers.length) return null;
+			var share = 0;
+			peers.forEach(function (c) { if (c.lat != null) share++; });
+			return { share: share, hide: peers.length - share, total: peers.length, most: share * 2 > peers.length };
+		}
+		function meshLocSentence(stat, cur) {
+			var n = stat.most ? stat.share : stat.hide;
+			var doing = stat.most ? "share where they are" : "keep their location private";
+			var txt = "Most radios you've heard (" + n + " of " + stat.total + ") " + doing + ".";
+			return txt + (stat.most === cur ? " Yours matches them." : " \"Match the mesh\" sets ours the same.");
+		}
+		/* A command line: the radio's own (MeshCore's CLI, from 1.14), or a
+		   repeater's, room's or sensor's, over the mesh, once logged in to it.
+		   Each one's lines are kept while the page is open */
+		var MC_CLI_SELF = ["ver", "board", "get name", "get radio", "get tx"];
+		var MC_CLI_REMOTE = ["ver", "clock", "neighbors", "stats-core", "stats-radio", "stats-packets", "get radio", "get tx", "get name", "get role", "advert"];
+		var MC_CLI_RISKY = /^(reboot|clkreboot|poweroff|shutdown|erase|start ota|password\b|tempradio|set (radio|freq|bw|sf|cr|prv\.key|guest\.password|repeat)\b)/i;
+		var MC_ROLES = ["a guest", "read only", "read and write", "its admin"];
+		function termServers() {
+			return contacts.filter(function (c) { return c.type === "repeater" || c.type === "room" || c.type === "sensor"; });
+		}
+		function renderTerminal() {
+			stopTermPoll();
+			clear(vPage);
+			var t = term.target === "self" ? null : contacts.filter(function (c) { return c.key === term.target; })[0] || null;
+			if (!t) term.target = "self";
+			var key = t ? t.key : "self";
+			vPage.appendChild(pageHead(mcIcon("term", "mc-hic"), "Command line", t ? t.name : "your radio"));
+			var body = el("div", { class: "mc-pagebody" });
+			vPage.appendChild(body);
+			var who = el("select", { class: "sel", "aria-label": "Whose command line" });
+			who.appendChild(el("option", { value: "self", text: "Your radio (" + (st.name || "this one") + ")" }));
+			termServers().forEach(function (c) {
+				who.appendChild(el("option", { value: c.key, text: c.name + " · " + c.type + (term.auth[c.key] ? " · logged in" : "") }));
+			});
+			who.value = key;
+			who.addEventListener("change", function () { term.target = who.value; renderTerminal(); });
+			body.appendChild(el("div", { class: "toolbar" }, el("label", { class: "chkline" }, "Whose", who)));
+			if (t) body.appendChild(loginBar(t));
+			else if (cfg && cfg.cli === false)
+				body.appendChild(alertEl("warn", "This radio's firmware has no command line: it came with MeshCore 1.14. A repeater's, here, works all the same."));
+			var out = el("div", { class: "mc-console", role: "log", "aria-live": "polite" });
+			(term.logs[key] || []).forEach(function (l) { out.appendChild(termLine(l)); });
+			var inp = el("input", { class: "inp", type: "text", spellcheck: "false", autocomplete: "off", autocapitalize: "off",
+				"aria-label": "Command", placeholder: t ? "a command for " + t.name + " (log in as its admin first)" : "a command: ver, get radio, set tx 20…" });
+			var run = btn("Run", { primary: true, onclick: go });
+			body.appendChild(out);
+			body.appendChild(el("div", { class: "mc-cmdrow" }, el("span", { class: "mc-prompt", text: ">" }), inp, run));
+			var chips = el("div", { class: "mc-cmdchips" });
+			(t ? MC_CLI_REMOTE : MC_CLI_SELF).forEach(function (c) {
+				chips.appendChild(el("button", { type: "button", class: "mc-cmdchip", text: c, onclick: function () { inp.value = c; go(); } }));
+			});
+			body.appendChild(chips);
+			body.appendChild(descr(t
+				? "Its own command line, over the mesh: each command a message to it, each answer one back (a few seconds, further across the mesh). MeshCore answers only those logged in as its admin."
+				: "MeshCore's command line, your radio's: \"ver\", \"get radio\", \"set tx 20\"… What a command changes here shows in its settings too."));
+			inp.addEventListener("keydown", function (ev) {
+				if (ev.key === "Enter") { ev.preventDefault(); go(); }
+				else if (ev.key === "ArrowUp" && term.hist.length) {
+					ev.preventDefault();
+					term.hpos = Math.max(0, term.hpos - 1);
+					inp.value = term.hist[term.hpos] || "";
+				} else if (ev.key === "ArrowDown" && term.hist.length) {
+					ev.preventDefault();
+					term.hpos = Math.min(term.hist.length, term.hpos + 1);
+					inp.value = term.hist[term.hpos] || "";
+				}
+			});
+			out.scrollTop = out.scrollHeight;
+			if (!TOUCH) inp.focus();
+			if (t) startTermPoll(t.key, out);
+			function go() {
+				var cmd = inp.value.trim();
+				if (!cmd || term.busy) return;
+				if (MC_CLI_RISKY.test(cmd) && !window.confirm("Run \"" + cmd + "\" on " + (t ? t.name : "your radio") + "? It can restart it, cut it off the mesh, or change how others reach it.")) return;
+				term.hist.push(cmd);
+				if (term.hist.length > 50) term.hist.shift();
+				term.hpos = term.hist.length;
+				inp.value = "";
+				termAdd(key, { k: "cmd", text: cmd }, out);
+				term.busy = true;
+				run.disabled = true;
+				(t ? call("pirate.meshcore", "remote_cli", { key: t.key, command: cmd }) : call("pirate.meshcore", "cli", { command: cmd })).then(function (r) {
+					if (r.error) termAdd(key, { k: "err", text: r.error }, out);
+					else termAdd(key, { k: "out", text: r.reply, ms: r.ms }, out);
+					if (!t && /^set\b/i.test(cmd)) refreshAll();
+				}).catch(function (e) {
+					if (!failed(e)) termAdd(key, { k: "err", text: /status 3\b/.test(String(e.message || e)) ? "the router's MeshCore service is older than this page" : String(e.message || e) }, out);
+				}).then(function () {
+					term.busy = false;
+					run.disabled = false;
+					if (!TOUCH && document.body.contains(inp)) inp.focus();
+				});
+			}
+		}
+		function termLine(l) {
+			var n = el("div", { class: "mc-tl-" + l.k });
+			if (l.k === "cmd") n.appendChild(el("span", { class: "mc-prompt", text: "> " }));
+			n.appendChild(document.createTextNode(l.text == null ? "" : l.text));
+			if (l.late) n.appendChild(el("span", { class: "mc-tlnote", text: "  (came later)" }));
+			else if (l.ms > 1500) n.appendChild(el("span", { class: "mc-tlnote", text: "  " + (l.ms / 1000).toFixed(1) + " s" }));
+			return n;
+		}
+		function termAdd(key, l, out) {
+			var a = term.logs[key] || (term.logs[key] = []);
+			a.push(l);
+			if (a.length > 300) a.shift();
+			if (out && document.body.contains(out)) {
+				out.appendChild(termLine(l));
+				out.scrollTop = out.scrollHeight;
+			}
+		}
+		// Its answers that came after their call gave up, or to another app's commands
+		function startTermPoll(key, out) {
+			stopTermPoll();
+			term.timer = setInterval(function () {
+				if (!alive() || mode !== "page" || page !== "terminal" || term.target !== key) return stopTermPoll();
+				call("pirate.meshcore", "cli_log", { key: key, since: term.since[key] || 0 }).then(function (r) {
+					if (!r || r.error || !r.lines) return;
+					r.lines.forEach(function (l) { termAdd(key, { k: "out", text: l.text, late: true }, out); });
+					term.since[key] = r.seq;
+				}).catch(function () {});
+			}, 4000);
+		}
+		function stopTermPoll() {
+			if (term.timer) clearInterval(term.timer);
+			term.timer = null;
+		}
+		// A login to it (its admin password, or none for a guest), its status, a logout
+		function loginBar(t) {
+			var a = term.auth[t.key], box = el("div", { class: "mc-loginbar" }), stBox = el("div");
+			var pw = el("input", { class: "inp", type: "password", autocomplete: "off", "aria-label": "Its password", placeholder: "its admin password" });
+			var status = el("span", { class: "status", text: a ? "logged in as " + MC_ROLES[a.role != null ? a.role : a.admin ? 3 : 0] : "not logged in" });
+			box.appendChild(el("div", { class: "toolbar" }, pw,
+				btn("Log in", { primary: !a, onclick: function () { login(pw.value); } }),
+				btn("As a guest", { onclick: function () { login(""); } }),
+				a ? btn("Log out", { onclick: logout }) : null,
+				btn("Its status", { onclick: rstatus }), status));
+			box.appendChild(stBox);
+			pw.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); login(pw.value); } });
+			return box;
+			function login(p) {
+				// As MeshCore's app asks: a guest logs in over a route, not flooded across the mesh
+				if (!p && (t.flood || t.hops == null))
+					return line(status, "no route to it yet: a guest logs in over a route, not flooded across the whole mesh (find one on its profile)", "err");
+				line(status, "logging in…");
+				call("pirate.meshcore", "login", { key: t.key, password: p }).then(function (r) {
+					pw.value = "";
+					if (r.error) return line(status, r.error, "err");
+					term.auth[t.key] = { admin: !!r.admin, role: r.role };
+					renderTerminal();
+				}).catch(function (e) { pw.value = ""; if (!failed(e)) line(status, String(e.message || e), "err"); });
+			}
+			function logout() {
+				call("pirate.meshcore", "logout", { key: t.key }).catch(function () {}).then(function () {
+					delete term.auth[t.key];
+					renderTerminal();
+				});
+			}
+			function rstatus() {
+				line(status, "asking it…");
+				call("pirate.meshcore", "remote_status", { key: t.key }).then(function (r) {
+					if (r.error) return line(status, r.error, "err");
+					line(status, term.auth[t.key] ? "logged in as " + MC_ROLES[term.auth[t.key].role != null ? term.auth[t.key].role : 3] : "not logged in");
+					var g = el("div", { class: "mc-tiles" });
+					if (r.battery_mv) g.appendChild(tile("Battery", mcBattery(r.battery_mv)));
+					if (r.uptime != null) g.appendChild(tile("Up for", mcLong(r.uptime)));
+					if (r.noise_floor != null) g.appendChild(tile("Noise floor", r.noise_floor + " dBm"));
+					if (r.last_rssi != null) g.appendChild(tile("Last heard", r.last_rssi + " dBm" + (r.last_snr != null ? " · " + r.last_snr + " dB SNR" : "")));
+					if (r.received != null) g.appendChild(tile("Packets heard", r.received + (r.received_flood != null ? " (" + r.received_flood + " flooded, " + r.received_direct + " direct)" : "")));
+					if (r.sent != null) g.appendChild(tile("Packets sent", r.sent + (r.sent_flood != null ? " (" + r.sent_flood + " flooded, " + r.sent_direct + " direct)" : "")));
+					if (r.air_secs != null) g.appendChild(tile("On the air", "sending " + mcLong(r.air_secs) + (r.rx_air_secs != null ? " · hearing " + mcLong(r.rx_air_secs) : "")));
+					if (r.flood_dups != null) g.appendChild(tile("Heard twice", r.flood_dups + " flooded, " + r.direct_dups + " direct"));
+					if (r.queue != null) g.appendChild(tile("Waiting to send", String(r.queue)));
+					clear(stBox).appendChild(g);
+				}).catch(function (e) { if (!failed(e)) line(status, String(e.message || e), "err"); });
+			}
+		}
+		/* Every packet the radio hears, as it hears it (MeshCore's, raw), read
+		   as far as that goes without keys: who adverts (and where, if they
+		   share it), what kind each is, which way it came, how well */
+		var MC_FEED_FILTERS = [["", "Every kind"], ["advert", "Adverts"], ["message", "Messages"], ["channel", "Channels'"], ["ack", "Acks"],
+			["path", "Paths"], ["request", "Requests and responses"], ["trace", "Traces"], ["other", "Others"]];
+		function feedKind(d) {
+			var t = d.typeName;
+			if (t === "advert" || t === "message" || t === "ack" || t === "path" || t === "trace") return t;
+			if (t === "channel" || t === "channel data") return "channel";
+			if (t === "request" || t === "response" || t === "anonymous request") return "request";
+			return "other";
+		}
+		// Whose a hash (a key's first byte, or bytes) could be: a contact's, or yours
+		function hashWho(h, repeaters) {
+			if (!h) return "?";
+			var m = contacts.filter(function (c) { return c.key.slice(0, h.length) === h && (!repeaters || c.type !== "chat"); });
+			if (!m.length && repeaters) m = contacts.filter(function (c) { return c.key.slice(0, h.length) === h; });
+			if (st && st.key && st.key.slice(0, h.length) === h) return m.length ? h + " (you, or " + m.length + " more)" : "you";
+			if (m.length === 1) return m[0].name;
+			return m.length ? h + " (one of " + m.length + ")" : h;
+		}
+		function chanWho(h) {
+			var m = channels.filter(function (c) {
+				if (!feed.chash[c.secret]) feed.chash[c.secret] = mcChanHash(c.secret);
+				return feed.chash[c.secret] === h;
+			});
+			return m.length === 1 ? mcChanLabel(m[0]) : m.length ? h + " (one of " + m.length + ")" : "channel " + h;
+		}
+		function feedRoute(d) {
+			if (d.short && d.hops == null) return "";
+			var via = d.path && d.path.length ? d.path.map(function (h) { return hashWho(h, true); }).join(" › ") : "";
+			return (d.flood ? "flooded" : "direct") + (d.scoped ? " (scoped)" : "") +
+				(d.hops ? (d.flood ? ", " + d.hops + " hop" + (d.hops > 1 ? "s" : "") + ": " : ", route: ") + via : d.flood ? ", first-hand" : "");
+		}
+		function feedWhat(d) {
+			if (d.short) return "cut short";
+			switch (d.typeName) {
+			case "advert":
+				return (d.name || "a " + d.kind) + " (" + d.kind + ")" + (d.lat != null ? " at " + d.lat.toFixed(4) + ", " + d.lon.toFixed(4) : "");
+			case "message": case "request": case "response": case "path":
+				return d.dst ? "to " + hashWho(d.dst) + ", from " + hashWho(d.src) : "";
+			case "channel": case "channel data":
+				return d.chan ? "on " + chanWho(d.chan) : "";
+			case "anonymous request":
+				return d.dst ? "to " + hashWho(d.dst) + " (a login, or a request), from " + hashWho(d.key.slice(0, 2)) : "";
+			case "ack": return d.ack ? "checksum " + d.ack : "";
+			case "trace": return d.tag ? "tag " + d.tag : "";
+			case "control": return d.control || "";
+			}
+			return d.ver ? "payload version " + (d.ver + 1) : "";
+		}
+		function renderPackets() {
+			stopFeed();
+			clear(vPage);
+			vPage.appendChild(pageHead(mcIcon("pkts", "mc-hic"), "Packets it hears", "as the radio hears them"));
+			var body = el("div", { class: "mc-pagebody" });
+			vPage.appendChild(body);
+			var filt = el("select", { class: "sel", "aria-label": "Which" });
+			MC_FEED_FILTERS.forEach(function (f) { filt.appendChild(el("option", { value: f[0], text: f[1] })); });
+			filt.value = feed.filter;
+			var pause = btn(feed.paused ? "Go on" : "Pause", { onclick: function () {
+				feed.paused = !feed.paused;
+				pause.textContent = feed.paused ? "Go on" : "Pause";
+				draw();
+				if (!feed.paused) tick();
+			} });
+			var count = el("span", { class: "status" }), list = el("div", { class: "mc-pkts" }), note = el("div");
+			body.appendChild(el("div", { class: "toolbar" }, filt, pause, btn("Clear", { onclick: function () { feed.list = []; feed.open = {}; draw(); } }), count));
+			body.appendChild(note);
+			body.appendChild(list);
+			body.appendChild(descr("Every packet your radio hears, from any radio in range: an advert says who's there (and where, if they share it); the rest are addressed by the first byte of a key, or of a channel's, and encrypted. A hop is a repeater it came through, by the first byte or bytes of its key. Newest first; click one for its bytes."));
+			filt.addEventListener("change", function () { feed.filter = filt.value; draw(); });
+			draw();
+			tick();
+			feed.timer = setInterval(tick, 2500);
+			function tick() {
+				if (!alive() || mode !== "page" || page !== "packets") return stopFeed();
+				if (feed.paused) return;
+				call("pirate.meshcore", "packets", { since: feed.since, limit: 200 }).then(function (r) {
+					if (!alive() || !document.body.contains(list)) return;
+					if (r.error) { feed.err = r.error; return draw(); }
+					if ((r.seq || 0) < feed.since) { feed.since = 0; return; }   // the service started again: its count did too
+					var got = r.packets || [];
+					got.forEach(function (k) { k.d = mcDecodePacket(k.raw || ""); feed.list.push(k); });
+					if (feed.list.length > 500) feed.list.splice(0, feed.list.length - 500);
+					feed.since = r.seq || feed.since;
+					var was = feed.err;
+					feed.err = null;
+					if (got.length || was) draw();
+				}).catch(function (e) {
+					if (failed(e)) return;
+					feed.err = /status 3\b/.test(String(e.message || e)) ? "The router's MeshCore service is older than this page: update the router's firmware for the packet log." : String(e.message || e);
+					draw();
+				});
+			}
+			function draw() {
+				clear(note);
+				if (feed.err) note.appendChild(alertEl("warn", feed.err));
+				clear(list);
+				var shown = 0, n = 0;
+				for (var i = feed.list.length - 1; i >= 0; i--) {
+					var k = feed.list[i];
+					if (feed.filter && feedKind(k.d) !== feed.filter) continue;
+					n++;
+					if (shown < 200) { list.appendChild(pktRow(k)); shown++; }
+				}
+				count.textContent = n + (feed.filter ? " of " + feed.list.length : "") + " packet" + (n === 1 ? "" : "s") + (feed.paused ? " · paused" : " · listening");
+			}
+			function pktRow(k) {
+				var d = k.d, row = el("div", { class: "mc-pkt mc-pk-" + feedKind(d) + (feed.open[k.id] ? " open" : ""), tabindex: "0", role: "button",
+					"aria-expanded": feed.open[k.id] ? "true" : "false" },
+					el("span", { class: "mc-pt", title: new Date(k.rx * 1000).toLocaleString(), text: new Date(k.rx * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) }),
+					el("span", { class: "mc-psig", text: k.snr + " dB · " + k.rssi + " dBm" }),
+					el("span", { class: "mc-ptype", text: d.typeName || "?" }),
+					el("span", { class: "mc-proute", text: feedRoute(d) }),
+					el("span", { class: "mc-pwhat", text: feedWhat(d) }),
+					el("span", { class: "mc-psize", text: d.size + " B" }));
+				if (feed.open[k.id]) row.appendChild(pktDetail(k));
+				function flip() {
+					if (feed.open[k.id]) delete feed.open[k.id];
+					else feed.open[k.id] = 1;
+					row.parentNode.replaceChild(pktRow(k), row);
+				}
+				row.addEventListener("click", function (ev) { if (!ev.target.closest(".mc-pdetail")) flip(); });
+				row.addEventListener("keydown", function (ev) { if ((ev.key === "Enter" || ev.key === " ") && ev.target === row) { ev.preventDefault(); flip(); } });
+				return row;
+			}
+			function pktDetail(k) {
+				var d = k.d;
+				return el("div", { class: "mc-pdetail" }, kvEl([
+					["Route", ["transport flood", "flood", "direct", "transport direct"][d.route] + (d.scoped ? " (scope " + d.scope + ")" : "")],
+					["Hops", d.hops != null ? d.hops + (d.hops ? " (" + d.path.join(" ") + ", " + d.hashSize + "-byte ids)" : "") : null],
+					["Payload", d.payloadSize != null ? d.payloadSize + " bytes, version " + (d.ver + 1) : null],
+					["Key", d.key ? el("code", { class: "mc-key", text: d.key }) : null],
+					["Advert's time", d.time ? new Date(d.time * 1000).toLocaleString() : null],
+					["Heard", new Date(k.rx * 1000).toLocaleString() + " · SNR " + k.snr + " dB · RSSI " + k.rssi + " dBm"]
+				]), el("div", { class: "mc-praw", text: (k.raw || "").replace(/(..)/g, "$1 ").trim() }));
+			}
+		}
+		function stopFeed() {
+			if (feed.timer) clearInterval(feed.timer);
+			feed.timer = null;
+		}
 		// A new channel, and a channel's settings
 		function renderAddChannel() {
 			clear(vPage);
@@ -3390,15 +4379,31 @@
 		   sent it; theirs, as the daemon made it out */
 		var MENTION = /^@\[([^\]]+?)(?:#\d{10,16})?\]:?[ \t]*/;
 		function plain(text) { return String(text || "").replace(MENTION, ""); }
+			// Some clients prepend a ">"-quoted snippet of the message they answer
+			// (e.g. ">Testing ou.."); we already show that above (the reply line),
+			// so a leading quote block in the body is redundant. Drop it, with the
+			// blank line it sits on, but keep a message that was only a quote.
+			function stripQuote(text) {
+				var lines = String(text).split("\n"), i = 0, n = lines.length;
+				while (i < n && lines[i].trim() === "") i++;
+				if (i >= n || !/^\s*>/.test(lines[i])) return text;
+				while (i < n && /^\s*>/.test(lines[i])) i++;
+				while (i < n && lines[i].trim() === "") i++;
+				var rest = lines.slice(i).join("\n");
+				return rest.trim() === "" ? text : rest;
+			}
+			// A bracketed mention "@[Name]" (or "@[Name#hash]") as plain text, for
+			// previews and snippets: shown as "@Name", without the brackets.
+			function mcDebracket(s) { return String(s).replace(/@\[([^\]]+?)(?:#\d{10,16})?\]/g, "@$1"); }
 		// A reply answers a message the daemon found; "@[Name]" answering none is a mention
 		function isReply(m) { return !!m.reply; }
 		function answers(m) {
 			var mm = MENTION.exec(m.text || ""), t, mine = (st && st.name) || "";
 			if (!m.reply) return null;
 			t = byId[m.reply];
-			if (t) return { msg: t, name: sender(t), out: !!t.out, text: plain(t.text) };
+			if (t) return { msg: t, name: sender(t), out: !!t.out, text: stripQuote(plain(t.text)) };
 			if (m.reply_text != null)
-				return { id: m.reply, name: m.reply_out ? mine || m.reply_from : m.reply_from || (mm && mm[1]) || "someone", out: !!m.reply_out, text: plain(m.reply_text) };
+				return { id: m.reply, name: m.reply_out ? mine || m.reply_from : m.reply_from || (mm && mm[1]) || "someone", out: !!m.reply_out, text: stripQuote(plain(m.reply_text)) };
 			return { name: mm ? mm[1] : "someone", out: !!mm && mm[1] === mine, text: null };
 		}
 		function mentionOf(m) {
@@ -3412,7 +4417,7 @@
 			var nm = el("span", { class: "mc-rname", text: sender(m) });
 			if (m.out) nm.classList.add("mine"); else mcColour(nm, sender(m));
 			clear(replyBar).appendChild(el("span", { class: "mc-rb-text" }, "Replying to ", nm,
-				el("span", { class: "mc-rb-snip", text: mcMediaLabel(plain(m.text)) || plain(m.text) })));
+				el("span", { class: "mc-rb-snip", text: mcMediaLabel(stripQuote(plain(m.text))) || mcDebracket(stripQuote(plain(m.text))) })));
 			replyBar.appendChild(el("button", { type: "button", class: "mc-rb-x", title: "Don't reply (Esc)", "aria-label": "Don't reply", text: "✕", onclick: cancelReply }));
 			replyBar.hidden = false;
 			updateCount();
@@ -3468,7 +4473,7 @@
 				row.appendChild(el("button", { type: "button", class: "mc-rline", title: to ? "Show the message it answers" : "",
 					onclick: function () { if (to) jumpTo(to); } },
 					mcFace(rep.name, rep.out, "xxs"), rn,
-					el("span", { class: "mc-rtext" + (rep.text == null ? " gone" : ""), text: rep.text == null ? "a message not kept here" : mcMediaLabel(rep.text) || rep.text || " " })));
+					el("span", { class: "mc-rtext" + (rep.text == null ? " gone" : ""), text: rep.text == null ? "a message not kept here" : mcMediaLabel(rep.text) || mcDebracket(rep.text) || " " })));
 			}
 			// React, Reply: on hover (a tap, on a phone)
 			if (m.out || m.from || m.conv.charAt(0) !== "#")
@@ -3487,13 +4492,13 @@
 				sig ? el("span", { class: "mc-sig", text: sig }) : null));
 			// Its words, links clickable; images under them (a message that's
 			// only an image: the image, its link back if it won't load)
-			var words = men ? " " + men.rest : rep ? plain(m.text) : m.text, media = [], only = mcOnlyMedia(words);
+			var words = men ? " " + men.rest : rep ? stripQuote(plain(m.text)) : m.text, media = [], only = mcOnlyMedia(words);
 			var trimmed = String(words).trim(), mco = MC_IMG.test(trimmed) ? trimmed : null, ph = mcPlaceholder(trimmed), wordsEl;
 			var ping = !men && !rep && !mco && !ph ? mcMapperPing(trimmed) : null;
 			if (ph) wordsEl = el("span", { class: "mc-words mc-ph", text: ph });
 			else if (mco) wordsEl = el("span", { class: "mc-words mc-hide" });
 			else if (ping) wordsEl = pingEl(ping, head ? "" : sig);
-			else wordsEl = el("span", { class: "mc-words" + (only ? " mc-hide" : "") }, mcLinkify(words, media));
+			else wordsEl = el("span", { class: "mc-words" + (only ? " mc-hide" : "") }, mcLinkify(words, media, (st && st.name) || ""));
 			if (!ph && !mco && only && !media.length) {
 				// meshcore-open's "g:ID": its page's link, should the GIF not load
 				media.push(only);

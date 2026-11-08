@@ -1,14 +1,14 @@
 {
 	"pirate-meshcore": {
-		"description": "Grant access to the MeshCore radio: its contacts, channels and messages, sending, its adverts, name and GPS",
+		"description": "Grant access to the MeshCore radio: its contacts, channels and messages, sending, its adverts, name, GPS and settings, its command line and repeaters' (logged in to), and the packets it hears",
 		"read": {
 			"ubus": {
-				"pirate.meshcore": [ "status", "position", "contacts", "channels", "messages", "poll" ]
+				"pirate.meshcore": [ "status", "position", "contacts", "channels", "messages", "poll", "settings", "stats", "packets", "cli_log" ]
 			}
 		},
 		"write": {
 			"ubus": {
-				"pirate.meshcore": [ "send", "resend", "react", "read", "advert", "set_name", "gps", "channel_set", "contact_remove", "contact_reset_path", "contact_favorite", "trace", "discover", "telemetry", "refresh" ]
+				"pirate.meshcore": [ "send", "resend", "react", "read", "advert", "set_name", "gps", "channel_set", "contact_remove", "contact_reset_path", "contact_favorite", "trace", "discover", "telemetry", "refresh", "set_location", "set_radio", "set_tx_power", "set_position", "set_params", "set_autoadd", "set_tuning", "reboot", "cli", "login", "logout", "remote_status", "remote_cli" ]
 			}
 		}
 	}

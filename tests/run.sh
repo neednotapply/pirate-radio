@@ -107,6 +107,8 @@ cp "$u/etc/hotplug.d/block/20-pirate-usb-card" "$ov/etc/hotplug.d/block/"
 cp "$u/etc/uci-defaults/96-pirate-usb" "$ov/etc/uci-defaults/"
 chmod 755 "$ov/usr/sbin/pirate-usb" "$ov/usr/libexec/pirate-usb-list" "$ov/usr/libexec/rpcd/pirate.usb"
 cp "$here/feed/utils/pirate-radio-ui/files/pirate-upload" "$ov/www/cgi-bin/pirate-upload"
+# The page, for the check that the ACL lets through every call it makes
+cp "$here/feed/utils/pirate-radio-ui/files/app.js" "$ov/www/app.js"
 # First boot (the hostname) and <hostname>.local on the router's DNS
 cp "$here/feed/utils/pirate-radio-ui/files/95-pirate-radio-ui" "$ov/etc/uci-defaults/"
 mkdir -p "$ov/etc/hotplug.d/iface"

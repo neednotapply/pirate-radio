@@ -23,7 +23,16 @@
  * <flood>", "name <name>", "var <name:value>", "channel <index> <name>
  * <secret>", "remove <key prefix>", "reset <key prefix>", "trace <hop
  * ids>", "discover <key prefix>", "telemetry <key prefix>", "path <key
- * prefix> <path_len> <hop ids>", "unknown <code>".
+ * prefix> <path_len> <hop ids>", "params <manual add> <telemetry> <advert
+ * location> <extra acks>", "radio <kHz> <Hz> <sf> <cr>", "tx <dBm>",
+ * "latlon <lat> <lon>" (millionths), "tuning <rx delay> <airtime>"
+ * (thousandths), "autoadd <config> <max hops>", "stats <kind>", "cli
+ * <line>", "reboot", "login <key prefix> <password>", "status <key
+ * prefix>", "rcli <key prefix> <line>", "logout <key prefix>", "unknown
+ * <code>". The repeater takes "secret" (admin) and "guest"; its command
+ * line answers "ver" and "get name". On the control FIFO, "cli <text>": an
+ * answer from the repeater's command line nobody asked for; "rx <snr x4>
+ * <rssi> <hex>": a packet it heard, raw (as LOG_RX_DATA tells it).
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -41,6 +50,13 @@
 
 static int mfd = -1;
 static bool gps_on;
+static uint8_t manual_add = 1, telem_mode = 5, adv_loc, multi_acks = 1;
+/* Its radio, where it is (its GPS moves it a little), its tuning and how
+ * it adds contacts (chat, repeaters, rooms, sensors; from any distance) */
+static uint32_t freq = 910525, bw = 62500, rx_delay, airtime = 1000;
+static uint8_t sf = 7, cr = 5, aa_config = 0x1e, aa_hops;
+static int8_t txp = 22;
+static int32_t base_lat = 37421925, base_lon = -122084102;
 static uint32_t pos_n, acks, rtc = 1700000000;
 static char name[33] = "PirateTest";
 
@@ -82,6 +98,7 @@ static long now_ms(void)
 
 static void wr32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+static void wr16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 
 static void out(const uint8_t *p, size_t n)
 {
@@ -175,20 +192,28 @@ static size_t contact_frame(uint8_t *f, uint8_t code, const struct contact *c)
 	return 148;
 }
 
-static void queue_contact_msg(const char *text)
+/* A contact's message: plain (0) or a command line's answer (1) */
+static void queue_msg_from(const struct contact *c, uint8_t txt_type, const char *text)
 {
 	uint8_t *f = queue[nq];
 	size_t n = strlen(text);
 
+	if (nq == 16)
+		return;
 	f[0] = 16;                    /* contact message, v3 */
 	f[1] = 40;                    /* SNR 10 dB */
 	f[2] = f[3] = 0;
-	memcpy(f + 4, contacts[0].key, 6);
+	memcpy(f + 4, c->key, 6);
 	f[10] = 1;                    /* a hop */
-	f[11] = 0;                    /* plain */
+	f[11] = txt_type;
 	wr32(f + 12, rtc - 5);
 	memcpy(f + 16, text, n);
 	qlen[nq++] = 16 + n;
+}
+
+static void queue_contact_msg(const char *text)
+{
+	queue_msg_from(&contacts[0], 0, text);
 }
 
 static void queue_channel_msg(int idx, const char *text)
@@ -225,7 +250,7 @@ static void on_frame(const uint8_t *f, size_t n)
 		printf("query\n");
 		memset(o, 0, 82);
 		o[0] = 13;
-		o[1] = 9;
+		o[1] = 14;
 		o[2] = 175;
 		o[3] = 8;
 		memcpy(o + 8, "05-Nov-2026", 11);
@@ -234,7 +259,7 @@ static void on_frame(const uint8_t *f, size_t n)
 		out(o, 82);
 		break;
 	case 1: {
-		int32_t lat = 37421925, lon = -122084102;
+		int32_t lat = base_lat, lon = base_lon;
 		size_t l = strlen(name);
 
 		printf("start\n");
@@ -246,15 +271,19 @@ static void on_frame(const uint8_t *f, size_t n)
 		memset(o, 0, 58);
 		o[0] = 5;
 		o[1] = 1;
-		o[2] = 22;
+		o[2] = (uint8_t)txp;
 		o[3] = 22;
 		memset(o + 4, 0xee, 32);
 		wr32(o + 36, (uint32_t)lat);
 		wr32(o + 40, (uint32_t)lon);
-		wr32(o + 48, 910525);
-		wr32(o + 52, 62500);
-		o[56] = 7;
-		o[57] = 5;
+		o[44] = multi_acks;
+		o[45] = adv_loc;
+		o[46] = telem_mode;
+		o[47] = manual_add;
+		wr32(o + 48, freq);
+		wr32(o + 52, bw);
+		o[56] = sf;
+		o[57] = cr;
 		memcpy(o + 58, name, l);
 		out(o, 58 + l);
 		break;
@@ -296,6 +325,209 @@ static void on_frame(const uint8_t *f, size_t n)
 		ok();
 		break;
 	}
+	case 38:   /* CMD_SET_OTHER_PARAMS: manual_add, telemetry, adv_loc, multi_acks */
+		manual_add = f[1];
+		if (n >= 3)
+			telem_mode = f[2];
+		if (n >= 4)
+			adv_loc = f[3];
+		if (n >= 5)
+			multi_acks = f[4];
+		printf("params %u %u %u %u\n", manual_add, telem_mode, adv_loc, multi_acks);
+		ok();
+		break;
+	case 11:   /* CMD_SET_RADIO_PARAMS: kHz, Hz, sf, cr */
+		if (n < 11)
+			break;
+		if (rd32(f + 1) < 150000 || rd32(f + 1) > 2500000 || rd32(f + 5) < 7000 || rd32(f + 5) > 500000 ||
+		    f[9] < 5 || f[9] > 12 || f[10] < 5 || f[10] > 8) {
+			err(6);
+			break;
+		}
+		freq = rd32(f + 1);
+		bw = rd32(f + 5);
+		sf = f[9];
+		cr = f[10];
+		printf("radio %u %u %u %u\n", freq, bw, sf, cr);
+		ok();
+		break;
+	case 12:   /* CMD_SET_RADIO_TX_POWER */
+		if (n < 2)
+			break;
+		if ((int8_t)f[1] < -9 || (int8_t)f[1] > 22) {
+			err(6);
+			break;
+		}
+		txp = (int8_t)f[1];
+		printf("tx %d\n", txp);
+		ok();
+		break;
+	case 14:   /* CMD_SET_ADVERT_LATLON: millionths of a degree */
+		if (n < 9)
+			break;
+		base_lat = (int32_t)rd32(f + 1);
+		base_lon = (int32_t)rd32(f + 5);
+		printf("latlon %d %d\n", base_lat, base_lon);
+		ok();
+		break;
+	case 21:   /* CMD_SET_TUNING_PARAMS: thousandths */
+		if (n < 9)
+			break;
+		rx_delay = rd32(f + 1);
+		airtime = rd32(f + 5);
+		printf("tuning %u %u\n", rx_delay, airtime);
+		ok();
+		break;
+	case 43:   /* CMD_GET_TUNING_PARAMS */
+		o[0] = 23;
+		wr32(o + 1, rx_delay);
+		wr32(o + 5, airtime);
+		out(o, 9);
+		break;
+	case 58:   /* CMD_SET_AUTOADD_CONFIG */
+		if (n < 2)
+			break;
+		aa_config = f[1];
+		if (n >= 3)
+			aa_hops = f[2] < 64 ? f[2] : 64;
+		printf("autoadd %u %u\n", aa_config, aa_hops);
+		ok();
+		break;
+	case 59:   /* CMD_GET_AUTOADD_CONFIG */
+		o[0] = 25;
+		o[1] = aa_config;
+		o[2] = aa_hops;
+		out(o, 3);
+		break;
+	case 19:   /* CMD_REBOOT: it says nothing back */
+		if (n >= 7 && !memcmp(f + 1, "reboot", 6))
+			printf("reboot\n");
+		break;
+	case 56:   /* CMD_GET_STATS: core, radio, packets */
+		if (n < 2)
+			break;
+		printf("stats %u\n", f[1]);
+		o[0] = 24;
+		o[1] = f[1];
+		if (f[1] == 0) {
+			wr16(o + 2, 4012);
+			wr32(o + 4, 3600);
+			wr16(o + 8, 0);
+			o[10] = 0;
+			out(o, 11);
+		} else if (f[1] == 1) {
+			wr16(o + 2, (uint16_t)-112);
+			o[4] = (uint8_t)-80;
+			o[5] = 38;            /* 9.5 dB */
+			wr32(o + 6, 120);
+			wr32(o + 10, 540);
+			out(o, 14);
+		} else if (f[1] == 2) {
+			wr32(o + 2, 1234);
+			wr32(o + 6, 56);
+			wr32(o + 10, 40);
+			wr32(o + 14, 16);
+			wr32(o + 18, 1000);
+			wr32(o + 22, 234);
+			wr32(o + 26, 7);
+			out(o, 30);
+		} else {
+			err(6);
+		}
+		break;
+	case 66: { /* CMD_RUN_CLI_COMMAND: a few of MeshCore's */
+		char cmd[180], r[180];
+
+		if (n < 3)
+			break;
+		snprintf(cmd, sizeof(cmd), "%.*s", (int)(n - 1), f + 1);
+		printf("cli %s\n", cmd);
+		if (!strcmp(cmd, "ver"))
+			snprintf(r, sizeof(r), "v1.18.0 (Build: 05-Nov-2026)");
+		else if (!strcmp(cmd, "get name"))
+			snprintf(r, sizeof(r), "> %s", name);
+		else if (!strncmp(cmd, "set tx ", 7)) {
+			txp = (int8_t)atoi(cmd + 7);
+			snprintf(r, sizeof(r), "OK");
+		} else
+			snprintf(r, sizeof(r), "Unknown command");
+		o[0] = 29;
+		memcpy(o + 1, r, strlen(r));
+		out(o, 1 + strlen(r));
+		break;
+	}
+	case 26: { /* CMD_SEND_LOGIN: the repeater takes "secret" (admin), "guest" */
+		struct contact *c = n >= 33 ? by_key(f + 1) : NULL;
+		char pw[20];
+
+		if (!c) {
+			err(2);
+			break;
+		}
+		snprintf(pw, sizeof(pw), "%.*s", (int)(n - 33), f + 33);
+		prefix(p, f + 1);
+		printf("login %s %s\n", p, pw);
+		sent(0, 0x10900000 + c->key[0], 1000);
+		if (!strcmp(pw, "secret") || !strcmp(pw, "guest")) {
+			bool admin = !strcmp(pw, "secret");
+
+			o[0] = 0x85;
+			o[1] = admin;
+			memcpy(o + 2, c->key, 6);
+			wr32(o + 8, rtc);
+			o[12] = admin ? 3 : 0;
+			o[13] = 2;
+			later(o, 14, 300);
+		} else {
+			o[0] = 0x86;
+			o[1] = 0;
+			memcpy(o + 2, c->key, 6);
+			later(o, 8, 300);
+		}
+		break;
+	}
+	case 27: { /* CMD_SEND_STATUS_REQ: the repeater's RepeaterStats */
+		struct contact *c = n >= 33 ? by_key(f + 1) : NULL;
+		uint8_t *s = o + 8;
+
+		if (!c) {
+			err(2);
+			break;
+		}
+		prefix(p, f + 1);
+		printf("status %s\n", p);
+		sent(0, 0x57a70000 + c->key[0], 1000);
+		o[0] = 0x87;
+		o[1] = 0;
+		memcpy(o + 2, c->key, 6);
+		wr16(s, 3950);
+		wr16(s + 2, 1);
+		wr16(s + 4, (uint16_t)-105);
+		wr16(s + 6, (uint16_t)-70);
+		wr32(s + 8, 5000);
+		wr32(s + 12, 4800);
+		wr32(s + 16, 3000);
+		wr32(s + 20, 86400);
+		wr32(s + 24, 2000);
+		wr32(s + 28, 2800);
+		wr32(s + 32, 3500);
+		wr32(s + 36, 1500);
+		wr16(s + 40, 2);
+		wr16(s + 42, 40);     /* 10 dB */
+		wr16(s + 44, 12);
+		wr16(s + 46, 340);
+		wr32(s + 48, 9000);
+		wr32(s + 52, 3);
+		later(o, 8 + 56, 300);
+		break;
+	}
+	case 29:   /* CMD_LOGOUT */
+		if (n < 33)
+			break;
+		prefix(p, f + 1);
+		printf("logout %s\n", p);
+		ok();
+		break;
 	case 20:
 		o[0] = 12;
 		o[1] = 4012 & 0xff;
@@ -362,6 +594,26 @@ static void on_frame(const uint8_t *f, size_t n)
 			if (!memcmp(contacts[i].key, f + 7, 6))
 				c = &contacts[i];
 		prefix(p, f + 7);
+		if (f[1] == 1) {
+			/* A line for a repeater's command line: its answer, as a message */
+			char cmd[180];
+
+			snprintf(cmd, sizeof(cmd), "%.*s", (int)(n - 13), f + 13);
+			printf("rcli %s %s\n", p, cmd);
+			if (!c || c->type < 2) {
+				err(2);
+				break;
+			}
+			sent(0, 0, 1000);
+			if (!strcmp(cmd, "ver"))
+				queue_msg_from(c, 1, "MeshCore v1.18.0");
+			else if (!strcmp(cmd, "get name"))
+				queue_msg_from(c, 1, c->name);
+			else
+				queue_msg_from(c, 1, "Unknown command");
+			tickle();
+			break;
+		}
 		printf("send %s %u %.*s\n", p, f[2], (int)(n - 13), f + 13);
 		if (!c) {
 			err(2);
@@ -578,6 +830,25 @@ static void on_control(char *line)
 		}
 		f[8] = k;
 		qlen[nq++] = 9 + k;
+		tickle();
+	} else if (!strncmp(line, "rx ", 3)) {
+		int snr4, rssi;
+		unsigned b;
+		char hexs[400];
+		size_t k = 0;
+
+		if (sscanf(line + 3, "%d %d %399s", &snr4, &rssi, hexs) != 3)
+			return;
+		o[0] = 0x88;
+		o[1] = (uint8_t)snr4;
+		o[2] = (uint8_t)rssi;
+		while (hexs[2 * k] && hexs[2 * k + 1] && k < 170 && sscanf(hexs + 2 * k, "%2x", &b) == 1) {
+			o[3 + k] = b;
+			k++;
+		}
+		out(o, 3 + k);
+	} else if (!strncmp(line, "cli ", 4)) {
+		queue_msg_from(&contacts[2], 1, line + 4);
 		tickle();
 	} else if (!strcmp(line, "advert")) {
 		add_contact("Carol", 0xd3, 1, 0xff);

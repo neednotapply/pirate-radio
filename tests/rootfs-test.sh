@@ -1762,6 +1762,12 @@ echo "# MeshCore (pirate-meshcore; tests/fakemeshcore plays the radio)"
 MC="$T/meshcore"
 mkdir -p "$MC"
 check "meshcore: ACL is valid JSON" sh -c 'jsonfilter -i /usr/share/rpcd/acl.d/pirate-meshcore.json -e "@" > /dev/null'
+# Each call the page makes, let through by rpcd's ACL (one it leaves out is refused, on the router only)
+check "meshcore: the ACL lets through every call the page makes" sh -c '
+	a=$(jsonfilter -i /usr/share/rpcd/acl.d/pirate-meshcore.json -e "@[\"pirate-meshcore\"].read.ubus[\"pirate.meshcore\"][*]" -e "@[\"pirate-meshcore\"].write.ubus[\"pirate.meshcore\"][*]")
+	for m in $(grep -o "call(\"pirate.meshcore\", \"[a-z_]*\"" /www/app.js | sed "s/.*\"\([a-z_]*\)\"\$/\1/" | sort -u); do
+		echo "$a" | grep -qx "$m" || { echo "not in the ACL: $m"; exit 1; }
+	done'
 # An nRF52 radio on Adafruit's bootloader takes /dev/ttyACM0 too: gpsd keeps off it
 mkusb 1-5 239a 8029 "" "NRF52 DK"
 mkdir -p "$T/sys/bus/usb/devices/1-5/1-5:1.0"
@@ -1809,7 +1815,7 @@ check "meshcore: connects" mc_wait '@.state' ready 40
 check "meshcore: its details asked for, its clock set" sh -c "grep -q '^query$' '$MC/fake.log' && grep -q '^start$' '$MC/fake.log' && grep -q '^time [0-9]' '$MC/fake.log'"
 mc status > "$MC/status.json"
 mj() { jsonfilter -i "$MC/status.json" -e "$1"; }
-check "meshcore: status: model, firmware, protocol" [ "$(mj '@.model') / $(mj '@.firmware') / $(mj '@.protocol') / $(mj '@.max_channels')" = "LilyGo T-Echo / v1.18.0 / 9 / 8" ]
+check "meshcore: status: model, firmware, protocol" [ "$(mj '@.model') / $(mj '@.firmware') / $(mj '@.protocol') / $(mj '@.max_channels')" = "LilyGo T-Echo / v1.18.0 / 14 / 8" ]
 check "meshcore: status: its name and key" [ "$(mj '@.name') $(mj '@.key')" = "PirateTest eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" ]
 check "meshcore: status: its radio" [ "$(mj '@.radio.freq_khz') $(mj '@.radio.bw_hz') $(mj '@.radio.sf') $(mj '@.radio.cr') $(mj '@.radio.tx_power')" = "910525 62500 7 5 22" ]
 check "meshcore: status: battery and storage" [ "$(mj '@.battery_mv') $(mj '@.storage_used_kb') $(mj '@.storage_total_kb')" = "4012 128 4096" ]
@@ -2013,6 +2019,97 @@ check "meshcore: the survey takes it, with no gpsd" [ "$(PIRATE_MESHCORE_POSITIO
 check "meshcore: GPS off" mc_ok gps '{"enabled":false}'
 check "meshcore: GPS off: no fix" [ "$(mc position | jsonfilter -e '@.enabled' -e '@.live' | tr '\n' ' ')" = "false false " ]
 check "meshcore: GPS: true or false" [ "$(mce gps '{}')" = "enabled: true or false" ]
+# Whether its adverts carry where it is (SET_OTHER_PARAMS; the other params kept)
+check "meshcore: share location on" mc_ok set_location '{"enabled":true}'
+check "meshcore: share location on: told, other params kept" grep -qx 'params 1 5 1 1' "$MC/fake.log"
+check "meshcore: share location on: shown" [ "$(mcs '@.share_location')" = true ]
+check "meshcore: share location off" mc_ok set_location '{"enabled":false}'
+check "meshcore: share location off: told" grep -qx 'params 1 5 0 1' "$MC/fake.log"
+check "meshcore: share location off: shown" [ "$(mcs '@.share_location')" = false ]
+check "meshcore: share location: true or false" [ "$(mce set_location '{}')" = "enabled: true or false" ]
+# Its settings: as the radio said them (its self-info, tuning and auto-add), and set
+mc settings > "$MC/settings.json"
+sj() { jsonfilter -i "$MC/settings.json" -e "$1"; }
+check "meshcore: settings: its radio" [ "$(sj '@.radio.freq_khz') $(sj '@.radio.bw_hz') $(sj '@.radio.sf') $(sj '@.radio.cr') $(sj '@.radio.tx_power') $(sj '@.radio.max_tx_power')" = "910525 62500 7 5 22 22" ]
+check "meshcore: settings: telemetry, auto-add, acks, location" [ "$(sj '@.telemetry.base') $(sj '@.telemetry.location') $(sj '@.telemetry.environment') $(sj '@.auto_add') $(sj '@.extra_acks') $(sj '@.share_location')" = "1 1 0 false 1 false" ]
+check "meshcore: settings: the kinds it adds, from how far" [ "$(sj '@.autoadd.chat') $(sj '@.autoadd.repeater') $(sj '@.autoadd.room') $(sj '@.autoadd.sensor') $(sj '@.autoadd.overwrite_oldest') $(sj '@.autoadd.any_distance')" = "true true true true false true" ]
+check "meshcore: settings: tuning" [ "$(sj '@.tuning.rx_delay' | awk '{ print $1 + 0 }') $(sj '@.tuning.airtime_factor' | awk '{ print $1 + 0 }')" = "0 1" ]
+check "meshcore: settings: a command line, stats (protocol 14)" [ "$(sj '@.protocol') $(sj '@.cli') $(sj '@.stats')" = "14 true true" ]
+check "meshcore: set the radio" mc_ok set_radio '{"freq_khz":869618,"bw_hz":62500,"sf":8,"cr":8}'
+check "meshcore: set the radio: told" grep -qx 'radio 869618 62500 8 8' "$MC/fake.log"
+check "meshcore: set the radio: shown" [ "$(mcs '@.radio.freq_khz') $(mcs '@.radio.sf') $(mcs '@.radio.cr')" = "869618 8 8" ]
+check "meshcore: set the radio: SF 5 to 12" [ "$(mce set_radio '{"sf":13}')" = "sf: 5 to 12" ]
+check "meshcore: set the radio: only what's given" mc_ok set_radio '{"freq_khz":910525,"sf":7,"cr":5}'
+check "meshcore: set the radio: the rest kept" grep -qx 'radio 910525 62500 7 5' "$MC/fake.log"
+check "meshcore: TX power" mc_ok set_tx_power '{"dbm":17}'
+check "meshcore: TX power: told, shown" sh -c "grep -qx 'tx 17' '$MC/fake.log' && [ \"\$('$FZ_UBUS' -s '$MC/ubus.sock' call pirate.meshcore status | jsonfilter -e '@.radio.tx_power')\" = 17 ]"
+check "meshcore: TX power: up to its most" [ "$(mce set_tx_power '{"dbm":30}')" = "dbm: -9 to 22" ]
+check "meshcore: a position by hand" mc_ok set_position '{"lat":37.5,"lon":-122.25}'
+check "meshcore: a position by hand: told" grep -qx 'latlon 37500000 -122250000' "$MC/fake.log"
+check "meshcore: a position by hand: in range" [ "$(mce set_position '{"lat":91,"lon":0}')" = "lat: -90 to 90" ]
+check "meshcore: telemetry for anyone, no extra acks" mc_ok set_params '{"telemetry_base":2,"extra_acks":0}'
+check "meshcore: params: told, the rest kept" grep -qx 'params 1 6 0 0' "$MC/fake.log"
+check "meshcore: contacts added by themselves" mc_ok set_params '{"auto_add":true}'
+check "meshcore: contacts added by themselves: told" grep -qx 'params 0 6 0 0' "$MC/fake.log"
+check "meshcore: params: telemetry 0 to 2" [ "$(mce set_params '{"telemetry_location":3}')" = "telemetry_location: 0 (no one), 1 (contacts you allow) or 2 (anyone)" ]
+check "meshcore: auto-add: no repeaters, three hops out" mc_ok set_autoadd '{"repeater":false,"max_hops":3}'
+check "meshcore: auto-add: told (MeshCore's hops, one more)" grep -qx 'autoadd 26 4' "$MC/fake.log"
+check "meshcore: tuning" mc_ok set_tuning '{"rx_delay":2.5,"airtime_factor":1.5}'
+check "meshcore: tuning: told" grep -qx 'tuning 2500 1500' "$MC/fake.log"
+check "meshcore: tuning: airtime factor 0 to 9" [ "$(mce set_tuning '{"airtime_factor":10}')" = "airtime_factor: 0 to 9" ]
+mc settings > "$MC/settings.json"
+check "meshcore: settings: as set" [ "$(sj '@.telemetry.base') $(sj '@.auto_add') $(sj '@.autoadd.repeater') $(sj '@.autoadd.max_hops') $(sj '@.autoadd.any_distance') $(sj '@.tuning.airtime_factor' | awk '{ print $1 + 0 }') $(sj '@.position.lat' | awk '{ print $1 + 0 }')" = "2 true false 3 false 1.5 37.5" ]
+# How it's doing: three questions, answered as one
+mc stats > "$MC/stats.json"
+tj() { jsonfilter -i "$MC/stats.json" -e "$1"; }
+check "meshcore: stats: its battery, uptime, queue" [ "$(tj '@.core.battery_mv') $(tj '@.core.uptime') $(tj '@.core.queue')" = "4012 3600 0" ]
+check "meshcore: stats: what it hears" [ "$(tj '@.radio.noise_floor') $(tj '@.radio.last_rssi') $(tj '@.radio.last_snr' | awk '{ print $1 + 0 }') $(tj '@.radio.tx_air') $(tj '@.radio.rx_air')" = "-112 -80 9.5 120 540" ]
+check "meshcore: stats: packets" [ "$(tj '@.packets.received') $(tj '@.packets.sent') $(tj '@.packets.received_flood') $(tj '@.packets.receive_errors')" = "1234 56 1000 7" ]
+check "meshcore: stats: asked in turn" [ "$(grep -c '^stats ' "$MC/fake.log")" = 3 ]
+# Its own command line
+check "meshcore: command line" [ "$(mc cli '{"command":"ver"}' | jsonfilter -e '@.reply')" = "v1.18.0 (Build: 05-Nov-2026)" ]
+check "meshcore: command line: told" grep -qx 'cli ver' "$MC/fake.log"
+check "meshcore: command line: one it doesn't know" [ "$(mc cli '{"command":"frobnicate"}' | jsonfilter -e '@.reply')" = "Unknown command" ]
+check "meshcore: command line: a setting changed there, shown here" sh -c "[ \"\$('$FZ_UBUS' -s '$MC/ubus.sock' -t 30 call pirate.meshcore cli '{\"command\":\"set tx 15\"}' | jsonfilter -e '@.reply')\" = OK ] && sleep 1 && [ \"\$('$FZ_UBUS' -s '$MC/ubus.sock' call pirate.meshcore status | jsonfilter -e '@.radio.tx_power')\" = 15 ]"
+check "meshcore: command line: a line" [ "$(mce cli '{}')" = "command: a line for its command line" ]
+check "meshcore: command line: one line" [ "$(mce cli "{\"command\":\"ver\\nreboot\"}")" = "command: one line, no control characters" ]
+# A restart: it says nothing back
+check "meshcore: restart" mc_ok reboot
+check "meshcore: restart: told, and still connected" sh -c "sleep 1; grep -qx reboot '$MC/fake.log' && [ \"\$('$FZ_UBUS' -s '$MC/ubus.sock' call pirate.meshcore status | jsonfilter -e '@.state')\" = ready ]"
+# A repeater's remote admin, over the mesh: a login, its status, its command line
+check "meshcore: log in to a repeater" [ "$(mc login '{"key":"c2c2c2c2c2c2","password":"secret"}' | jsonfilter -e '@.admin' -e '@.role' | tr '\n' ' ')" = "true 3 " ]
+check "meshcore: log in: told" grep -qx 'login c2c2c2c2c2c2 secret' "$MC/fake.log"
+check "meshcore: log in: a wrong password" [ "$(mce login '{"key":"c2c2c2c2c2c2","password":"nope"}')" = "it refused the login: a wrong password, or not one it knows" ]
+check "meshcore: log in: as a guest" [ "$(mc login '{"key":"c2c2c2c2c2c2","password":"guest"}' | jsonfilter -e '@.admin' -e '@.role' | tr '\n' ' ')" = "false 0 " ]
+check "meshcore: log in: not to a person" [ "$(mce login '{"key":"a1a1a1a1a1a1","password":"x"}')" = "only repeaters, rooms and sensors take a login" ]
+check "meshcore: log in: a password, 15 bytes at most" [ "$(mce login '{"key":"c2c2c2c2c2c2","password":"0123456789abcdef"}')" = "password: 15 bytes at most" ]
+mc remote_status '{"key":"c2c2c2c2c2c2"}' > "$MC/rstatus.json"
+rj() { jsonfilter -i "$MC/rstatus.json" -e "$1"; }
+check "meshcore: a repeater's status" [ "$(rj '@.battery_mv') $(rj '@.uptime') $(rj '@.received') $(rj '@.flood_dups') $(rj '@.receive_errors')" = "3950 86400 5000 340 3" ]
+check "meshcore: a repeater's status: what it hears" [ "$(rj '@.noise_floor') $(rj '@.last_rssi') $(rj '@.last_snr' | awk '{ print $1 + 0 }')" = "-105 -70 10" ]
+check "meshcore: a repeater's status: asked" grep -qx 'status c2c2c2c2c2c2' "$MC/fake.log"
+check "meshcore: a repeater's command line" [ "$(mc remote_cli '{"key":"c2c2c2c2c2c2","command":"ver"}' | jsonfilter -e '@.reply')" = "MeshCore v1.18.0" ]
+check "meshcore: a repeater's command line: told" grep -qx 'rcli c2c2c2c2c2c2 ver' "$MC/fake.log"
+check "meshcore: a repeater's command line: another" [ "$(mc remote_cli '{"key":"c2c2c2c2c2c2","command":"get name"}' | jsonfilter -e '@.reply')" = "Hilltop Repeater" ]
+check "meshcore: a repeater's command line: not a person's" [ "$(mce remote_cli '{"key":"a1a1a1a1a1a1","command":"ver"}')" = "only repeaters, rooms and sensors have a command line" ]
+echo "cli neighbours: 2" > "$MC/ctl"
+sleep 2
+check "meshcore: an answer nobody waited for: kept for the terminal" [ "$(mc cli_log '{"key":"c2c2c2c2c2c2"}' | jsonfilter -e '@.lines[*].text')" = "neighbours: 2" ]
+check "meshcore: an answer nobody waited for: only since" [ -z "$(mc cli_log "{\"since\":$(mc cli_log | jsonfilter -e '@.seq')}" | jsonfilter -e '@.lines[*].text')" ]
+check "meshcore: a command line's answers aren't messages" [ -z "$(mc messages '{"conv":"cc2c2c2c2c2c2"}' | jsonfilter -e '@.messages[*].text')" ]
+check "meshcore: log out" mc_ok logout '{"key":"c2c2c2c2c2c2"}'
+check "meshcore: log out: told" grep -qx 'logout c2c2c2c2c2c2' "$MC/fake.log"
+# The packets it hears, raw, with their signal: the packet log (not news to the messages)
+S2=$(mcs '@.seq')
+echo "rx 26 -61 1100aabbccdd" > "$MC/ctl"
+echo "rx -12 -98 0902c277deadbeef" > "$MC/ctl"
+sleep 1
+mc packets > "$MC/pkts.json"
+check "meshcore: packets heard, raw" [ "$(jsonfilter -i "$MC/pkts.json" -e '@.packets[*].raw' | tr '\n' ' ')" = "1100aabbccdd 0902c277deadbeef " ]
+check "meshcore: packets: their signal" [ "$(jsonfilter -i "$MC/pkts.json" -e '@.packets[0].snr' | awk '{ print $1 + 0 }') $(jsonfilter -i "$MC/pkts.json" -e '@.packets[0].rssi') $(jsonfilter -i "$MC/pkts.json" -e '@.packets[1].snr' | awk '{ print $1 + 0 }')" = "6.5 -61 -3" ]
+check "meshcore: packets: those since" [ "$(mc packets "{\"since\":$(jsonfilter -i "$MC/pkts.json" -e '@.packets[0].id')}" | jsonfilter -e '@.packets[*].raw')" = "0902c277deadbeef" ]
+check "meshcore: packets: the newest, up to a limit" [ "$(mc packets '{"limit":1}' | jsonfilter -e '@.packets[*].raw')" = "0902c277deadbeef" ]
+check "meshcore: packets aren't news to the messages" [ "$(mcs '@.seq')" = "$S2" ]
 # Contacts: a route forgotten, one removed
 check "meshcore: forget a route" mc_ok contact_reset_path '{"key":"b0b0b0b0b0b0"}'
 check "meshcore: forget a route: told" grep -qx 'reset b0b0b0b0b0b0' "$MC/fake.log"
