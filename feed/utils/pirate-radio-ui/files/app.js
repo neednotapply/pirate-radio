@@ -2314,6 +2314,14 @@
 	var MC_GIPHY_PAGE = /^https?:\/\/(?:www\.)?giphy\.com\/(?:gifs|stickers)\/(?:[^\/?#]*-)?([A-Za-z0-9_]+)\/?(?:[?#].*)?$/i;
 	var MC_GIPHY_EMBED = /^https?:\/\/(?:www\.)?giphy\.com\/embed\/([A-Za-z0-9_]+)\/?(?:[?#].*)?$/i;
 	var MC_IMAGE_FILE = /^https?:\/\/[^\/?#]+\/[^?#]*\.(?:gif|png|jpe?g|webp|avif|bmp)(?:[?#].*)?$/i;
+	// Common media sites embedded like Discord: a player you press play on (so
+	// nothing external loads until you do) or a card. The viewer's browser does
+	// the loading, so it is offline-safe - gone or off-grid, the link stays.
+	var MC_YOUTUBE = /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/i;
+	var MC_VIMEO = /^https?:\/\/(?:www\.|player\.)?vimeo\.com\/(?:video\/)?(\d{6,})/i;
+	var MC_SPOTIFY = /^https?:\/\/open\.spotify\.com\/(?:intl-[a-z-]+\/)?(track|album|playlist|episode|show)\/([A-Za-z0-9]+)/i;
+	var MC_SOUNDCLOUD = /^https?:\/\/(?:www\.|m\.)?soundcloud\.com\/[^\/?#]+\/[^\/?#]+/i;
+	var MC_TWEET = /^https?:\/\/(?:www\.|mobile\.)?(twitter\.com|x\.com)\/([^\/?#]{1,20})\/status\/(\d+)/i;
 	function mcGiphy(id) {
 		return { src: "https://media.giphy.com/media/" + id + "/200.gif", fallback: "https://media.giphy.com/media/" + id + "/giphy.gif",
 			page: "https://giphy.com/gifs/" + id, gif: true };
@@ -2323,6 +2331,12 @@
 		var g = MC_GIPHY_PAGE.exec(url) || MC_GIPHY_EMBED.exec(url);
 		if (g) return mcGiphy(g[1]);
 		if (MC_IMAGE_FILE.test(url)) return { src: url, page: url, gif: /\.gif(?:[?#]|$)/i.test(url) };
+		var m;
+		if ((m = MC_YOUTUBE.exec(url))) return { type: "youtube", id: m[1], page: url };
+		if ((m = MC_VIMEO.exec(url))) return { type: "vimeo", id: m[1], page: url };
+		if ((m = MC_SPOTIFY.exec(url))) return { type: "spotify", kind: m[1], id: m[2], page: url };
+		if (MC_SOUNDCLOUD.test(url)) return { type: "soundcloud", page: url };
+		if ((m = MC_TWEET.exec(url))) return { type: "tweet", x: m[1] === "x.com", handle: m[2], page: url };
 		return null;
 	}
 	// A message that's one image and nothing else: the image alone, as Discord shows it
@@ -2337,7 +2351,11 @@
 		if (MC_IMG.test(t)) return "Image";
 		if (mcPlaceholder(t)) return "A message this can't read";
 		if (mcMapperPing(t)) return "📡 ping";
-		return only ? (only.gif ? "GIF" : "Image") : null;
+		if (!only) return null;
+		if (only.type === "youtube" || only.type === "vimeo") return "📺 video";
+		if (only.type === "spotify" || only.type === "soundcloud") return "🎵 audio";
+		if (only.type === "tweet") return only.x ? "𝕏 post" : "Tweet";
+		return only.gif ? "GIF" : "Image";
 	}
 
 	/* MCOimg, MCO Advanced's one-packet images: "im3:" (v3), "im:" (v1, v2)
@@ -2443,8 +2461,14 @@
 		if (last < text.length) frag.appendChild(document.createTextNode(text.slice(last)));
 		return frag;
 	}
-	// An image, linked to where it's from; gone (offline, say), the link alone
+	// A link's embed: a player you press play on, a card for a tweet/track, or
+	// an image/GIF. Gone (offline, say), the image ones fall back to the link.
 	function mcEmbed(img, gone, loaded) {
+		if (img.type === "youtube") return mcPlayer(img, "https://www.youtube-nocookie.com/embed/" + img.id + "?autoplay=1&rel=0", "https://i.ytimg.com/vi/" + img.id + "/hqdefault.jpg", "YouTube", "video", loaded);
+		if (img.type === "vimeo") return mcPlayer(img, "https://player.vimeo.com/video/" + img.id + "?autoplay=1", null, "Vimeo", "video", loaded);
+		if (img.type === "spotify") return mcPlayer(img, "https://open.spotify.com/embed/" + img.kind + "/" + img.id, null, "Spotify", "audio", loaded);
+		if (img.type === "soundcloud") return mcPlayer(img, "https://w.soundcloud.com/player/?url=" + encodeURIComponent(img.page) + "&auto_play=true&visual=false&color=%23e0a040", null, "SoundCloud", "audio", loaded);
+		if (img.type === "tweet") return mcCard(img, img.x ? "𝕏" : "🐦", "@" + img.handle, (img.x ? "X" : "Twitter") + " · view post");
 		var a = el("a", { class: "mc-embed" + (img.gif ? " gif" : ""), href: img.page, target: "_blank", rel: "noopener noreferrer nofollow", title: img.page });
 		var im = el("img", { class: "mc-img", src: img.src, alt: img.gif ? "a GIF" : "an image", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" });
 		im.addEventListener("error", function () {
@@ -2456,6 +2480,35 @@
 		a.appendChild(im);
 		return a;
 	}
+	// Click-to-load player: a facade (service name, a thumbnail if there is one)
+	// until you press play, then the iframe. Nothing external loads until then.
+	function mcPlayer(img, src, thumb, label, kind, loaded) {
+		var wrap = el("div", { class: "mc-embed mc-player mc-" + kind });
+		function play() {
+			clear(wrap);
+			wrap.appendChild(el("iframe", { class: "mc-iframe", src: src, title: label, loading: "lazy",
+				referrerpolicy: "no-referrer", allow: "autoplay; encrypted-media; picture-in-picture; fullscreen", allowfullscreen: "" }));
+			if (loaded) loaded();
+		}
+		var face = el("button", { type: "button", class: "mc-facade", title: "Play (" + label + ")", onclick: play });
+		if (thumb) {
+			var im = el("img", { class: "mc-img", src: thumb, alt: label, loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" });
+			im.addEventListener("error", function () { if (im.parentNode) im.parentNode.removeChild(im); face.classList.add("no-thumb"); });
+			face.appendChild(im);
+		} else face.classList.add("no-thumb");
+		face.appendChild(el("span", { class: "mc-play", "aria-hidden": "true", text: "▶" }));
+		face.appendChild(el("span", { class: "mc-pbadge", text: label }));
+		wrap.appendChild(face);
+		wrap.appendChild(el("a", { class: "mc-popen", href: img.page, target: "_blank", rel: "noopener noreferrer nofollow", title: "Open on " + label, text: "↗",
+			onclick: function (ev) { ev.stopPropagation(); } }));
+		return wrap;
+	}
+	// A compact link card: an icon, a title, where it goes.
+	function mcCard(img, icon, title, sub) {
+		return el("a", { class: "mc-embed mc-card", href: img.page, target: "_blank", rel: "noopener noreferrer nofollow", title: img.page },
+			el("span", { class: "mc-cardicon", "aria-hidden": "true", text: icon }),
+			el("span", { class: "mc-cardtext" }, el("span", { class: "mc-cardtitle", text: title }), el("span", { class: "mc-cardsub", text: sub })));
+	}
 
 	function mcAgo(t) {
 		if (!t) return "";
@@ -2465,6 +2518,42 @@
 		if (s < 86400) return Math.floor(s / 3600) + " h ago";
 		if (s < 86400 * 30) return Math.floor(s / 86400) + " d ago";
 		return new Date(t * 1000).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+	}
+
+	/* The composer's emoji + GIF picker, Discord-style. Emoji are plain Unicode
+	   (offline); GIFs come from Giphy's search (a free key, kept in this
+	   browser), sent as meshcore-open's compact "g:ID" so both apps show them. */
+	var MC_EMOJI = [
+		["Smileys", "😀 grin|😃 smile happy|😄 laugh happy|😁 beam grin|😆 laugh|😅 sweat laugh|🤣 rofl|😂 joy tears laugh|🙂 slight smile|🙃 upside down|😉 wink|😊 blush smile|😇 angel halo|🥰 love hearts|😍 heart eyes love|🤩 star struck|😘 kiss|😋 yum tongue|😛 tongue|🤪 zany silly|😎 cool sunglasses|🤓 nerd geek|🥳 party celebrate|😏 smirk|😒 unamused|😔 pensive sad|😞 disappointed|😟 worried|😕 confused|🙁 frown|😣 persevere|😖 confounded|😫 tired|😩 weary|🥺 pleading puppy|😢 cry sad|😭 sob cry|😤 triumph huff|😠 angry|😡 rage mad|🤬 swearing curse|🤯 mind blown|😳 flushed|🥵 hot heat|🥶 cold freezing|😱 scream fear|😨 fearful|😰 anxious|😥 sad|🤔 thinking hmm|🤭 giggle oops|🤫 shush quiet|🤥 lying|😶 no mouth|😐 neutral|😑 expressionless|😬 grimace|🙄 eye roll|😴 sleep zzz|🤤 drool|😪 sleepy|😮 wow surprised|😲 astonished|🥱 yawn bored|🤢 nauseated sick|🤮 vomit sick|🤧 sneeze|😷 mask sick|🤒 thermometer sick|🤕 bandage hurt|🥴 woozy drunk|😵 dizzy|🤠 cowboy|🤡 clown|🤑 money|🥸 disguise|😈 devil evil|👿 imp angry|💀 skull dead|💩 poop"],
+		["Gestures", "👍 thumbs up like yes|👎 thumbs down dislike no|👌 ok perfect|🤌 pinch italian|🤏 small pinch|✌️ peace victory|🤞 crossed fingers luck|🤟 love you|🤘 rock horns|🤙 call me hang loose|👈 left|👉 right|👆 up|👇 down|☝️ point up|✋ raised hand stop|🤚 back hand|🖐️ hand|🖖 vulcan spock|👋 wave hi bye|🤛 fist left|🤜 fist right|👊 fist bump punch|✊ raised fist|👏 clap applause|🙌 raise hands praise|👐 open hands|🤲 palms up|🙏 pray thanks please|✍️ writing|💪 muscle strong|🫵 point you|🫶 heart hands love|🤝 handshake deal"],
+		["People", "❤️ red heart love|🧡 orange heart|💛 yellow heart|💚 green heart|💙 blue heart|💜 purple heart|🖤 black heart|🤍 white heart|🤎 brown heart|💔 broken heart|❣️ heart exclamation|💕 two hearts|💞 revolving hearts|💓 beating heart|💗 growing heart|💖 sparkling heart|💘 cupid arrow|💝 heart gift|💟 heart decoration|💋 kiss lips|👀 eyes look|👁️ eye|🧠 brain|🫀 heart organ|👶 baby|🧒 child|👦 boy|👧 girl|🧑 person|👨 man|👩 woman|🧓 old|👴 grandpa|👵 grandma|🧔 beard|👮 police cop|🕵️ detective spy|💂 guard|👷 construction worker|🤴 prince|👸 princess|🦸 superhero|🦹 villain|🧙 wizard mage|🧚 fairy|🧛 vampire|🧜 mermaid|🧟 zombie|🙅 no|🙆 ok|💁 info sassy|🙋 raise hand|🙇 bow sorry|🤦 facepalm|🤷 shrug|👼 angel baby|🎅 santa|💃 dancer|🕺 dancing man|👯 bunny ears party"],
+		["Animals", "🐶 dog puppy|🐱 cat|🐭 mouse|🐹 hamster|🐰 rabbit bunny|🦊 fox|🐻 bear|🐼 panda|🐨 koala|🐯 tiger|🦁 lion|🐮 cow|🐷 pig|🐸 frog|🐵 monkey|🙈 see no evil monkey|🙉 hear no evil|🙊 speak no evil|🐔 chicken|🐧 penguin|🐦 bird|🦆 duck|🦅 eagle|🦉 owl|🦇 bat|🐺 wolf|🐗 boar|🐴 horse|🦄 unicorn|🐝 bee|🐛 bug|🦋 butterfly|🐌 snail|🐞 ladybug|🐢 turtle|🐍 snake|🦖 dino trex|🐙 octopus|🦑 squid|🦀 crab|🐠 fish|🐟 fish|🐬 dolphin|🐳 whale|🦈 shark|🐊 crocodile|🐘 elephant|🦏 rhino|🐫 camel|🦒 giraffe|🐓 rooster|🦃 turkey|🐾 paws|🐉 dragon|🌵 cactus|🎄 christmas tree|🌲 tree|🌳 tree|🌴 palm|🌱 seedling|🌿 herb|☘️ clover|🍀 four leaf clover luck|🍁 maple leaf|🍂 leaves fall|🌸 blossom|🌺 hibiscus|🌻 sunflower|🌹 rose|🌷 tulip|🌼 flower|💐 bouquet"],
+		["Food", "🍏 green apple|🍎 apple|🍐 pear|🍊 orange tangerine|🍋 lemon|🍌 banana|🍉 watermelon|🍇 grapes|🍓 strawberry|🫐 blueberries|🍈 melon|🍒 cherries|🍑 peach|🥭 mango|🍍 pineapple|🥥 coconut|🥝 kiwi|🍅 tomato|🥑 avocado|🍆 eggplant|🥔 potato|🥕 carrot|🌽 corn|🌶️ hot pepper spicy|🥒 cucumber|🥬 lettuce|🥦 broccoli|🧄 garlic|🧅 onion|🍄 mushroom|🥜 peanuts|🍞 bread|🥐 croissant|🥖 baguette|🧀 cheese|🥚 egg|🍳 fried egg|🥞 pancakes|🧇 waffle|🥓 bacon|🍔 burger|🍟 fries|🍕 pizza|🌭 hotdog|🥪 sandwich|🌮 taco|🌯 burrito|🥙 pita|🍜 ramen noodles|🍝 pasta spaghetti|🍣 sushi|🍱 bento|🍚 rice|🍙 rice ball|🍦 ice cream|🍩 donut|🍪 cookie|🎂 birthday cake|🍰 cake|🧁 cupcake|🍫 chocolate|🍬 candy|🍭 lollipop|🍯 honey|🍿 popcorn|☕ coffee|🍵 tea|🧋 bubble tea|🥤 soda cup|🍺 beer|🍻 cheers beers|🍷 wine|🥂 champagne toast|🍸 cocktail|🥃 whiskey|🍾 bottle pop"],
+		["Activities", "⚽ soccer football|🏀 basketball|🏈 american football|⚾ baseball|🥎 softball|🎾 tennis|🏐 volleyball|🏉 rugby|🎱 8ball pool|🏓 ping pong|🏸 badminton|🥅 goal|🏒 hockey|🏑 field hockey|🥍 lacrosse|🏏 cricket|⛳ golf|🏹 archery bow|🎣 fishing|🥊 boxing|🥋 martial arts|🎽 running shirt|⛸️ skate|🎿 ski|🛷 sled|🏂 snowboard|🏋️ weight lift gym|🤸 cartwheel|⛹️ basketball player|🤺 fencing|🤾 handball|🏌️ golfer|🏄 surf|🏊 swim|🤽 water polo|🚣 rowing|🧗 climbing|🚴 cycling bike|🚵 mountain bike|🏆 trophy win|🥇 gold medal first|🥈 silver medal|🥉 bronze medal|🏅 medal|🎖️ military medal|🎯 target bullseye|🎮 game controller|🕹️ joystick|🎲 dice|🎰 slot|🎳 bowling|🎨 art palette|🎭 theater|🎤 mic sing|🎧 headphones|🎼 music|🎹 piano keys|🥁 drums|🎸 guitar|🎺 trumpet|🎻 violin|🪕 banjo|🎬 clapper film|🎪 circus"],
+		["Travel", "🚗 car|🚕 taxi|🚙 suv|🚌 bus|🚎 trolley|🏎️ race car|🚓 police car|🚑 ambulance|🚒 fire truck|🚐 van|🚚 truck|🚛 lorry|🚜 tractor|🛵 scooter|🏍️ motorcycle|🚲 bicycle|🛴 kick scooter|🛹 skateboard|🚂 train|🚆 train|🚄 bullet train|🚅 shinkansen|🚈 metro|🚇 subway|🚉 station|✈️ plane flight|🛫 takeoff|🛬 landing|🚀 rocket|🛸 ufo|🚁 helicopter|⛵ sailboat|🚤 speedboat|🛥️ motor boat|🚢 ship|⚓ anchor|⛽ fuel gas|🚦 traffic light|🗺️ map|🗿 moai statue|🗽 statue liberty|🗼 tokyo tower|🏰 castle|🎡 ferris wheel|🎢 roller coaster|🎠 carousel|⛱️ beach umbrella|🏖️ beach|🏝️ island|🏔️ mountain snow|⛰️ mountain|🌋 volcano|🏕️ camping|⛺ tent|🏠 house|🏡 home garden|🏢 office building|🏬 department store|🏥 hospital|🏦 bank|🏨 hotel|⛪ church|🕌 mosque|🛕 temple|🕍 synagogue|🌁 foggy|🌃 night stars|🏙️ cityscape|🌄 sunrise mountains|🌅 sunrise|🌇 sunset city|🌉 bridge night|🎆 fireworks|🎇 sparkler|🌌 milky way"],
+		["Objects", "⌚ watch|📱 phone mobile|💻 laptop|⌨️ keyboard|🖥️ desktop monitor|🖨️ printer|🖱️ mouse|💾 floppy save|💿 cd|📀 dvd|📷 camera|📸 camera flash|📹 video camera|🎥 movie camera|📺 tv|📻 radio|🎙️ studio mic|⏰ alarm clock|⏳ hourglass|📡 satellite antenna signal|🔋 battery|🔌 plug|💡 bulb idea|🔦 flashlight|🕯️ candle|🧯 extinguisher|💸 money wings|💵 dollar|💴 yen|💶 euro|💷 pound|💰 money bag|💳 credit card|💎 gem diamond|⚖️ scales|🧰 toolbox|🔧 wrench|🔨 hammer|⚙️ gear|🧲 magnet|🔫 water gun|💣 bomb|🧨 firecracker|🔪 knife|🛡️ shield|🚬 cigarette|⚰️ coffin|🏺 amphora|🔮 crystal ball|📿 beads|💈 barber|🔭 telescope|🔬 microscope|💊 pill|💉 syringe|🩸 blood|🩹 bandage|🌡️ thermometer|🧪 test tube|🧬 dna|🦠 microbe virus|🧫 petri|🚽 toilet|🚿 shower|🛁 bath|🧻 toilet paper|🧼 soap|🧽 sponge|🪣 bucket|🔑 key|🗝️ old key|🔒 locked|🔓 unlocked|📦 package box|📫 mailbox|✉️ envelope mail|📧 email|📝 memo note|📋 clipboard|📌 pin|📎 paperclip|✂️ scissors|📏 ruler|🔗 link chain|📚 books|📖 open book|🔖 bookmark|🏷️ tag label"],
+		["Symbols", "💯 hundred perfect|✅ check yes done|❌ cross no wrong|❎ cross|✔️ check mark|☑️ check box|🔴 red circle|🟠 orange circle|🟡 yellow circle|🟢 green circle|🔵 blue circle|🟣 purple circle|⚫ black circle|⚪ white circle|🟥 red square|🟧 orange square|🟨 yellow square|🟩 green square|🟦 blue square|🟪 purple square|⬛ black square|⬜ white square|🔶 orange diamond|🔷 blue diamond|🔺 red triangle up|🔻 red triangle down|💠 diamond dot|🔘 radio button|❓ question|❔ question white|❗ exclamation|❕ exclamation white|‼️ double exclamation|⁉️ interrobang|⚠️ warning|🚫 no forbidden|🛑 stop|♻️ recycle|🔥 fire lit|⭐ star|🌟 glowing star|✨ sparkles|⚡ lightning bolt|💥 boom collision|💢 anger|💦 sweat drops|💨 dash wind|🌈 rainbow|☀️ sun|🌤️ sun cloud|⛅ cloud sun|☁️ cloud|🌧️ rain|⛈️ storm|🌩️ lightning|❄️ snowflake|⛄ snowman|☃️ snowman|🌊 wave water|💧 droplet|🌙 moon crescent|🌛 moon face|🌝 full moon face|🌞 sun face|🪐 planet saturn|🌍 earth globe|🎉 party tada|🎊 confetti|🎈 balloon|🎁 gift present|🎀 ribbon bow|🎗️ reminder ribbon|🏁 checkered flag|🚩 triangle flag|🏳️ white flag|🏴 black flag|🏳️‍🌈 rainbow pride flag|♾️ infinity|🆗 ok button|🆕 new|🆒 cool|🆓 free|🔝 top up|🔞 no under 18|💤 zzz sleep"]
+	];
+	function mcGiphyKey() { try { return localStorage.getItem("pr.giphyKey") || ""; } catch (e) { return ""; } }
+	function mcSetGiphyKey(k) { try { if (k) localStorage.setItem("pr.giphyKey", k); else localStorage.removeItem("pr.giphyKey"); } catch (e) {} }
+	var MC_DEMO_GIFS = ["8kejjglzkEprO", "3oEjI6SIIHBdRxXI40", "l0HlNaQ6gWfllcjDO", "xT0xeJpnrWC4XWblEk", "26ufdipQqU2lhNA4g", "l46Cy1rHbQ92uuLXa"];
+	function mcGifSearch(q) {
+		if (DEMO) return Promise.resolve(MC_DEMO_GIFS.map(function (id) {
+			return { id: id, thumb: "https://media.giphy.com/media/" + id + "/200w.gif", title: "a demo GIF" };
+		}));
+		var key = mcGiphyKey();
+		if (!key) return Promise.reject(new Error("no-key"));
+		var base = "https://api.giphy.com/v1/gifs/", path = q ? "search?q=" + encodeURIComponent(q) + "&" : "trending?";
+		return fetch(base + path + "api_key=" + encodeURIComponent(key) + "&limit=24&rating=pg-13&bundle=messaging_non_clips").then(function (r) {
+			if (r.status === 401 || r.status === 403) throw new Error("bad-key");
+			if (!r.ok) throw new Error("Giphy error " + r.status);
+			return r.json();
+		}).then(function (j) {
+			return (j.data || []).map(function (g) {
+				var im = g.images || {}, t = im.fixed_width_small || im.fixed_width_downsampled || im.fixed_width || im.preview_gif || {};
+				return { id: g.id, thumb: t.url, title: g.title || "GIF" };
+			}).filter(function (g) { return g.id && g.thumb; });
+		});
 	}
 
 	function renderMessenger() {
@@ -2492,6 +2581,7 @@
 		var input = el("textarea", { class: "mc-input", rows: "1", placeholder: "Message", "aria-label": "Message" });
 		var count = el("span", { class: "mc-count" });
 		var sendBtn = el("button", { type: "button", class: "mc-send", title: "Send (Enter)", "aria-label": "Send", onclick: send }, mcIcon("send"));
+		var pickBtn = el("button", { type: "button", class: "mc-emojibtn", title: "Emoji & GIFs", "aria-label": "Emoji and GIFs", onclick: function (ev) { ev.stopPropagation(); openComposerPicker(pickBtn); } }, "☺");
 		var sendStatus = el("div", { class: "status mc-cstatus" });
 		// The composer's word (an error sending, say): gone when there's none
 		function sayStatus(text, kind) {
@@ -2502,7 +2592,7 @@
 		replyBar.hidden = true;
 		var vThread = el("div", { class: "mc-view" }, threadHead,
 			el("div", { class: "mc-msgwrap" }, threadBody, jumpBtn),
-			el("div", { class: "mc-compose" }, replyBar, el("div", { class: "mc-box" }, input, count, sendBtn), sendStatus));
+			el("div", { class: "mc-compose" }, replyBar, el("div", { class: "mc-box" }, input, count, pickBtn, sendBtn), sendStatus));
 		var vPage = el("div", { class: "mc-view mc-page" });   // contacts, your radio, a channel's settings, a new channel
 		var vNote = el("div", { class: "mc-view mc-note" });   // no radio, connecting, no service
 		main.appendChild(vThread); main.appendChild(vPage); main.appendChild(vNote);
@@ -3470,6 +3560,109 @@
 			pop.hidden = false;
 			placePop();
 			if (!TOUCH) grid.firstChild.focus({ preventScroll: true });
+		}
+
+		/* The composer's emoji + GIF picker, opened by the ☺ button. Emoji insert
+		   where the cursor is and the picker stays open; a GIF drops in its
+		   "g:ID" and closes. */
+		var cpickTab = "emoji";
+		function insertAt(s) {
+			var a = input.selectionStart || 0, b = input.selectionEnd || 0;
+			input.value = input.value.slice(0, a) + s + input.value.slice(b);
+			input.selectionStart = input.selectionEnd = a + s.length;
+			grow(); updateCount();
+		}
+		function openComposerPicker(anchor) {
+			if (!pop.hidden && popAnchor === anchor) { closeProfile(); return; }
+			popAnchor = anchor;
+			pop.classList.add("picker");
+			clear(pop).appendChild(buildComposerPicker());
+			pop.hidden = false;
+			placePop();
+		}
+		function buildComposerPicker() {
+			var wrap = el("div", { class: "mc-cpick" });
+			var search = el("input", { class: "inp mc-cpsearch", type: "search", autocomplete: "off", spellcheck: "false", "aria-label": "Search" });
+			var body = el("div", { class: "mc-cpbody" });
+			var tEmoji, tGif;
+			function renderBody() { clear(body); if (cpickTab === "gif") renderGifs(body, search.value.trim()); else renderEmoji(body, search.value.trim()); }
+			function setTab(id) {
+				cpickTab = id;
+				tEmoji.classList.toggle("on", id === "emoji");
+				tGif.classList.toggle("on", id === "gif");
+				search.placeholder = id === "gif" ? "Search Giphy" : "Search emoji";
+				renderBody();
+			}
+			tEmoji = el("button", { type: "button", class: "mc-cptab", onclick: function () { setTab("emoji"); } }, "😀 Emoji");
+			tGif = el("button", { type: "button", class: "mc-cptab", onclick: function () { setTab("gif"); } }, "▶ GIF");
+			search.addEventListener("input", renderBody);
+			wrap.appendChild(el("div", { class: "mc-cptabs" }, tEmoji, tGif));
+			wrap.appendChild(search);
+			wrap.appendChild(body);
+			setTab(cpickTab);
+			setTimeout(function () { if (!TOUCH) { try { search.focus({ preventScroll: true }); } catch (e) {} } }, 0);
+			return wrap;
+		}
+		function renderEmoji(body, q) {
+			q = q.toLowerCase();
+			var any = false;
+			MC_EMOJI.forEach(function (cat) {
+				var items = cat[1].split("|").filter(function (it) { return !q || it.toLowerCase().indexOf(q) >= 0; });
+				if (!items.length) return;
+				any = true;
+				if (!q) body.appendChild(el("div", { class: "mc-cpcat", text: cat[0] }));
+				var grid = el("div", { class: "mc-emoji-grid" });
+				items.forEach(function (it) {
+					var sp = it.indexOf(" "), e = sp < 0 ? it : it.slice(0, sp);
+					grid.appendChild(el("button", { type: "button", class: "mc-emoji", title: sp < 0 ? e : it.slice(sp + 1), text: e,
+						onclick: function () { insertAt(e); input.focus(); } }));
+				});
+				body.appendChild(grid);
+			});
+			if (!any) body.appendChild(el("div", { class: "muted mc-cpnote", text: "No emoji match that." }));
+		}
+		function renderGifs(body, q) {
+			if (!DEMO && !mcGiphyKey()) { gifKeyForm(body, false); return; }
+			body.appendChild(el("div", { class: "muted mc-cpnote", text: "Loading…" }));
+			mcGifSearch(q).then(function (gifs) {
+				clear(body);
+				if (!gifs.length) { body.appendChild(el("div", { class: "muted mc-cpnote", text: q ? "No GIFs for that." : "No GIFs." })); return; }
+				var grid = el("div", { class: "mc-gif-grid" });
+				gifs.forEach(function (g) {
+					grid.appendChild(el("button", { type: "button", class: "mc-gif", title: g.title, onclick: function () { pickGif(g.id); } },
+						el("img", { src: g.thumb, alt: g.title, loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" })));
+				});
+				body.appendChild(grid);
+				if (!DEMO) body.appendChild(el("div", { class: "mc-cpvia" }, el("span", { text: "via Giphy" }),
+					el("button", { type: "button", class: "lnk mc-cpkeybtn", text: "change key", onclick: function () { gifKeyForm(body, false); } })));
+			}).catch(function (e) {
+				clear(body);
+				var m = String(e && e.message);
+				if (m === "no-key" || m === "bad-key") gifKeyForm(body, m === "bad-key");
+				else body.appendChild(el("div", { class: "status err mc-cpnote", text: "Giphy: " + (e.message || e) }));
+			});
+		}
+		function gifKeyForm(body, bad) {
+			clear(body);
+			body.appendChild(el("p", { class: "descr mc-cpnote", text: bad
+				? "That Giphy key was rejected. Paste a valid one:"
+				: "GIF search uses Giphy. Paste a free API key (developers.giphy.com → Create an App). It stays in this browser." }));
+			var inp = el("input", { class: "inp", type: "text", placeholder: "Giphy API key", value: mcGiphyKey(), spellcheck: "false", autocomplete: "off" });
+			var save = el("button", { class: "btn small", type: "button", text: "Save", onclick: function () {
+				var k = inp.value.trim();
+				mcSetGiphyKey(k);
+				if (k) renderGifs(body, "");
+			} });
+			inp.addEventListener("keydown", function (ev) { if (ev.key === "Enter") { ev.preventDefault(); save.onclick(); } });
+			body.appendChild(el("div", { class: "mc-cpkeyrow" }, inp, save));
+		}
+		function pickGif(id) {
+			var g = "g:" + id, v = input.value;
+			if (!v.trim()) input.value = "";
+			else if (!/\s$/.test(v)) g = " " + g;
+			insertAt(g);
+			closeProfile();
+			input.focus();
 		}
 		// A sender's face or name, or a mention: their profile
 		function picked(ev) {

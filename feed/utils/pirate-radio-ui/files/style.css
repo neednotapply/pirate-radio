@@ -741,6 +741,25 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 .mc-embed { display: block; max-width: 100%; border-radius: 6px; overflow: hidden; background: var(--inset); line-height: 0; }
 .mc-img { display: block; height: 200px; width: auto; max-width: min(100%, 420px); object-fit: contain; }
 .mc-embed:hover .mc-img { filter: brightness(1.06); }
+/* media players: a facade until you press play, then the iframe */
+.mc-player { position: relative; width: min(100%, 420px); background: #000; line-height: 0; }
+.mc-player.mc-video { aspect-ratio: 16 / 9; }
+.mc-player.mc-audio { height: 152px; }
+.mc-facade { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; margin: 0; border: 0; cursor: pointer; background: var(--panel-2); display: flex; align-items: center; justify-content: center; }
+.mc-facade .mc-img { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; object-fit: cover; }
+.mc-facade.no-thumb { background: linear-gradient(135deg, var(--panel-2), var(--inset)); }
+.mc-play { position: relative; z-index: 1; width: 46px; height: 46px; border-radius: 999px; background: rgba(0, 0, 0, .55); color: #fff; font-size: 18px; line-height: 44px; text-align: center; border: 2px solid rgba(255, 255, 255, .85); }
+.mc-facade:hover .mc-play { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.mc-pbadge { position: absolute; left: 8px; bottom: 8px; z-index: 1; font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 7px; border-radius: 999px; background: rgba(0, 0, 0, .72); color: #fff; }
+.mc-popen { position: absolute; right: 7px; top: 7px; z-index: 2; font-size: 13px; line-height: 1; padding: 4px 7px; border-radius: 999px; background: rgba(0, 0, 0, .72); color: #fff; text-decoration: none; }
+.mc-popen:hover { background: var(--accent); color: var(--accent-ink); }
+.mc-iframe { width: 100%; height: 100%; border: 0; display: block; }
+.mc-card { display: flex; align-items: center; gap: 10px; width: min(100%, 420px); padding: 9px 11px; border: 1px solid var(--line-2); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--panel-2); line-height: 1.3; text-decoration: none; }
+.mc-card:hover { border-color: var(--accent); }
+.mc-cardicon { font-size: 20px; flex: none; }
+.mc-cardtext { display: flex; flex-direction: column; min-width: 0; }
+.mc-cardtitle { color: var(--hi); font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mc-cardsub { color: var(--muted); font-size: 12px; }
 /* MCOimg: pixel art, drawn sharp at a whole multiple of its size */
 .mc-mcoimg { display: inline-block; line-height: 0; border-radius: 4px; overflow: hidden; background: var(--inset); }
 .mc-mcoimg-img { display: block; image-rendering: crisp-edges; image-rendering: pixelated; }
@@ -778,6 +797,28 @@ table.tbl { width: 100%; border-collapse: collapse; font-family: var(--mono); fo
 }
 .mc-pick-e:hover, .mc-pick-e:focus-visible { background: var(--panel-2); }
 .mc-pick-in { width: 100%; height: 30px; margin-top: 8px; }
+/* The composer's emoji + GIF picker */
+.mc-emojibtn { flex: none; appearance: none; display: grid; place-items: center; width: 34px; height: 32px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; cursor: pointer; }
+.mc-emojibtn:hover, .mc-emojibtn:focus-visible { color: var(--accent); background: var(--panel-2); }
+.mc-cpick { display: flex; flex-direction: column; width: 322px; max-width: calc(100vw - 16px); height: 364px; max-height: calc(100vh - 16px); }
+.mc-pop.sheet .mc-cpick { width: 100%; height: min(62vh, 420px); }
+.mc-cptabs { display: flex; gap: 4px; padding: 10px 12px 0; }
+.mc-cptab { appearance: none; flex: 1; height: 30px; border: 0; border-radius: 6px; background: var(--panel-2); color: var(--muted); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.mc-cptab.on { background: var(--accent-soft); color: var(--accent); }
+.mc-cpsearch { margin: 8px 12px 6px; height: 30px; flex: none; }
+.mc-cpbody { flex: 1; overflow-y: auto; padding: 0 12px 10px; scrollbar-width: thin; }
+.mc-cpcat { position: sticky; top: 0; padding: 7px 0 3px; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); background: var(--panel); }
+.mc-emoji-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; margin-bottom: 4px; }
+.mc-emoji { appearance: none; height: 36px; border: 0; border-radius: 6px; background: none; cursor: pointer; font-size: 21px; line-height: 1; font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--sans); }
+.mc-emoji:hover, .mc-emoji:focus-visible { background: var(--panel-2); }
+.mc-gif-grid { column-count: 2; column-gap: 6px; }
+.mc-gif { display: block; width: 100%; margin: 0 0 6px; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: var(--inset); cursor: pointer; line-height: 0; break-inside: avoid; }
+.mc-gif img { display: block; width: 100%; height: auto; }
+.mc-gif:hover, .mc-gif:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.mc-cpnote { padding: 16px 2px; text-align: center; }
+.mc-cpvia { display: flex; align-items: center; justify-content: space-between; padding: 7px 2px 0; font-size: 11px; color: var(--faint); }
+.mc-cpkeyrow { display: flex; gap: 6px; margin-top: 8px; }
+.mc-cpkeyrow .inp { flex: 1; min-width: 0; }
 
 /* Who: a face or name to click, anywhere, for their profile */
 .mc-pick { cursor: pointer; }

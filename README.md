@@ -426,12 +426,20 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   only among the messages they sent (one to yours would show there as its
   text). In a channel, any message. The official MeshCore app has no
   reactions: it shows anyone's, from any app, as their text.
-- **Links**, clickable; **images** shown under the words, as Discord
-  shows them: Giphy's GIFs (a `giphy.com/gifs/…` page, or meshcore-open's
-  `g:ID`) and links to an image file (`.gif`, `.png`, `.jpg`, `.webp`…). A
-  message that's only an image shows only the image. The images come
-  straight from the internet to the browser viewing the page (with no
-  referrer): with no connection, or the image gone, the link stays.
+- **Links**, clickable; **media from common sites shown under the words**,
+  as Discord does: YouTube, Vimeo, Spotify and SoundCloud as a player you
+  press play on (nothing external loads until you do); X/Twitter as a card;
+  Giphy's GIFs (a `giphy.com/gifs/…` page or meshcore-open's `g:ID`) and
+  links to an image file (`.gif`, `.png`, `.jpg`, `.webp`…) as the picture.
+  A message that's only one of these shows just the embed. It all loads in
+  the browser viewing the page (with no referrer, and a player not until
+  you press play), so it is offline-safe: with no connection, or the thing
+  gone, the link stays.
+- **An emoji and GIF picker** on the composer (the ☺ button), as Discord's:
+  an **emoji** tab (searchable, categorised; plain Unicode, so it works
+  offline) and a **GIF** tab that searches **Giphy** — a free API key,
+  pasted once and kept in that browser — and drops the pick in as
+  meshcore-open's compact `g:ID`, which both apps show.
 - **MCOimg**, MCO Advanced's one-packet images (the meshcore-open fork's
   pixel art: `im3:` for v3, `im:` for v1 and v2, by a text message or as a
   channel's binary data), drawn with MCO Advanced's own decoder, sharp, at
