@@ -2103,12 +2103,15 @@ phn() { PIRATE_SYSFS="$PH/sys" PIRATE_PHONE_ADB="$PH/bin/adb" pirate-phone "$@";
 phn status > "$PH/status.json"
 check "phone: a phone is present" [ "$(jsonfilter -i "$PH/status.json" -e '@.present')" = true ]
 check "phone: vendor named from the id" [ "$(jsonfilter -i "$PH/status.json" -e '@.vendor')" = Google ]
-check "phone: model from adb" [ "$(jsonfilter -i "$PH/status.json" -e '@.model')" = "Pixel 6a" ]
-check "phone: battery from adb" [ "$(jsonfilter -i "$PH/status.json" -e '@.battery')" = 84 ]
-check "phone: adb is ready" [ "$(jsonfilter -i "$PH/status.json" -e '@.adb.ready')" = true ]
-check "phone: mode is authoritative from adb (mtp)" [ "$(jsonfilter -i "$PH/status.json" -e '@.mode')" = mtp ]
+check "phone: mode mtp from the product id, no adb" [ "$(jsonfilter -i "$PH/status.json" -e '@.mode')" = mtp ]
+check "phone: status carries no adb object" [ -z "$(jsonfilter -i "$PH/status.json" -e '@.adb')" ]
 check "phone: tethering shows supported (cdc_ncm present)" [ "$(jsonfilter -i "$PH/status.json" -e '@.supports.tether')" = true ]
 check "phone: MIDI shows unsupported (no snd-usb-audio)" [ "$(jsonfilter -i "$PH/status.json" -e '@.supports.midi')" = false ]
+check "phone: webcam unsupported without the uvcvideo module" [ "$(jsonfilter -i "$PH/status.json" -e '@.supports.webcam')" = false ]
+mkdir -p "$PH/sys/module/uvcvideo"
+phn status > "$PH/status-uvc.json"
+check "phone: webcam supported once uvcvideo loads, even with no /dev/video0" [ "$(jsonfilter -i "$PH/status-uvc.json" -e '@.supports.webcam')" = true ]
+rm -rf "$PH/sys/module/uvcvideo"
 
 phn files /sdcard > "$PH/ls.json"
 check "phone: a folder lists its entries" [ "$(jsonfilter -i "$PH/ls.json" -e '@.entries[*].name' | wc -l)" = 3 ]
@@ -2116,9 +2119,15 @@ check "phone: a name with a space survives" grep -q "my notes.txt" "$PH/ls.json"
 check "phone: a directory is flagged" [ "$(jsonfilter -i "$PH/ls.json" -e '@.entries[@.name="DCIM"].dir')" = true ]
 check "phone: a file keeps its size" [ "$(jsonfilter -i "$PH/ls.json" -e '@.entries[@.name="song.mp3"].size')" = 28206 ]
 
-check "phone: mode read from sysfs when adb is off (file)" [ "$(PIRATE_SYSFS="$PH/sys" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.mode')" = file ]
+check "phone: mode is mtp with no adb available at all" [ "$(PIRATE_SYSFS="$PH/sys" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.mode')" = mtp ]
 check "phone: tethering composition read from sysfs" [ "$(PIRATE_SYSFS="$PH/sys2" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.mode')" = tether ]
 check "phone: no phone -> present false" [ "$(PIRATE_SYSFS="$T" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.present')" = false ]
+
+# PTP uses the same 06/01 still-image class as MTP; the product id tells them apart.
+PS3="$PH/sys3/bus/usb/devices"; mkdir -p "$PS3/3-1/3-1:1.0"
+echo 18d1 > "$PS3/3-1/idVendor"; echo 4ee6 > "$PS3/3-1/idProduct"
+echo 06 > "$PS3/3-1/3-1:1.0/bInterfaceClass"; echo 01 > "$PS3/3-1/3-1:1.0/bInterfaceSubClass"; echo 01 > "$PS3/3-1/3-1:1.0/bInterfaceProtocol"
+check "phone: ptp told apart from mtp by product id" [ "$(PIRATE_SYSFS="$PH/sys3" PIRATE_PHONE_ADB="$PH/bin/adb-none" pirate-phone status | jsonfilter -e '@.mode')" = ptp ]
 
 # A function isn't visible inside sh -c, so these inline the fake environment
 # (no spaces in the paths). The pipelines need a sub-shell.

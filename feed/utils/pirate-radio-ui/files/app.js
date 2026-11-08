@@ -431,9 +431,7 @@
 		return {
 			adb_installed: true, present: DEMO_PHONE.present,
 			vendor_id: "18d1", product_id: "4ee7", vendor: "Google",
-			adb: { usb: "device", wifi: "device", ready: true },
-			model: "Pixel 6a", android: "17", battery: 84,
-			functions: DEMO_PHONE.mode === "charge" ? "" : DEMO_PHONE.mode, mode: DEMO_PHONE.mode,
+			mode: DEMO_PHONE.mode,
 			supports: { tether: true, midi: true, webcam: true },
 			tether: DEMO_PHONE.tetherUp ? { up: true, iface: "usb0", wan_ip: "192.168.42.101" } : undefined,
 			webcam_stream: DEMO_PHONE.webcamOn ? { running: true, port: 8083 } : undefined
@@ -4605,14 +4603,13 @@
 
 		VIEW.appendChild(idPanel); VIEW.appendChild(modePanel); VIEW.appendChild(usePanel);
 
-		var shownKey = "", lastMode = "\x00", adbWifiStatus = null, fbPath = "/sdcard";
+		var shownKey = "", lastMode = "\x00", fbPath = "/sdcard";
 
 		function say(line, text, kind) {
 			line.className = "status" + (kind === "err" ? " err" : kind === "ok" ? " ok-text" : "");
 			line.textContent = text || "";
 		}
 		function failed(e) { if (String(e.message || e) === "unauthorized") { onError(e); return true; } return false; }
-		function ready(s) { return s.present && s.adb && s.adb.ready; }
 		function modeLabel(mode) {
 			for (var i = 0; i < PH_MODES.length; i++) if (PH_MODES[i][3].indexOf(mode) >= 0) return PH_MODES[i][1];
 			return mode || "unknown";
@@ -4638,8 +4635,7 @@
 			if (!s.present) {
 				idWrap.appendChild(alertEl("info", "No phone on the USB port. Plug an Android phone into the Slate."));
 				idWrap.appendChild(el("p", { class: "descr", text:
-					"Turn on USB debugging (Settings → System → Developer options) so the Slate can switch its USB mode and reach its files." }));
-				if (s.adb_installed === false) idWrap.appendChild(el("p", { class: "descr", text: "adb is not installed on this router." }));
+					"Then pick a USB mode on the phone (File transfer, Tethering, MIDI, PTP or Webcam) and the router recognises and sets it up here." }));
 				return;
 			}
 			idWrap.appendChild(el("div", { class: "drive-head" },
@@ -4647,49 +4643,25 @@
 				badge(modeLabel(s.mode), "sec-ok"),
 				s.android ? badge("Android " + s.android, "sec-neutral") : null,
 				typeof s.battery === "number" ? badge(s.battery + "%", s.battery < 20 ? "sec-warn" : "sec-neutral") : null));
-			var a = s.adb || {}, kind = "", txt;
-			if (a.wifi === "device") { txt = "USB debugging: over Wi-Fi — switching modes won't drop it."; kind = "ok"; }
-			else if (a.usb === "device") { txt = "USB debugging: over USB."; }
-			else if (a.usb === "unauthorized" || a.wifi === "unauthorized") { txt = "USB debugging: waiting for you to allow it on the phone (check the Allow dialog)."; kind = "warn"; }
-			else { txt = "USB debugging is off or not authorized — turn it on to switch modes and read files."; kind = "warn"; }
-			var row = el("div", { class: "toolbar" }, el("span", { class: "status" + (kind === "ok" ? " ok-text" : kind === "warn" ? " err" : ""), text: txt }));
-			if (a.usb === "device" && a.wifi !== "device") row.appendChild(btn("Use adb over Wi-Fi", { onclick: function () { adbWifi(true); } }));
-			if (a.wifi === "device") row.appendChild(btn("Turn off Wi-Fi adb", { cls: "reset", onclick: function () { adbWifi(false); } }));
-			idWrap.appendChild(row);
-			adbWifiStatus = el("span", { class: "status" });
-			idWrap.appendChild(adbWifiStatus);
-		}
-
-		function adbWifi(on) {
-			if (adbWifiStatus) say(adbWifiStatus, on ? "moving adb to Wi-Fi…" : "turning off Wi-Fi adb…");
-			call("pirate.phone", "adb_wifi", { enabled: on }).then(function (r) {
-				if (r.error) { if (adbWifiStatus) say(adbWifiStatus, r.error, "err"); return; }
-				if (adbWifiStatus) say(adbWifiStatus, on ? ("adb now on Wi-Fi" + (r.ip ? " (" + r.ip + ")" : "")) : "Wi-Fi adb off", "ok");
-				status();
-			}).catch(function (e) { if (!failed(e) && adbWifiStatus) say(adbWifiStatus, String(e.message || e), "err"); });
+			idWrap.appendChild(el("p", { class: "descr", text:
+				"Switch the USB mode on the phone itself (swipe down the USB notification, or Settings → Connected devices → USB). The router recognises each mode and sets it up here — no USB debugging needed." }));
 		}
 
 		function renderModeRow(s) {
 			clear(modeRow);
-			var ok = ready(s);
 			PH_MODES.forEach(function (m) {
 				var on = m[3].indexOf(s.mode) >= 0;
-				var b = btn(m[1], { primary: on, onclick: function () { switchMode(m[2]); } });
-				b.disabled = !ok;
-				modeRow.appendChild(b);
+				var chip = el("span", { class: "mode-chip" + (on ? " on" : ""), text: m[1] });
+				if (DEMO) { chip.style.cursor = "pointer"; chip.onclick = function () { demoSwitch(m[2]); }; }
+				modeRow.appendChild(chip);
 			});
+			modeStatus.textContent = "";
 			modeNote.textContent = !s.present ? ""
-				: ok ? "Switching asks the phone to change its USB function. Over Wi-Fi adb it is seamless; over USB the phone re-prompts for debugging each time."
-				: "Authorize USB debugging to switch modes.";
+				: "The highlighted mode is what the phone is in now. Change it on the phone (swipe down the USB notification → pick a mode) and the router follows within a few seconds.";
 		}
 
-		function switchMode(fn) {
-			say(modeStatus, "switching…");
-			call("pirate.phone", "set_mode", { mode: fn }).then(function (s) {
-				if (s.error) return say(modeStatus, s.error, "err");
-				say(modeStatus, "now in " + modeLabel(s.mode) + " mode", "ok");
-				show(s);
-			}).catch(function (e) { if (!failed(e)) say(modeStatus, String(e.message || e), "err"); });
+		function demoSwitch(fn) {
+			call("pirate.phone", "set_mode", { mode: fn }).then(function (s) { lastMode = "\x00"; show(s); });
 		}
 
 		function renderUse(s) {
@@ -4701,18 +4673,24 @@
 			if (mode === "webcam") return renderWebcam(s);
 			if (mode === "midi") return renderMidi(s);
 			usePanel.appendChild(el("h3", { class: "sub-h", text: "Charging only" }));
-			usePanel.appendChild(el("p", { class: "descr", text: "The data lines are idle. Pick a mode above to browse files, share the phone's internet, stream its camera, or use it as a MIDI device." }));
+			usePanel.appendChild(el("p", { class: "descr", text: "The data lines are idle. On the phone, switch to File transfer, Tethering, MIDI, PTP or Webcam and it becomes usable here." }));
 		}
 
 		/* ---- files (over adb) ---- */
 		function renderFiles(s) {
 			usePanel.appendChild(el("h3", { class: "sub-h", text: (s.mode === "ptp" ? "Photos" : "Files") + " on the phone" }));
-			if (!ready(s)) { usePanel.appendChild(el("p", { class: "descr", text: "Authorize USB debugging to browse the phone's files." })); return; }
+			usePanel.appendChild(el("p", { class: "descr", text:
+				"In " + (s.mode === "ptp" ? "PTP" : "file transfer") + " mode the phone's storage is reachable only over USB debugging. Browsing is optional — start it and the phone shows one Allow dialog." }));
+			if (s.adb_installed === false) { usePanel.appendChild(alertEl("info", "adb isn't installed on this router, so file browsing isn't available.")); return; }
 			var crumbs = el("div", { class: "crumbs" });
-			var listWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+			var listWrap = el("div", {});
 			var fstatus = el("span", { class: "status" });
-			usePanel.appendChild(crumbs); usePanel.appendChild(listWrap); usePanel.appendChild(fstatus);
-			loadDir(fbPath && fbPath.indexOf("/sdcard") === 0 ? fbPath : "/sdcard", crumbs, listWrap, fstatus);
+			var startBtn = btn("Browse files over USB debugging", { onclick: function () {
+				startBtn.disabled = true;
+				loadDir(fbPath && fbPath.indexOf("/sdcard") === 0 ? fbPath : "/sdcard", crumbs, listWrap, fstatus);
+			} });
+			usePanel.appendChild(el("div", { class: "toolbar" }, startBtn, fstatus));
+			usePanel.appendChild(crumbs); usePanel.appendChild(listWrap);
 		}
 		function crumbLink(label, path, c, l, f) {
 			return el("a", { href: "#", class: "lnk", text: label, onclick: function (ev) { ev.preventDefault(); loadDir(path, c, l, f); } });

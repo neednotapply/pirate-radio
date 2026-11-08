@@ -6,12 +6,11 @@
 # Prints one JSON object per subcommand (the reply the pirate.phone rpcd
 # plugin returns).
 #
-# USB debugging (adb) does the driving: it reads and sets the phone's USB
-# function and reaches its files. Because switching the function tears the USB
-# adb interface down and re-prompts, adb is best run over Wi-Fi (adb_wifi),
-# which survives mode changes. Everything the phone exposes on the USB bus is
-# still recognised from sysfs without adb, so an undebugged phone is at least
-# named and its mode shown.
+# The phone's USB mode is recognised from the USB bus (sysfs) alone, so status
+# never runs adb and nothing on the phone is prompted - switch the mode on the
+# phone itself. Tethering, MIDI and the webcam then work straight off the
+# kernel drivers. adb is optional and used only on demand (browsing files in
+# MTP/PTP mode, or the set_mode helper), never while polling.
 #
 #   pirate-phone status
 #   pirate-phone set_mode <charge|mtp|ptp|tether|ncm|rndis|midi|webcam>
@@ -135,23 +134,30 @@ mode_from_ifaces() {
 	fi
 }
 
+# MTP and PTP share the 06/01 still-image interface class, so the product id
+# tells them apart. Google/Pixel gadget ids; anything else stays generic "file".
+file_kind() {
+	case "$1" in
+	4ee1|4ee2) echo mtp ;;
+	4ee5|4ee6) echo ptp ;;
+	*)         echo file ;;
+	esac
+}
+
 # What this kernel can actually do with each mode (are the kmods/devices here?)
 have_module() { [ -d "$SYSFS/module/$1" ] || grep -q "^$1 " /proc/modules 2>/dev/null; }
 
 # ---- status -----------------------------------------------------------------
 
 cmd_status() {
-	local target state mode fmode model android batt bstat usbkind wifikind ip
-	local hasadb=0 video=0 midi=0
+	local mode
 
 	json_init
 
-	command -v "$ADB" >/dev/null 2>&1 && hasadb=1
-	json_add_boolean adb_installed "$hasadb"
+	if command -v "$ADB" >/dev/null 2>&1; then json_add_boolean adb_installed 1; else json_add_boolean adb_installed 0; fi
 
 	if ! find_phone; then
 		json_add_boolean present 0
-		# A Wi-Fi adb transport can linger after the phone is unplugged
 		json_dump
 		return
 	fi
@@ -160,45 +166,18 @@ cmd_status() {
 	json_add_string product_id "$PH_PID"
 	json_add_string vendor "$(vendor_name "$PH_VID")"
 
+	# USB mode straight from the interface classes (and the product id for MTP
+	# vs PTP, which share a class) - no adb, so the phone is never prompted.
+	# Switch the mode on the phone itself; the router just follows.
 	mode=$(mode_from_ifaces)
-
-	# adb transports
-	json_add_object adb
-	usbkind=$(adb_transports | awk '$3=="usb"{print $2; exit}')
-	wifikind=$(adb_transports | awk '$3=="wifi"{print $2; exit}')
-	json_add_string usb "${usbkind:-none}"
-	json_add_string wifi "${wifikind:-none}"
-	target=$(adb_target)
-	json_add_boolean ready "$([ -n "$target" ] && echo 1 || echo 0)"
-	json_close_object
-
-	# With adb we can be authoritative about the mode and read the phone
-	if [ -n "$target" ]; then
-		fmode=$(adb_sh "$target" "svc usb getFunctions")
-		case "$fmode" in
-		*mtp*) mode=mtp ;;
-		*ptp*) mode=ptp ;;
-		*ncm*|*rndis*) mode=tether ;;
-		*midi*) mode=midi ;;
-		*uvc*) mode=webcam ;;
-		"") [ "$mode" = file ] && mode=mtp || true ;;
-		esac
-		model=$(adb_sh "$target" "getprop ro.product.model")
-		android=$(adb_sh "$target" "getprop ro.build.version.release")
-		batt=$(adb_sh "$target" "dumpsys battery" | sed -n 's/.*level: \([0-9]*\).*/\1/p' | head -n 1)
-		json_add_string model "$model"
-		json_add_string android "$android"
-		[ -n "$batt" ] && json_add_int battery "$batt"
-		json_add_string functions "$fmode"
-	fi
+	[ "$mode" = file ] && mode=$(file_kind "$PH_PID")
 	json_add_string mode "$mode"
 
 	# What the running image can do with the kmod-backed modes
 	json_add_object supports
 	if have_module cdc_ncm; then json_add_boolean tether 1; else json_add_boolean tether 0; fi
 	if have_module snd_usb_audio; then json_add_boolean midi 1; else json_add_boolean midi 0; fi
-	{ have_module uvcvideo && [ -e /dev/video0 ]; } && video=1
-	json_add_boolean webcam "$video"
+	if have_module uvcvideo; then json_add_boolean webcam 1; else json_add_boolean webcam 0; fi
 	json_close_object
 
 	# Live state of the kmod-backed modes
@@ -381,14 +360,21 @@ tether_iface() {
 }
 
 cmd_tether() {
-	local act="$1" iface
+	local act="$1" iface z n
 	json_init
 	if [ "$act" = down ]; then
+		z=$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\(@zone\[[0-9]*\]\)\.name='wan'$/\1/p" | head -n 1)
 		ifdown phone >/dev/null 2>&1
+		# Drop the phone from the wan zone's network list - never the zone itself.
+		[ -n "$z" ] && uci -q del_list "firewall.$z.network=phone"
 		uci -q delete network.phone
-		uci -q delete firewall."$(uci show firewall 2>/dev/null | sed -n "s/firewall\.\(@zone\[[0-9]*\]\)\.name='wan'/\1/p" | head -n 1)" >/dev/null 2>&1
+		uci -q commit firewall
 		uci -q commit network
+		/etc/init.d/firewall reload >/dev/null 2>&1
 		rm -f "$TETHER_IF_STATE"
+		# The phone had displaced the other uplinks' default route; bring the
+		# remaining wan-zone uplinks back so Wi-Fi/ethernet reclaim the route.
+		[ -n "$z" ] && for n in $(uci -q get "firewall.$z.network"); do ifup "$n" >/dev/null 2>&1; done
 		json_add_boolean ok 1
 		json_dump
 		return
