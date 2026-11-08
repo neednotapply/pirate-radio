@@ -110,12 +110,20 @@ kmod-rt2800-usb
 #     NCM, not classic RNDIS; cdc-ether covers CDC-ECM devices. The phone then
 #     appears as a WAN uplink.
 #   - MIDI: usb-audio provides the ALSA rawmidi port.
-#   - webcam: video-uvc (pulls video-core) gives /dev/video0, which ustreamer
-#     turns into an MJPEG stream the browser shows.
+#   - webcam: video-uvc gives /dev/video0, which ustreamer turns into an MJPEG
+#     stream the browser shows.
+# usb-audio and video-uvc each DEPEND ON (not select) a framework kmod -
+# sound-core and video-core. Those are only pulled in automatically under
+# ALL_KMODS; the ImageBuilder installs them by name, but this source build's
+# `make defconfig` silently drops the leaf driver when its framework kmod is
+# off. So name sound-core and video-core here too; the rest (media-controller,
+# videobuf2, dma-buf, input-core) cascade through their `select`s.
 kmod-usb-net-cdc-ncm
 kmod-usb-net-rndis
 kmod-usb-net-cdc-ether
+kmod-sound-core
 kmod-usb-audio
+kmod-video-core
 kmod-video-uvc
 adb
 ustreamer
