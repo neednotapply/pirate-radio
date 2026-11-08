@@ -2313,6 +2313,7 @@
 	var MC_URL = /(?:https?:\/\/|www\.)[^\s<>"'`]+/gi;
 	var MC_GIPHY_PAGE = /^https?:\/\/(?:www\.)?giphy\.com\/(?:gifs|stickers)\/(?:[^\/?#]*-)?([A-Za-z0-9_]+)\/?(?:[?#].*)?$/i;
 	var MC_GIPHY_EMBED = /^https?:\/\/(?:www\.)?giphy\.com\/embed\/([A-Za-z0-9_]+)\/?(?:[?#].*)?$/i;
+	var MC_GIPHY_MEDIA = /^https?:\/\/(?:media\d*|i)\.giphy\.com\/media\/([A-Za-z0-9_]+)\//i;
 	var MC_IMAGE_FILE = /^https?:\/\/[^\/?#]+\/[^?#]*\.(?:gif|png|jpe?g|webp|avif|bmp)(?:[?#].*)?$/i;
 	// Common media sites embedded like Discord: a player you press play on (so
 	// nothing external loads until you do) or a card. The viewer's browser does
@@ -2328,7 +2329,7 @@
 	}
 	// What a link shows, if it's an image: its picture, a fallback, where it goes
 	function mcMediaOf(url) {
-		var g = MC_GIPHY_PAGE.exec(url) || MC_GIPHY_EMBED.exec(url);
+		var g = MC_GIPHY_PAGE.exec(url) || MC_GIPHY_EMBED.exec(url) || MC_GIPHY_MEDIA.exec(url);
 		if (g) return mcGiphy(g[1]);
 		if (MC_IMAGE_FILE.test(url)) return { src: url, page: url, gif: /\.gif(?:[?#]|$)/i.test(url) };
 		var m;
@@ -2522,7 +2523,8 @@
 
 	/* The composer's emoji + GIF picker, Discord-style. Emoji are plain Unicode
 	   (offline); GIFs come from Giphy's search (a free key, kept in this
-	   browser), sent as meshcore-open's compact "g:ID" so both apps show them. */
+	   browser) and are sent as a direct .gif URL, so any client shows a tappable
+	   GIF and ours and meshcore-open preview it. "g:ID" from others is read. */
 	var MC_EMOJI = [
 		["Smileys", "😀 grin|😃 smile happy|😄 laugh happy|😁 beam grin|😆 laugh|😅 sweat laugh|🤣 rofl|😂 joy tears laugh|🙂 slight smile|🙃 upside down|😉 wink|😊 blush smile|😇 angel halo|🥰 love hearts|😍 heart eyes love|🤩 star struck|😘 kiss|😋 yum tongue|😛 tongue|🤪 zany silly|😎 cool sunglasses|🤓 nerd geek|🥳 party celebrate|😏 smirk|😒 unamused|😔 pensive sad|😞 disappointed|😟 worried|😕 confused|🙁 frown|😣 persevere|😖 confounded|😫 tired|😩 weary|🥺 pleading puppy|😢 cry sad|😭 sob cry|😤 triumph huff|😠 angry|😡 rage mad|🤬 swearing curse|🤯 mind blown|😳 flushed|🥵 hot heat|🥶 cold freezing|😱 scream fear|😨 fearful|😰 anxious|😥 sad|🤔 thinking hmm|🤭 giggle oops|🤫 shush quiet|🤥 lying|😶 no mouth|😐 neutral|😑 expressionless|😬 grimace|🙄 eye roll|😴 sleep zzz|🤤 drool|😪 sleepy|😮 wow surprised|😲 astonished|🥱 yawn bored|🤢 nauseated sick|🤮 vomit sick|🤧 sneeze|😷 mask sick|🤒 thermometer sick|🤕 bandage hurt|🥴 woozy drunk|😵 dizzy|🤠 cowboy|🤡 clown|🤑 money|🥸 disguise|😈 devil evil|👿 imp angry|💀 skull dead|💩 poop"],
 		["Gestures", "👍 thumbs up like yes|👎 thumbs down dislike no|👌 ok perfect|🤌 pinch italian|🤏 small pinch|✌️ peace victory|🤞 crossed fingers luck|🤟 love you|🤘 rock horns|🤙 call me hang loose|👈 left|👉 right|👆 up|👇 down|☝️ point up|✋ raised hand stop|🤚 back hand|🖐️ hand|🖖 vulcan spock|👋 wave hi bye|🤛 fist left|🤜 fist right|👊 fist bump punch|✊ raised fist|👏 clap applause|🙌 raise hands praise|👐 open hands|🤲 palms up|🙏 pray thanks please|✍️ writing|💪 muscle strong|🫵 point you|🫶 heart hands love|🤝 handshake deal"],
@@ -3671,7 +3673,10 @@
 			body.appendChild(el("div", { class: "mc-cpkeyrow" }, inp, save));
 		}
 		function pickGif(id) {
-			var g = "g:" + id, v = input.value;
+			// A plain .gif URL: every client shows a tappable GIF (ours and
+			// meshcore-open still preview it), unlike "g:ID" which only
+			// meshcore-open understands and others show as literal text.
+			var g = "https://media.giphy.com/media/" + id + "/giphy.gif", v = input.value;
 			if (!v.trim()) input.value = "";
 			else if (!/\s$/.test(v)) g = " " + g;
 			insertAt(g);

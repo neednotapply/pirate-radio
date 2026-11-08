@@ -438,8 +438,10 @@ app, as MeshCore's is on a phone, laid out as Discord is:
 - **An emoji and GIF picker** on the composer (the ☺ button), as Discord's:
   an **emoji** tab (searchable, categorised; plain Unicode, so it works
   offline) and a **GIF** tab that searches **Giphy** — a free API key,
-  pasted once and kept in that browser — and drops the pick in as
-  meshcore-open's compact `g:ID`, which both apps show.
+  pasted once and kept in that browser (the search is debounced and its
+  results cached, to stay easy on the key's hourly quota). A pick is sent as
+  a direct `.gif` URL, so every client shows a tappable GIF and this UI and
+  meshcore-open preview it inline; a `g:ID` from meshcore-open is still read.
 - **MCOimg**, MCO Advanced's one-packet images (the meshcore-open fork's
   pixel art: `im3:` for v3, `im:` for v1 and v2, by a text message or as a
   channel's binary data), drawn with MCO Advanced's own decoder, sharp, at
