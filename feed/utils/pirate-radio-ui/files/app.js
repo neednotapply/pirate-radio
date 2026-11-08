@@ -2537,15 +2537,21 @@
 	function mcGiphyKey() { try { return localStorage.getItem("pr.giphyKey") || ""; } catch (e) { return ""; } }
 	function mcSetGiphyKey(k) { try { if (k) localStorage.setItem("pr.giphyKey", k); else localStorage.removeItem("pr.giphyKey"); } catch (e) {} }
 	var MC_DEMO_GIFS = ["8kejjglzkEprO", "3oEjI6SIIHBdRxXI40", "l0HlNaQ6gWfllcjDO", "xT0xeJpnrWC4XWblEk", "26ufdipQqU2lhNA4g", "l46Cy1rHbQ92uuLXa"];
+	// Results are cached per query for the session so re-opening the picker or
+	// repeating a search costs no API call (free Giphy keys allow 100/hour).
+	var mcGifCache = {};
 	function mcGifSearch(q) {
 		if (DEMO) return Promise.resolve(MC_DEMO_GIFS.map(function (id) {
 			return { id: id, thumb: "https://media.giphy.com/media/" + id + "/200w.gif", title: "a demo GIF" };
 		}));
+		var query = (q || "").trim().toLowerCase(), ck = query || "\x00trending";
+		if (mcGifCache[ck]) return mcGifCache[ck];
 		var key = mcGiphyKey();
 		if (!key) return Promise.reject(new Error("no-key"));
-		var base = "https://api.giphy.com/v1/gifs/", path = q ? "search?q=" + encodeURIComponent(q) + "&" : "trending?";
-		return fetch(base + path + "api_key=" + encodeURIComponent(key) + "&limit=24&rating=pg-13&bundle=messaging_non_clips").then(function (r) {
+		var base = "https://api.giphy.com/v1/gifs/", path = query ? "search?q=" + encodeURIComponent(query) + "&" : "trending?";
+		var p = fetch(base + path + "api_key=" + encodeURIComponent(key) + "&limit=24&rating=pg-13&bundle=messaging_non_clips").then(function (r) {
 			if (r.status === 401 || r.status === 403) throw new Error("bad-key");
+			if (r.status === 429) throw new Error("Giphy's hourly limit is reached — try again later");
 			if (!r.ok) throw new Error("Giphy error " + r.status);
 			return r.json();
 		}).then(function (j) {
@@ -2554,6 +2560,9 @@
 				return { id: g.id, thumb: t.url, title: g.title || "GIF" };
 			}).filter(function (g) { return g.id && g.thumb; });
 		});
+		p.catch(function () { delete mcGifCache[ck]; });   // never cache a failure
+		mcGifCache[ck] = p;
+		return p;
 	}
 
 	function renderMessenger() {
@@ -3595,7 +3604,12 @@
 			}
 			tEmoji = el("button", { type: "button", class: "mc-cptab", onclick: function () { setTab("emoji"); } }, "😀 Emoji");
 			tGif = el("button", { type: "button", class: "mc-cptab", onclick: function () { setTab("gif"); } }, "▶ GIF");
-			search.addEventListener("input", renderBody);
+			var gifTimer = null;
+			search.addEventListener("input", function () {
+				if (cpickTab !== "gif") { renderBody(); return; }   // emoji filter is local; GIF search is debounced
+				clearTimeout(gifTimer);
+				gifTimer = setTimeout(renderBody, 500);
+			});
 			wrap.appendChild(el("div", { class: "mc-cptabs" }, tEmoji, tGif));
 			wrap.appendChild(search);
 			wrap.appendChild(body);
