@@ -1832,7 +1832,7 @@ check "portapack: read: no such file" [ "$(pp_read /FIRMWARE/nope.txt | jsonfilt
 # Delete
 check "portapack: delete" pp_ok delete '{"path":"/FIRMWARE/t.txt"}'
 check "portapack: delete: asked for" grep -qx "delete /FIRMWARE/t.txt" "$PP/fake.log"
-check "portapack: delete: gone" [ "$(ppe read '{"path":"/FIRMWARE/t.txt"}')" = "Error: no such file" ]
+check "portapack: delete: gone" [ "$(pp_read /FIRMWARE/t.txt | jsonfilter -e '@.error')" = "Error: no such file" ]
 # Buttons, touch, the keyboard
 check "portapack: button: a key maps to a switch number" pp_ok button '{"key":"up"}'
 check "portapack: button: up is switch 4" grep -qx "button 4" "$PP/fake.log"
