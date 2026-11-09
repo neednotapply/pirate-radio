@@ -42,7 +42,10 @@ define Package/rtl433-soapy/description
   Installed as /usr/bin/rtl_433-soapy.
 endef
 
+# rtl_433 25.02's CMakeLists asks for a pre-3.5 minimum, which CMake 4.x (in the
+# SDK) rejects; this restores the old-policy behaviour.
 CMAKE_OPTIONS += \
+	-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 	-DFORCED_GIT_DIR=$(PKG_BUILD_DIR)/.git \
 	-DENABLE_SOAPYSDR=ON \
 	-DENABLE_OPENSSL=OFF

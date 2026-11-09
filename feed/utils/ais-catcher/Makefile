@@ -45,6 +45,7 @@ endef
 # SOXR/libsamplerate/zlib. Keep RTL-SDR, HackRF and SoapySDR; drop the other
 # radios (no libs for them in this image).
 CMAKE_OPTIONS += \
+	-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 	-DRTLSDR=ON \
 	-DHACKRF=ON \
 	-DSOAPYSDR=ON \
