@@ -16,11 +16,11 @@ PKG_NAME:=readsb-soapy
 PKG_VERSION:=3.16.21
 PKG_RELEASE:=1
 
-PKG_SOURCE_PROTO:=git
-PKG_SOURCE_URL:=https://github.com/wiedehopf/readsb.git
-PKG_SOURCE_VERSION:=v$(PKG_VERSION)
-PKG_MIRROR_HASH:=skip
-# The git export unpacks to readsb-<version>, not readsb-soapy-<version>.
+# Release tarball (like rtl433-soapy); the git proto failed to fetch in CI.
+PKG_SOURCE:=readsb-$(PKG_VERSION).tar.gz
+PKG_SOURCE_URL:=https://codeload.github.com/wiedehopf/readsb/tar.gz/v$(PKG_VERSION)?
+PKG_HASH:=skip
+# The tarball unpacks to readsb-<version>, not readsb-soapy-<version>.
 PKG_BUILD_DIR:=$(BUILD_DIR)/readsb-$(PKG_VERSION)
 
 PKG_MAINTAINER:=pirate-radio
