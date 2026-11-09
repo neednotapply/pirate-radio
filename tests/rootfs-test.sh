@@ -2026,6 +2026,23 @@ check "meshcore: share location on: shown" [ "$(mcs '@.share_location')" = true 
 check "meshcore: share location off" mc_ok set_location '{"enabled":false}'
 check "meshcore: share location off: told" grep -qx 'params 1 5 0 1' "$MC/fake.log"
 check "meshcore: share location off: shown" [ "$(mcs '@.share_location')" = false ]
+# Off, its telemetry stops telling anyone where it is too (MeshCore keeps the
+# two apart): from anyone down to the contacts you allow; no one, or those, as
+# they are; turned on, it's left alone; set along with it, as set
+lastp() { grep '^params ' "$MC/fake.log" | tail -1; }
+check "meshcore: share location, telemetry all for anyone" mc_ok set_params '{"share_location":true,"telemetry_base":2,"telemetry_location":2,"telemetry_environment":2}'
+check "meshcore: share location off: its location telemetry too" mc_ok set_location '{"enabled":false}'
+check "meshcore: share location off: told, location telemetry for the contacts you allow" [ "$(lastp)" = 'params 1 38 0 1' ]
+check "meshcore: share location off: shown, its battery and sensors as they were" [ "$(mc settings | jsonfilter -e '@.telemetry.base' -e '@.telemetry.location' -e '@.telemetry.environment' -e '@.share_location' | tr '\n' ' ')" = "2 1 2 false " ]
+check "meshcore: share location on: its telemetry left as it is" mc_ok set_location '{"enabled":true}'
+check "meshcore: share location on: told" [ "$(lastp)" = 'params 1 38 1 1' ]
+check "meshcore: location telemetry for no one" mc_ok set_params '{"telemetry_location":0}'
+check "meshcore: share location off: no one stays no one" mc_ok set_location '{"enabled":false}'
+check "meshcore: share location off: no one stays no one: told" [ "$(lastp)" = 'params 1 34 0 1' ]
+check "meshcore: params: sharing off and telemetry for anyone, both asked" mc_ok set_params '{"share_location":false,"telemetry_base":1,"telemetry_location":2,"telemetry_environment":0}'
+check "meshcore: params: both asked: told as asked" [ "$(lastp)" = 'params 1 9 0 1' ]
+check "meshcore: params: sharing off: its location telemetry too" mc_ok set_params '{"share_location":false}'
+check "meshcore: params: sharing off: told" [ "$(lastp)" = 'params 1 5 0 1' ]
 check "meshcore: share location: true or false" [ "$(mce set_location '{}')" = "enabled: true or false" ]
 # Its settings: as the radio said them (its self-info, tuning and auto-add), and set
 mc settings > "$MC/settings.json"

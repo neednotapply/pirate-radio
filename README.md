@@ -480,7 +480,10 @@ app, as MeshCore's is on a phone, laid out as Discord is:
   GPS needed for wardriving. **Whether the adverts carry its position** is a
   toggle on this page: off keeps it private (only the radio's name goes out),
   on lets the mesh see where the radio is (a warning shows while it's on, as
-  MeshCore's own app keeps it off). *Match the mesh* sets it to whatever most
+  MeshCore's own app keeps it off). Turning it off also stops its telemetry
+  telling anyone who asks where it is (MeshCore keeps the two apart): only
+  the contacts you allow still can, and a warning shows if its telemetry
+  tells anyone while sharing is off. *Match the mesh* sets it to whatever most
   radios you've heard do — only other people's radios count, since repeaters
   and rooms nearly always carry theirs.
 - **Its settings**, on its own page (the gear at your radio): how it's doing

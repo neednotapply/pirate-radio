@@ -3754,9 +3754,21 @@ static int m_gps(struct ubus_context *c, struct ubus_object *obj, struct ubus_re
 	return op_deferred(c, req, OP_SETVAR, f, 6, on);
 }
 
+/* Its telemetry, once where it is stops going out in its adverts: MeshCore
+ * keeps the two apart, so with its location telemetry for anyone, anyone who
+ * asked was still told where it is. That comes down to the contacts you allow
+ * (each let on its own, in MeshCore's app); no one, or those, stay as they are */
+static uint8_t tel_private(uint8_t telemetry)
+{
+	if ((telemetry >> 2 & 3) != 2)
+		return telemetry;
+	return (uint8_t)((telemetry & ~(3 << 2)) | 1 << 2);
+}
+
 /* Whether the radio's adverts carry where it is (MeshCore's advert location
  * policy, SELF_INFO byte 45). CMD_SET_OTHER_PARAMS is positional, so the other
- * params ride along at their current values; only the policy byte changes. */
+ * params ride along at their current values: only the policy byte changes,
+ * and, turned off, its location telemetry if that was for anyone */
 static int m_set_location(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 			  const char *method, struct blob_attr *msg)
 {
@@ -3772,7 +3784,7 @@ static int m_set_location(struct ubus_context *c, struct ubus_object *obj, struc
 		return reply_error(c, req, "the radio hasn't said what it does yet");
 	f[0] = CMD_SET_OTHER_PARAMS;
 	f[1] = self.manual_add;
-	f[2] = self.telemetry;
+	f[2] = on ? self.telemetry : tel_private(self.telemetry);
 	f[3] = on ? 1 : 0;
 	f[4] = self.multi_acks;
 	return op_deferred(c, req, OP_SETPARAMS, f, 5, on);
@@ -3942,7 +3954,9 @@ static int m_set_position(struct ubus_context *c, struct ubus_object *obj, struc
  * whether it adds contacts it hears by itself, who may ask its telemetry
  * (each of its battery, where it is and its sensors: no one, the contacts
  * you allow, or anyone), extra acks, and whether its adverts carry where
- * it is. What's left out stays as it is */
+ * it is. What's left out stays as it is - but for its location telemetry,
+ * which sharing turned off brings down from anyone (as set_location does),
+ * unless it's set here too */
 static int m_set_params(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 			const char *method, struct blob_attr *msg)
 {
@@ -3979,8 +3993,11 @@ static int m_set_params(struct ubus_context *c, struct ubus_object *obj, struct 
 			return reply_error(c, req, "extra_acks: 0 to 2");
 		f[4] = (uint8_t)v;
 	}
-	if ((b = arg_bool(A_SHARELOC)) >= 0)
+	if ((b = arg_bool(A_SHARELOC)) >= 0) {
 		f[3] = b;
+		if (!b && !tb[A_TELLOC])
+			f[2] = tel_private(f[2]);
+	}
 	return op_deferred(c, req, OP_SETPARAMS, f, sizeof(f), 0);
 }
 

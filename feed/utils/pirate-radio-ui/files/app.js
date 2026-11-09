@@ -187,7 +187,7 @@
 		mc.read["ca1a1a1a1a1a1"] = readA;
 		mc.add = add;
 		// Its settings (as the settings page sets them), repeaters logged in to, packets heard
-		mc.cfg = { freq: 910525, bw: 62500, sf: 7, cr: 5, tx: 22, tel: 18, autoAdd: true, aa: 0x1e, hops: 0, acks: 0, rx: 0, af: 1000,
+		mc.cfg = { freq: 910525, bw: 62500, sf: 7, cr: 5, tx: 22, tel: 26, autoAdd: true, aa: 0x1e, hops: 0, acks: 0, rx: 0, af: 1000,
 			lat: null, lon: null, since: Date.now() };
 		mc.logins = {};
 		mc.pkts = [];
@@ -222,6 +222,8 @@
 	}
 	// After a moment, as an answer over the mesh comes
 	function demoLater(ms, v) { return new Promise(function (res) { setTimeout(function () { res(v); }, ms); }); }
+	// Sharing turned off: its location telemetry, if for anyone, down to the contacts you allow (as the router's)
+	function demoTelPrivate(t) { return (t >> 2 & 3) === 2 ? t & ~12 | 4 : t; }
 	function demoMcSettings() {
 		var c = DEMO_MC.cfg;
 		return { name: DEMO_MC.name, key: "e7f3a91c0d5b2846" + "aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55aa55", protocol: 14, cli: true, stats: true,
@@ -933,7 +935,11 @@
 		"pirate.meshcore:advert": { ok: true },
 		"pirate.meshcore:set_name": function (p) { DEMO_MC.name = p.name; return { ok: true }; },
 		"pirate.meshcore:gps": function (p) { DEMO_MC.gps = !!p.enabled; return { ok: true }; },
-		"pirate.meshcore:set_location": function (p) { DEMO_MC.share = !!p.enabled; return { ok: true }; },
+		"pirate.meshcore:set_location": function (p) {
+			DEMO_MC.share = !!p.enabled;
+			if (!p.enabled) DEMO_MC.cfg.tel = demoTelPrivate(DEMO_MC.cfg.tel);
+			return { ok: true };
+		},
 		"pirate.meshcore:settings": function () { return demoMcSettings(); },
 		"pirate.meshcore:set_radio": function (p) {
 			var c = DEMO_MC.cfg;
@@ -963,6 +969,7 @@
 			["telemetry_base", "telemetry_location", "telemetry_environment"].forEach(function (k, i) {
 				if (p[k] != null) c.tel = c.tel & ~(3 << 2 * i) | p[k] << 2 * i;
 			});
+			if (p.share_location === false && p.telemetry_location == null) c.tel = demoTelPrivate(c.tel);
 			return { ok: true };
 		},
 		"pirate.meshcore:set_autoadd": function (p) {
@@ -3335,6 +3342,8 @@
 			body.appendChild(el("div", { class: "mc-setstatus" }, radioStatus));
 			if (s.share_location)
 				body.appendChild(alertEl("warn", "This radio shares its location in its adverts: everyone on the mesh sees where it is. MeshCore's app turns that off."));
+			else if (c && c.telemetry && c.telemetry.location === 2)
+				body.appendChild(alertEl("warn", "Its adverts leave out where this radio is, but anyone who asks for its telemetry is told. \"Who may ask for its telemetry\", below, keeps it to the contacts you allow."));
 			if (cfgErr === "old")
 				body.appendChild(alertEl("warn", "The router's MeshCore service is older than this page: update the router's firmware for the radio's settings, its command line and the packet log."));
 			else if (cfgErr)
@@ -3397,7 +3406,10 @@
 			if (lstat && lstat.most !== s.share_location)
 				locBar.appendChild(btn("Match the mesh", { primary: true, onclick: function () { shareLoc(lstat.most); } }));
 			body.appendChild(locBar);
-			body.appendChild(descr(s.share_location ? "Your adverts carry where your radio is - everyone on the mesh sees it. MeshCore's own app keeps this off." : "Your adverts carry only your radio's name, not where it is. Turn it on to let the mesh see where you are."));
+			var telAll = c && c.telemetry && c.telemetry.location === 2;
+			body.appendChild(descr(s.share_location ? "Your adverts carry where your radio is - everyone on the mesh sees it. MeshCore's own app keeps this off." +
+				(telAll ? " Stop, and its telemetry stops telling anyone who asks too: only the contacts you allow." : "") :
+				"Your adverts carry only your radio's name, not where it is. Turn it on to let the mesh see where you are."));
 			if (lstat) body.appendChild(el("p", { class: "descr muted", text: meshLocSentence(lstat, s.share_location) }));
 			if (g.available)
 				body.appendChild(el("div", { class: "toolbar" },
@@ -3641,7 +3653,10 @@
 		}
 
 		function shareLoc(on) {
-			act(call("pirate.meshcore", "set_location", { enabled: on }), on ? "sharing location: send an advert so others see it" : "location now private: send an advert to update others");
+			// Off, its location telemetry comes down from anyone too (the router does that): said so
+			var tel = !on && cfg && cfg.telemetry && cfg.telemetry.location === 2;
+			act(call("pirate.meshcore", "set_location", { enabled: on }), on ? "sharing location: send an advert so others see it" :
+				tel ? "location now private, and its telemetry tells only the contacts you allow: send an advert to update others" : "location now private: send an advert to update others");
 		}
 		// What most radios we've heard do with their location, so ours can match
 		// the mesh. Only chat nodes (people) count - repeaters and rooms nearly
