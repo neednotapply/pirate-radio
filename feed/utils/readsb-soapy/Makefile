@@ -27,8 +27,9 @@ PKG_MAINTAINER:=pirate-radio
 PKG_LICENSE:=GPL-3.0-or-later
 PKG_LICENSE_FILES:=LICENSE
 
-# argp-standalone on musl (readsb uses argp), plus the SoapySDR headers.
-PKG_BUILD_DEPENDS:=!USE_GLIBC:argp-standalone librtlsdr soapysdr
+# readsb bundles its own argp.c, so no argp-standalone is needed. SoapySDR
+# headers for the backend.
+PKG_BUILD_DEPENDS:=librtlsdr soapysdr
 PKG_BUILD_PARALLEL:=1
 
 include $(INCLUDE_DIR)/package.mk
@@ -48,22 +49,21 @@ define Package/readsb-soapy/description
   aircraft.json. Installed as /usr/bin/readsb-soapy.
 endef
 
-# readsb is a plain GNU Makefile. Build only readsb (not the ncurses viewadsb,
-# via DISABLE_INTERACTIVE) with the RTL-SDR and SoapySDR backends. OPTIMIZE is
-# cleared so it does not add host -march flags over our target CFLAGS; -largp
-# links argp-standalone on musl.
+# readsb is a plain GNU Makefile that adds its -D version macros with CFLAGS +=,
+# so passing CFLAGS= on the make line would clobber them (dropping
+# READSB_SHORT_VERSION and failing to compile). Inject the cross flags through
+# CC instead; readsb's own CFLAGS then survive. READSB_SHORT_VERSION comes from
+# a `version` file, which the tarball lacks, so write one. Build only readsb
+# (not the ncurses viewadsb, via DISABLE_INTERACTIVE).
 define Build/Prepare
 	$(call Build/Prepare/Default)
-	# The exported tree has no .git; give the Makefile a version to print.
 	echo "$(PKG_VERSION)" > $(PKG_BUILD_DIR)/version
 endef
 
 define Build/Compile
 	+$(MAKE) $(PKG_JOBS) -C $(PKG_BUILD_DIR) \
-		CC="$(TARGET_CC)" \
+		CC="$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
 		PKG_CONFIG="$(PKG_CONFIG)" \
-		CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" \
-		LDFLAGS="$(TARGET_LDFLAGS) $(if $(CONFIG_USE_GLIBC),,-largp)" \
 		OPTIMIZE="" \
 		RTLSDR=yes \
 		SOAPYSDR=yes \
