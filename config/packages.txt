@@ -61,6 +61,14 @@ pirate-flipper
 # plugged in.
 pirate-meshcore
 
+# A HackRF with a PortaPack on Mayhem firmware, in its device (console) mode,
+# on the USB port: the Pirate Radio UI's PortaPack tab shows its screen,
+# buttons, files, details and a firmware updater, as hackrf.app (MayhemHub)
+# does on a computer (pirate-portapack speaks Mayhem's serial shell). It can
+# also switch the PortaPack into HackRF mode for the SDR jobs. Idle until one
+# is plugged in; its serial port is CDC-ACM, above.
+pirate-portapack
+
 # WireGuard, to tunnel back home over an untrusted uplink. The kernel module
 # must be built into the full image (its kernel is its own). Configure the
 # tunnel over SSH with uci/wg; the Pirate Radio UI has no WireGuard page yet.

@@ -43,6 +43,7 @@ jobs:
           shellcheck -s sh -e SC1091,SC3043 feed/utils/pirate-radio-ui/files/pirate-phone-dl
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-flipper/files/pirate-flipper.init
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-meshcore/files/pirate-meshcore.init
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-portapack/files/pirate-portapack.init
           cd feed/net/dreampi/files
           shellcheck -s sh -e SC1091,SC3043,SC2034,SC2154 call.sh dcnow.sh nat.sh lib.sh dreampi.init dreampi.hotplug dreampi.defaults
           cd "$GITHUB_WORKSPACE"

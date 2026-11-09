@@ -937,6 +937,33 @@ a { color: var(--link); }
 .fz-back { grid-column: 4; grid-row: 3; }
 .fz-acts { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
+/* PortaPack: its screen (portrait, shown 2x), its buttons and dial */
+.pp-wrap { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 22px; margin-bottom: 12px; }
+.pp-lcd { background: var(--inset); border: 1px solid var(--line-2); border-radius: var(--r); padding: 10px; max-width: 100%; }
+.pp-screen {
+	display: block; width: 240px; max-width: 100%; height: auto;
+	image-rendering: pixelated; image-rendering: crisp-edges; background: #101830; cursor: crosshair; outline: none;
+}
+.pp-screen:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.pp-controls { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.pp-pad { display: grid; grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(3, 52px); gap: 6px; }
+.pp-dial { display: flex; gap: 12px; }
+.pp-key {
+	appearance: none; font: inherit; font-size: 15px; font-weight: 600; color: var(--hi);
+	background: var(--panel-2); border: 1px solid var(--line-2); border-radius: var(--r);
+	cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none;
+}
+.pp-key:hover { border-color: var(--line-3); background: #24282c; }
+.pp-key:active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.pp-up { grid-column: 2; grid-row: 1; }
+.pp-left { grid-column: 1; grid-row: 2; }
+.pp-select { grid-column: 2; grid-row: 2; font-size: 20px; }
+.pp-right { grid-column: 3; grid-row: 2; }
+.pp-down { grid-column: 2; grid-row: 3; }
+.pp-round { width: 52px; height: 52px; border-radius: 999px; font-size: 20px; }
+.pp-bar { height: 8px; border-radius: 999px; background: var(--line); overflow: hidden; margin: 2px 0 8px; }
+.pp-bar > span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+
 /* ---- a phone: everything closer in, the Messenger one column ---- */
 @media (max-width: 860px) {
 	.topbar { padding: 6px 12px; }
@@ -970,6 +997,7 @@ a { color: var(--link); }
 	.tile { padding: 12px; }
 	.tile .v { font-size: 22px; }
 	.fz-pad { grid-template-columns: repeat(4, 48px); grid-template-rows: repeat(3, 48px); margin: 0 auto; }
+	.pp-pad { grid-template-columns: repeat(3, 48px); grid-template-rows: repeat(3, 48px); margin: 0 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
 	.side, .menu-open .side { transition: none; }

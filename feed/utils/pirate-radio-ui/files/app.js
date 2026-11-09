@@ -557,6 +557,53 @@
 		return { list: list, dir: dir, name: name, i: list ? list.map(function (f) { return f.name; }).indexOf(name) : -1 };
 	}
 
+	/* The PortaPack page's demo: a menu on its screen, and a few files */
+	var DEMO_PP = { seq: 1, item: 0 };
+	var DEMO_PP_MENU = ["Receive", "Transmit", "Capture", "Replay", "Scanner", "Utilities", "Debug", "About"];
+	var DEMO_PP_FILES = {
+		"/": [{ name: "FIRMWARE", dir: true }, { name: "APPS", dir: true }, { name: "SETTINGS", dir: true },
+			{ name: "SUBGHZ", dir: true }, { name: "notes.txt", size: 23 }],
+		"/FIRMWARE": [],
+		"/APPS": [{ name: "analogtv.ppma", size: 24576 }, { name: "font_viewer.ppma", size: 8192 }],
+		"/SETTINGS": [{ name: "receiver.ini", size: 160 }],
+		"/SUBGHZ": [{ name: "garage.c16", size: 4096 }]
+	};
+	// The screen as the daemon scales it: 120x160, a byte a pixel (value+32,
+	// MayhemHub's 2-bit-a-channel colour)
+	function demoPortapackFrame() {
+		var c = document.createElement("canvas"), g, px, i, x, y, top, out;
+		c.width = 120; c.height = 160;
+		g = c.getContext("2d");
+		g.fillStyle = "#101830"; g.fillRect(0, 0, 120, 160);
+		g.fillStyle = "#3030c0"; g.fillRect(0, 0, 120, 16);
+		g.fillStyle = "#ffffff"; g.font = "bold 9px monospace"; g.textBaseline = "top";
+		g.fillText("PortaPack", 4, 4);
+		top = Math.max(0, Math.min(DEMO_PP.item - 2, DEMO_PP_MENU.length - 7));
+		for (i = 0; i < 7 && top + i < DEMO_PP_MENU.length; i++) {
+			var n = top + i;
+			if (n === DEMO_PP.item) { g.fillStyle = "#c0c000"; g.fillRect(2, 20 + i * 18, 116, 16); g.fillStyle = "#000000"; }
+			else g.fillStyle = "#c0c0c0";
+			g.font = "11px monospace";
+			g.fillText(DEMO_PP_MENU[n], 8, 22 + i * 18);
+		}
+		px = g.getImageData(0, 0, 120, 160).data;
+		out = new Uint8Array(120 * 160);
+		for (y = 0; y < 160; y++)
+			for (x = 0; x < 120; x++) {
+				i = (y * 120 + x) * 4;
+				var v = ((px[i] >> 6) << 4) | ((px[i + 1] >> 6) << 2) | (px[i + 2] >> 6);
+				out[y * 120 + x] = v + 32;
+			}
+		var s = "", j;
+		for (j = 0; j < out.length; j++) s += String.fromCharCode(out[j]);
+		return btoa(s);
+	}
+	function demoPpEntry(path) {
+		var dir = path.replace(/\/[^/]*$/, "") || "/", name = path.replace(/^.*\//, "");
+		var list = DEMO_PP_FILES[dir];
+		return { list: list, dir: dir, name: name, i: list ? list.map(function (f) { return f.name; }).indexOf(name) : -1 };
+	}
+
 	var MOCK = {
 		"pirate.flipper:status": { state: "ready", device: "/dev/ttyACM0", name: "Pirate", model: "Flipper Zero",
 			firmware: "1.3.4", branch: "release", build_date: "04-11-2026", commit: "a1b2c3d4", battery: 87,
@@ -624,6 +671,61 @@
 		"pirate.flipper:alert": { ok: true },
 		"pirate.flipper:time": { ok: true },
 		"pirate.flipper:reboot": { ok: true },
+		"pirate.portapack:status": { state: "ready", device: "/dev/ttyACM0", model: "HackRF One",
+			devtype: "PORTAPACK", firmware: "v2.4.0", board: "HackRF R9", screen_w: 240, screen_h: 320 },
+		"pirate.portapack:info": {
+			info: { Kernel: "2.6.x", Mayhem_Version: "v2.4.0", HackRF_Board_Rev: "HackRF R9",
+				Device: "HackRF One", Flash_Allowed: "1MB", Reference_Source: "internal",
+				Reference_Freq: "20MHz", Build_time: "Mar 24 2026 - 09:54:49" }
+		},
+		"pirate.portapack:screen": function (p) {
+			if (p.seq === DEMO_PP.seq) return { state: "ready", seq: DEMO_PP.seq };
+			return { state: "ready", seq: DEMO_PP.seq, width: 120, height: 160, frame: demoPortapackFrame() };
+		},
+		"pirate.portapack:button": function (p) {
+			if (p.key === "up" || p.key === "dial_left") DEMO_PP.item = (DEMO_PP.item + DEMO_PP_MENU.length - 1) % DEMO_PP_MENU.length;
+			if (p.key === "down" || p.key === "dial_right") DEMO_PP.item = (DEMO_PP.item + 1) % DEMO_PP_MENU.length;
+			DEMO_PP.seq++;
+			return { ok: true };
+		},
+		"pirate.portapack:touch": { ok: true },
+		"pirate.portapack:keyboard": { ok: true },
+		"pirate.portapack:list": function (p) {
+			var list = DEMO_PP_FILES[p.path];
+			if (!list) return { error: "no such file or folder" };
+			return { path: p.path, files: list.map(function (f) { return { name: f.name, dir: !!f.dir }; }) };
+		},
+		"pirate.portapack:read": function (p) {
+			var e = demoPpEntry(p.path), f = e.i >= 0 ? e.list[e.i] : null, text;
+			if (!f || f.dir) return { error: "no such file or folder" };
+			text = "Pirate Radio demo: " + p.path + "\n";
+			if (p.offset == null) return { ready: true, size: text.length };
+			return { size: text.length, offset: 0, data: btoa(text), more: false };
+		},
+		"pirate.portapack:write": function (p) {
+			var e = demoPpEntry(p.path), n = Math.floor((p.data || "").length * 3 / 4);
+			if (!p.more && e.list && e.i < 0) e.list.push({ name: e.name, size: (p.offset || 0) + n });
+			return p.more ? { ok: true, received: (p.offset || 0) + n } : { ok: true, size: (p.offset || 0) + n };
+		},
+		"pirate.portapack:mkdir": function (p) {
+			var e = demoPpEntry(p.path);
+			if (!e.list) return { error: "no such file or folder" };
+			if (e.i >= 0) return { error: "directory already exists" };
+			e.list.push({ name: e.name, dir: true });
+			DEMO_PP_FILES[p.path] = [];
+			return { ok: true };
+		},
+		"pirate.portapack:delete": function (p) {
+			var e = demoPpEntry(p.path);
+			if (e.i < 0) return { error: "no such file or folder" };
+			if (e.list[e.i].dir && (DEMO_PP_FILES[p.path] || []).length) return { error: "the folder isn't empty" };
+			e.list.splice(e.i, 1);
+			delete DEMO_PP_FILES[p.path];
+			return { ok: true };
+		},
+		"pirate.portapack:reboot": { ok: true },
+		"pirate.portapack:hackrf": { ok: true },
+		"pirate.portapack:flash": { ok: true },
 		"pirate.usb:status": demoUsb,
 		"pirate.usb:list": function (p) {
 			var files = p.name === "KINGSTON" && !DEMO_USB.ejected ? DEMO_USB_FILES : p.name === "microSD" && DEMO_USB.card ? DEMO_CARD_FILES : null;
@@ -6516,6 +6618,499 @@
 		screenLoop();
 	}
 
+	/* ---------- PortaPack (a HackRF/PortaPack on Mayhem firmware; pirate-portapack) ---------- */
+
+	var PP_TIMER = null, PP_RUN = 0;
+	// Arrow keys move the selection; Enter selects; Backspace/Esc go back
+	var PP_KEYBOARD = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+		Enter: "select", " ": "select", Backspace: "left", Escape: "left" };
+	// What device= to ask hackrf.app for, from Mayhem's device type
+	function ppApiDevice(devtype, model) {
+		var d = (devtype || "").toUpperCase(), m = (model || "").toLowerCase();
+		if (d === "HPRO" || m.indexOf("hackrf pro") >= 0) return "hpro";
+		if (d === "PORTARF" || m.indexOf("portarf") >= 0) return "portarf";
+		return "hackrf";
+	}
+
+	function renderPortapack() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("PortaPack", "a HackRF/PortaPack on Mayhem firmware: its screen, buttons, files and firmware"));
+		var run = ++PP_RUN;
+		function alive() { return run === PP_RUN && current === "portapack"; }
+		function failed(e) {
+			if (String(e.message || e) === "unauthorized") { onError(e); return true; }
+			return false;
+		}
+		function say(line, text, kind) {
+			line.className = "status" + (kind === "err" ? " err" : kind === "ok" ? " ok-text" : "");
+			line.textContent = text;
+		}
+
+		/* The PortaPack itself */
+		var devPanel = panel("PortaPack");
+		var devWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		var actStatus = el("span", { class: "status" });
+		var devActs = el("div", { class: "toolbar", hidden: "" },
+			btn("Switch to HackRF mode", { onclick: toHackrf }),
+			btn("All details", { onclick: details }),
+			btn("Reboot", { onclick: function () { reboot("os"); } }),
+			btn("Reboot to DFU", { onclick: function () { reboot("dfu"); } }),
+			actStatus);
+		var detWrap = el("div", { hidden: "" });
+		devPanel.appendChild(devWrap); devPanel.appendChild(devActs); devPanel.appendChild(detWrap);
+
+		/* Its screen and buttons */
+		var scrPanel = panel("Screen");
+		scrPanel.style.marginTop = "14px";
+		scrPanel.hidden = true;
+		var canvas = el("canvas", { class: "pp-screen", width: "120", height: "160", tabindex: "0",
+			"aria-label": "The PortaPack's screen. Click it to tap; with it selected, the arrow keys, Enter and Backspace work the buttons." });
+		var g = canvas.getContext("2d");
+		var img = g.createImageData(120, 160);
+		var scrStatus = el("span", { class: "status", text: "waiting for the screen…" });
+		var pad = el("div", { class: "pp-pad" });
+		var dial = el("div", { class: "pp-dial" });
+		scrPanel.appendChild(el("div", { class: "pp-wrap" }, el("div", { class: "pp-lcd" }, canvas),
+			el("div", { class: "pp-controls" }, pad, dial)));
+		scrPanel.appendChild(el("div", { class: "toolbar" }, btn("Save a screenshot", { onclick: screenshot }), scrStatus));
+		scrPanel.appendChild(el("p", { class: "descr", text:
+			"Click the screen to tap where you click. Or focus it and use the arrow keys, Enter (select) and Backspace (back). " +
+			"The two round buttons are the rotary dial." }));
+
+		/* Its files */
+		var fPanel = panel("Files");
+		fPanel.style.marginTop = "14px";
+		fPanel.hidden = true;
+		var fStatus = el("span", { class: "status" });
+		var upInput = el("input", { type: "file", multiple: "", hidden: "" });
+		var upBtn = btn("Upload files", { primary: true, onclick: function () { upInput.click(); } });
+		var mkBtn = btn("New folder", { onclick: newFolder });
+		var fCrumbs = el("div", { class: "crumbs" });
+		var fWrap = el("div");
+		upInput.addEventListener("change", function () {
+			var files = Array.prototype.slice.call(upInput.files || []);
+			upInput.value = "";
+			if (files.length) uploadAll(files);
+		});
+		fPanel.appendChild(el("div", { class: "toolbar" }, upBtn, mkBtn,
+			btn("Refresh", { onclick: function () { browse(path); } }), fStatus, upInput));
+		fPanel.appendChild(fCrumbs);
+		fPanel.appendChild(fWrap);
+		fPanel.appendChild(el("p", { class: "descr", text:
+			"/ is the PortaPack's SD card. Names are plain ASCII and short (the shell takes 48-character paths); downloads are 4 MB at most." }));
+
+		/* Firmware */
+		var fwPanel = panel("Firmware");
+		fwPanel.style.marginTop = "14px";
+		fwPanel.hidden = true;
+		var fwStatus = el("span", { class: "status" });
+		var fwInput = el("input", { type: "file", accept: ".bin,.tar", hidden: "" });
+		var fwBar = el("div", { class: "pp-bar", hidden: "" }, el("span"));
+		fwInput.addEventListener("change", function () {
+			var f = (fwInput.files || [])[0];
+			fwInput.value = "";
+			if (f) flashLocal(f);
+		});
+		fwPanel.appendChild(el("div", { class: "toolbar" },
+			btn("Update to latest stable", { primary: true, onclick: function () { flashLatest("stable"); } }),
+			btn("Update to latest nightly", { onclick: function () { flashLatest("nightly"); } }),
+			btn("Flash a firmware file", { onclick: function () { fwInput.click(); } }),
+			fwInput));
+		fwPanel.appendChild(fwBar);
+		fwPanel.appendChild(fwStatus);
+		fwPanel.appendChild(el("p", { class: "descr", text:
+			"The latest builds come from hackrf.app (the Mayhem project's own). Or flash a .bin or .ppfw.tar you pick. " +
+			"The PortaPack reboots after flashing — leave it plugged in and don't close this tab." }));
+
+		VIEW.appendChild(devPanel); VIEW.appendChild(scrPanel); VIEW.appendChild(fPanel); VIEW.appendChild(fwPanel);
+
+		var ready = false, shown = "", path = "/", listing = [], busy = false;
+		var scrW = 240, scrH = 320, devtype = "", model = "";
+
+		/* ---- status ---- */
+
+		function showDevice(s) {
+			var key = JSON.stringify(s);
+			if (key === shown) return;
+			shown = key;
+			var was = ready;
+			ready = s.state === "ready";
+			scrPanel.hidden = fPanel.hidden = fwPanel.hidden = devActs.hidden = !ready;
+			if (!ready) { detWrap.hidden = true; scrSeq = 0; }
+			if (s.screen_w) { scrW = s.screen_w; scrH = s.screen_h; }
+			devtype = s.devtype || ""; model = s.model || "";
+			clear(devWrap);
+			if (s.state === "missing") {
+				devWrap.appendChild(alertEl("warn", s.error));
+			} else if (s.state === "absent") {
+				devWrap.appendChild(el("div", { class: "placeholder" },
+					el("b", { text: "No PortaPack in device mode" }),
+					el("div", { class: "muted", text: "Plug a HackRF with a PortaPack running Mayhem firmware into the " +
+						"router's USB port (through a hub if a drive is plugged in too), in its device (console) mode — not HackRF " +
+						"mode. It shows up here within a few seconds. A PortaPack already in HackRF mode is a radio on the " +
+						"Receivers page instead." })));
+				if (s.error) devWrap.appendChild(alertEl("warn", s.error));
+			} else if (s.state === "connecting") {
+				devWrap.appendChild(el("div", { class: "muted", text: "Reaching the PortaPack's shell on " + (devLabel(s.device) || "the USB port") + "…" }));
+				if (s.error) devWrap.appendChild(alertEl("warn", s.error));
+			} else {
+				var head = el("div", { class: "drive-head" },
+					el("strong", { text: s.model || "PortaPack" }),
+					s.firmware ? badge(s.firmware, "sec-ok") : null,
+					s.board ? el("span", { class: "muted", text: s.board }) : null);
+				devWrap.appendChild(head);
+				var dl = el("dl", { class: "kv" });
+				[["Port", devLabel(s.device)], ["Device", s.model], ["Board", s.board],
+					["Screen", s.screen_w ? s.screen_w + "×" + s.screen_h : ""]].forEach(function (p) {
+					if (!p[1]) return;
+					dl.appendChild(el("dt", { text: p[0] }));
+					dl.appendChild(el("dd", { text: p[1] }));
+				});
+				devWrap.appendChild(dl);
+			}
+			if (ready && !was) browse(path);
+		}
+		function status() {
+			return call("pirate.portapack", "status").then(showDevice).catch(function (e) {
+				if (failed(e)) return;
+				var msg = String(e.message || e);
+				if (msg === "ubus status 4")
+					msg = "The PortaPack service (pirate-portapack) isn't running on this router: its firmware may predate the PortaPack page.";
+				showDevice({ state: "missing", error: msg });
+			});
+		}
+
+		/* ---- actions ---- */
+
+		function act(method, params, doing, done) {
+			say(actStatus, doing);
+			return call("pirate.portapack", method, params).then(function (r) {
+				if (r.error) return say(actStatus, r.error, "err");
+				say(actStatus, done, "ok");
+			}).catch(function (e) { if (!failed(e)) say(actStatus, String(e.message || e), "err"); });
+		}
+		function reboot(mode) {
+			if (!window.confirm(mode === "dfu" ? "Reboot the PortaPack into DFU (recovery) mode?" : "Reboot the PortaPack?")) return;
+			act("reboot", { mode: mode }, "rebooting…", "rebooting: back in a few seconds");
+		}
+		function toHackrf() {
+			if (!window.confirm("Switch the PortaPack into HackRF mode? It leaves this page and becomes a radio the SDR jobs (survey, SoapySDR…) can use. Put it back into device mode on the PortaPack itself, or power-cycle it.")) return;
+			act("hackrf", {}, "switching…", "switched to HackRF mode: see the Receivers page");
+		}
+		function details() {
+			if (!detWrap.hidden) { detWrap.hidden = true; return; }
+			call("pirate.portapack", "info").then(function (r) {
+				if (r.error) return say(actStatus, r.error, "err");
+				var rows = [], t = r.info || {};
+				Object.keys(t).forEach(function (k) { rows.push([k.replace(/_/g, " "), String(t[k])]); });
+				clear(detWrap).appendChild(tableEl(["", ""], rows));
+				detWrap.hidden = false;
+			}).catch(function (e) { if (!failed(e)) say(actStatus, String(e.message || e), "err"); });
+		}
+
+		/* ---- the screen ---- */
+
+		var scrSeq = 0;
+		function draw(b64, w, h) {
+			var bin = atob(b64), d, i, v;
+			if (canvas.width !== w || canvas.height !== h) {
+				canvas.width = w; canvas.height = h;
+				img = g.createImageData(w, h);
+			}
+			d = img.data;
+			for (i = 0; i < w * h && i < bin.length; i++) {
+				v = bin.charCodeAt(i) - 32;
+				d[i * 4] = ((v >> 4) & 3) << 6;
+				d[i * 4 + 1] = ((v >> 2) & 3) << 6;
+				d[i * 4 + 2] = (v & 3) << 6;
+				d[i * 4 + 3] = 255;
+			}
+			g.putImageData(img, 0, 0);
+		}
+		function screenLoop() {
+			if (!alive()) return;
+			if (!ready || document.hidden) { setTimeout(screenLoop, 1000); return; }
+			call("pirate.portapack", "screen", { seq: scrSeq }).then(function (r) {
+				if (!alive()) return;
+				if (r.frame) {
+					draw(r.frame, r.width, r.height);
+					if (!scrSeq) say(scrStatus, "live", "ok");
+					scrSeq = r.seq;
+				}
+				setTimeout(screenLoop, r.state !== "ready" ? 1500 : r.frame ? 50 : 200);
+			}, function (e) {
+				if (failed(e)) return;
+				say(scrStatus, String(e.message || e), "err");
+				setTimeout(screenLoop, 2000);
+			});
+		}
+		function screenshot() {
+			var s = el("canvas"), k = 3, t = new Date();
+			s.width = canvas.width * k; s.height = canvas.height * k;
+			var sg = s.getContext("2d");
+			sg.imageSmoothingEnabled = false;
+			sg.drawImage(canvas, 0, 0, s.width, s.height);
+			function two(n) { return (n < 10 ? "0" : "") + n; }
+			var name = "portapack-" + t.getFullYear() + two(t.getMonth() + 1) + two(t.getDate()) + "-" +
+				two(t.getHours()) + two(t.getMinutes()) + two(t.getSeconds()) + ".png";
+			s.toBlob(function (b) { if (b) saveBlob(b, name); });
+		}
+
+		/* ---- buttons and touch ---- */
+
+		var queue = Promise.resolve();
+		function press(key) {
+			queue = queue.then(function () {
+				return call("pirate.portapack", "button", { key: key });
+			}).then(function (r) {
+				if (r && r.error) say(scrStatus, r.error, "err");
+			}, function (e) { if (!failed(e)) say(scrStatus, String(e.message || e), "err"); });
+		}
+		[["up", "▲", "Up"], ["left", "◀", "Left"], ["select", "●", "Select"], ["right", "▶", "Right"],
+			["down", "▼", "Down"]].forEach(function (k) {
+			var b = el("button", { type: "button", class: "pp-key pp-" + k[0], "aria-label": k[2], title: k[2], text: k[1],
+				onclick: function () { press(k[0]); } });
+			pad.appendChild(b);
+		});
+		[["dial_left", "⟲", "Dial left"], ["dial_right", "⟳", "Dial right"]].forEach(function (k) {
+			dial.appendChild(el("button", { type: "button", class: "pp-key pp-round", "aria-label": k[2], title: k[2], text: k[1],
+				onclick: function () { press(k[0]); } }));
+		});
+		canvas.addEventListener("keydown", function (ev) {
+			var k = PP_KEYBOARD[ev.key];
+			if (k) { ev.preventDefault(); if (!ev.repeat) press(k); return; }
+			// a printable character: type it on the PortaPack's keyboard
+			if (ev.key.length === 1 && ev.key.charCodeAt(0) >= 0x20 && ev.key.charCodeAt(0) <= 0x7e) {
+				ev.preventDefault();
+				queue = queue.then(function () { return call("pirate.portapack", "keyboard", { text: ev.key }); })
+					.catch(function () {});
+			}
+		});
+		canvas.addEventListener("pointerdown", function (ev) {
+			canvas.focus();
+			var b = canvas.getBoundingClientRect();
+			if (!b.width || !b.height) return;
+			var x = Math.round((ev.clientX - b.left) / b.width * scrW);
+			var y = Math.round((ev.clientY - b.top) / b.height * scrH);
+			queue = queue.then(function () { return call("pirate.portapack", "touch", { x: x, y: y }); })
+				.then(function (r) { if (r && r.error) say(scrStatus, r.error, "err"); }, function () {});
+		});
+
+		/* ---- files ---- */
+
+		function join(dir, name) { return (dir === "/" ? "" : dir) + "/" + name; }
+		function parentOf(p) { return p.replace(/\/[^/]*$/, "") || "/"; }
+		function badName(n) {
+			if (!n || n === "." || n === "..") return "give a name";
+			if (!/^[\x20-\x7e]+$/.test(n)) return "the PortaPack takes plain ASCII names only";
+			if (/[\/\\:*?"<>|]/.test(n)) return "no / \\ : * ? \" < > | in names";
+			return null;
+		}
+		function crumbs(p) {
+			clear(fCrumbs);
+			var link = function (label, to) {
+				return el("button", { type: "button", class: "linkbtn", text: label, onclick: function () { browse(to); } });
+			};
+			var parts = p === "/" ? [] : p.slice(1).split("/");
+			fCrumbs.appendChild(parts.length ? link("SD card", "/") : el("span", { text: "SD card" }));
+			parts.forEach(function (seg, i) {
+				fCrumbs.appendChild(el("span", { class: "muted", text: " / " }));
+				var to = "/" + parts.slice(0, i + 1).join("/");
+				fCrumbs.appendChild(i === parts.length - 1 ? el("span", { text: seg }) : link(seg, to));
+			});
+		}
+		function browse(p) {
+			path = p;
+			crumbs(p);
+			clear(fWrap).appendChild(el("div", { class: "muted", text: "Loading…" }));
+			call("pirate.portapack", "list", { path: p }).then(function (r) {
+				if (!alive() || path !== p) return;
+				if (r.error) { clear(fWrap).appendChild(alertEl("warn", r.error)); return; }
+				listing = (r.files || []).sort(function (a, b) {
+					return (b.dir - a.dir) || a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+				});
+				clear(fWrap);
+				var rows = [];
+				if (p !== "/") rows.push([el("button", { type: "button", class: "linkbtn", text: "↑ up",
+					onclick: function () { browse(parentOf(p)); } }), ""]);
+				listing.forEach(function (f) {
+					var fp = join(p, f.name), line = el("span", { class: "status" });
+					rows.push([
+						f.dir ? el("button", { type: "button", class: "linkbtn", text: f.name + "/", onclick: function () { browse(fp); } })
+							: el("span", { text: f.name }),
+						el("span", { class: "fz-acts" },
+							f.dir ? null : btn("Download", { cls: "small", onclick: function () { download(fp, f.name, line); } }),
+							btn("Delete", { cls: "small reset", onclick: function () { remove(fp, f); } }),
+							line)
+					]);
+				});
+				if (rows.length) fWrap.appendChild(tableEl(["Name", ""], rows));
+				if (!listing.length) fWrap.appendChild(el("div", { class: "placeholder", text: "This folder is empty." }));
+			}).catch(function (e) {
+				if (failed(e)) return;
+				clear(fWrap).appendChild(alertEl("warn", String(e.message || e)));
+			});
+		}
+		function fileOp(method, params, doing, done) {
+			say(fStatus, doing);
+			return call("pirate.portapack", method, params).then(function (r) {
+				if (r.error) return say(fStatus, r.error, "err");
+				say(fStatus, done, "ok");
+				browse(path);
+			}).catch(function (e) { if (!failed(e)) say(fStatus, String(e.message || e), "err"); });
+		}
+		function newFolder() {
+			var n = window.prompt("New folder in " + path + ":", "");
+			if (n == null) return;
+			var bad = badName(n.trim());
+			if (bad) return say(fStatus, bad, "err");
+			fileOp("mkdir", { path: join(path, n.trim()) }, "making " + n.trim() + "…", "made " + n.trim());
+		}
+		function remove(fp, f) {
+			if (!window.confirm("Delete " + f.name + " from the PortaPack?" + (f.dir ? " (the folder must be empty)" : ""))) return;
+			fileOp("delete", { path: fp }, "deleting " + f.name + "…", "deleted " + f.name);
+		}
+
+		function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+		function download(fp, name, line) {
+			say(line, "reading…");
+			function poll() {
+				return call("pirate.portapack", "read", { path: fp }).then(function (r) {
+					if (r.error) throw new Error(r.error);
+					if (r.busy) { say(line, "reading… " + size(r.got)); return wait(400).then(poll); }
+					return slices();
+				});
+			}
+			function slices() {
+				var parts = [], off = 0;
+				function next() {
+					return call("pirate.portapack", "read", { path: fp, offset: off }).then(function (r) {
+						if (r.error) throw new Error(r.error);
+						var bin = atob(r.data || ""), u = new Uint8Array(bin.length), i;
+						for (i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+						parts.push(u);
+						off += u.length;
+						if (r.more) { say(line, "downloading… " + Math.round(off * 100 / r.size) + "%"); return next(); }
+						saveBlob(new Blob(parts, { type: "application/octet-stream" }), name);
+						say(line, "downloaded", "ok");
+					});
+				}
+				return next();
+			}
+			poll().catch(function (e) { if (!failed(e)) say(line, String(e.message || e), "err"); });
+		}
+
+		function b64(u8) {
+			var s = "", i;
+			for (i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192));
+			return btoa(s);
+		}
+		function readFile(file) {
+			if (file.arrayBuffer) return file.arrayBuffer();
+			return new Promise(function (res, rej) {
+				var fr = new FileReader();
+				fr.onload = function () { res(fr.result); };
+				fr.onerror = function () { rej(fr.error); };
+				fr.readAsArrayBuffer(file);
+			});
+		}
+		// Pieces of 32 KiB; the daemon sends each to the PortaPack as it comes.
+		// An empty file is one write of offset 0 with no data and more:false.
+		function upload(dir, name, u8, onProgress) {
+			var fp = join(dir, name), off = 0;
+			function next() {
+				var piece = u8.subarray(off, off + 32768), more = off + piece.length < u8.length;
+				if (onProgress) onProgress(u8.length ? off / u8.length : 1);
+				return call("pirate.portapack", "write", { path: fp, offset: off, data: b64(piece), more: more }).then(function (r) {
+					if (r.error) throw new Error(name + ": " + r.error);
+					off += piece.length;
+					if (off < u8.length) return next();
+				});
+			}
+			return next();
+		}
+		function uploadOne(dir, file) {
+			var bad = badName(file.name);
+			if (bad) return Promise.reject(new Error(file.name + ": " + bad));
+			if (dir === path && listing.some(function (f) { return f.name === file.name; }) &&
+				!window.confirm(file.name + " is on the PortaPack already. Replace it?")) return Promise.resolve();
+			return readFile(file).then(function (buf) {
+				var u8 = new Uint8Array(buf);
+				return upload(dir, file.name, u8, function (frac) {
+					say(fStatus, "uploading " + file.name + "… " + Math.round(frac * 100) + "%");
+				}).then(function () { say(fStatus, "uploaded " + file.name + " (" + size(u8.length) + ")", "ok"); });
+			});
+		}
+		function uploadAll(files) {
+			var dir = path, chain = Promise.resolve();
+			files.forEach(function (f) { chain = chain.then(function () { return uploadOne(dir, f); }); });
+			chain.then(function () { if (path === dir) browse(dir); }, function (e) {
+				if (failed(e)) return;
+				say(fStatus, String(e.message || e), "err");
+				if (path === dir) browse(dir);
+			});
+		}
+
+		/* ---- firmware ---- */
+
+		function setBar(frac) {
+			fwBar.hidden = frac == null;
+			if (frac != null) fwBar.firstChild.style.width = Math.round(frac * 100) + "%";
+		}
+		function flashBytes(name, u8) {
+			if (busy) return;
+			busy = true;
+			var dir = "/FIRMWARE", fp = dir + "/" + name;
+			say(fwStatus, "making /FIRMWARE…");
+			setBar(0);
+			call("pirate.portapack", "mkdir", { path: dir }).catch(function () {}).then(function () {
+				say(fwStatus, "uploading " + name + "…");
+				return upload(dir, name, u8, function (frac) {
+					setBar(frac);
+					say(fwStatus, "uploading " + name + "… " + Math.round(frac * 100) + "%");
+				});
+			}).then(function () {
+				setBar(1);
+				say(fwStatus, "flashing — the PortaPack reboots when it's done", "ok");
+				return call("pirate.portapack", "flash", { path: fp });
+			}).then(function (r) {
+				if (r && r.error) throw new Error(r.error);
+				window.alert("Flashing started. The PortaPack will reboot when it finishes — leave it plugged in.");
+			}).catch(function (e) {
+				if (!failed(e)) say(fwStatus, String(e.message || e), "err");
+			}).then(function () { busy = false; setTimeout(function () { setBar(null); }, 4000); });
+		}
+		function flashLocal(file) {
+			if (!/\.(bin|tar)$/i.test(file.name)) {
+				if (!window.confirm(file.name + " isn't a .bin or .ppfw.tar. Flash it anyway?")) return;
+			}
+			if (!window.confirm("Flash " + file.name + " to the PortaPack? Flashing the wrong file can brick it until you recover it over DFU.")) return;
+			readFile(file).then(function (buf) { flashBytes(file.name.replace(/[^\x20-\x7e]/g, "_"), new Uint8Array(buf)); });
+		}
+		function flashLatest(channel) {
+			if (!window.confirm("Download the latest " + channel + " Mayhem firmware from hackrf.app and flash it to the PortaPack? Leave it plugged in; it reboots when done.")) return;
+			var dev = ppApiDevice(devtype, model);
+			say(fwStatus, "fetching the latest " + channel + " firmware…");
+			setBar(0);
+			fetch("https://hackrf.app/api/fetch_" + channel + "_firmware?device=" + dev).then(function (r) {
+				if (!r.ok) throw new Error("couldn't fetch the firmware (" + r.status + ")");
+				var cd = r.headers.get("Content-Disposition") || "", m = cd.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+				var name = (m && m[1] ? m[1].replace(/['"]/g, "") : channel + ".ppfw.tar").replace(/[^\x20-\x7e]/g, "_");
+				return r.blob().then(function (b) { return b.arrayBuffer(); }).then(function (buf) {
+					flashBytes(name, new Uint8Array(buf));
+				});
+			}).catch(function (e) { say(fwStatus, String(e.message || e), "err"); setBar(null); });
+		}
+
+		if (PP_TIMER) clearInterval(PP_TIMER);
+		PP_TIMER = setInterval(function () {
+			if (!alive()) { clearInterval(PP_TIMER); PP_TIMER = null; return; }
+			if (!busy) status();
+		}, 4000);
+		status();
+		screenLoop();
+	}
+
 	function saveBlob(blob, name) {
 		var a = el("a", { href: URL.createObjectURL(blob), download: name });
 		document.body.appendChild(a);
@@ -6539,7 +7134,7 @@
 		["Radio", [["receivers", "Receivers"], ["sensors", "Sensors"]]],
 		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshakes"]]],
 		["Network", [["uplink", "Uplink"], ["clients", "Clients"], ["hosts", "Hosts"], ["capture", "Capture"]]],
-		["USB devices", [["drives", "Drives"], ["phone", "Phone"], ["flipper", "Flipper"], ["dreampi", "DreamPi"]]],
+		["USB devices", [["drives", "Drives"], ["phone", "Phone"], ["flipper", "Flipper"], ["portapack", "PortaPack"], ["dreampi", "DreamPi"]]],
 		["System", [["status", "Status"], ["access", "Access"], ["terminal", "Terminal"], ["firmware", "Firmware"]]]
 	];
 	// Pages that were renamed, for old links
@@ -6626,6 +7221,7 @@
 		if (id === "drives") return renderDrives();
 		if (id === "phone") return renderPhone();
 		if (id === "flipper") return renderFlipper();
+		if (id === "portapack") return renderPortapack();
 		if (id === "capture") return renderCapture();
 		if (id === "handshake") return renderHandshake();
 		if (id === "firmware") return renderFirmware();

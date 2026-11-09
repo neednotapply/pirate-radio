@@ -141,9 +141,11 @@ USB Wi-Fi adapter is OpenWrt's own (netifd), and the microSD card mounts when
 it goes in. Jobs whose radio is missing show
 as *waiting*. Other USB devices are left alone; the supported radios are
 listed in `pirate_radio_kind` (`/usr/share/pirate-radio/lib.sh`). A HackRF with a
-PortaPack on Mayhem firmware is only a USB serial console until you switch it
-to HackRF mode; the status page and the Pirate Radio UI say so, and gpsd doesn't
-take that console for a GPS.
+PortaPack on Mayhem firmware, in its device (console) mode, is a USB serial
+console, not a radio the SDR jobs can use: the status page and the Receivers
+page say so, and gpsd doesn't take that console for a GPS. But the **PortaPack**
+tab drives it there over that console — its screen, buttons, files and firmware,
+as hackrf.app does — and can switch it into HackRF mode for the SDR jobs (below).
 
 **Status page:** `http://192.168.1.1/cgi-bin/pirate-radio` shows the radios,
 card and jobs, with links to the aircraft map, the ISM live view and the
@@ -158,7 +160,7 @@ the left (on a phone, the menu button at the top opens them):
 | Radio | Receivers (the SDR jobs and their addresses), Sensors (what rtl_433 has decoded) |
 | Wi-Fi | Survey, Threats, Handshakes |
 | Network | Uplink (the network it joins), Clients (its own network's, and ad blocking), Hosts, Capture |
-| USB devices | Drives, Phone, Flipper, DreamPi |
+| USB devices | Drives, Phone, Flipper, PortaPack, DreamPi |
 | System | Status (its system, jacks, radios and slots), Access, Terminal, Firmware |
 
 *Receivers* has the same status as the status page, with every address the
@@ -531,6 +533,42 @@ leaves its serial port alone. MeshCore reports no satellites or fix, so a
 position counts as a fix while it moves (a GPS's does, by a little, from one
 reading to the next). `logread -e pirate-meshcore` shows it connecting.
 
+**A HackRF with a PortaPack, on Mayhem firmware:** plug it into the USB port
+(through the hub if a radio is in too) in its **device (console) mode** — the
+mode Mayhem shows over USB as a serial console (`1d50:6018`), not HackRF mode —
+and the **PortaPack** tab is [hackrf.app](https://hackrf.app) (MayhemHub) on the
+router:
+
+- **Its screen**, live, scaled to fit, with a D-pad, a select button and the
+  rotary dial beside it to press; or click the screen to tap where you click.
+  Focus the screen and the arrow keys, Enter (select) and Backspace work the
+  buttons, and typing sends characters to its on-screen keyboard. *Save a
+  screenshot* keeps a PNG.
+- **Its files**, on the SD card: browse, download (4 MB at most a file),
+  upload, make folders, delete. Names are plain ASCII and short (Mayhem's shell
+  takes 64-character command lines, so paths are kept to 48).
+- **Its details**: the model, firmware version, board revision and screen size
+  it reports, and everything else from Mayhem's `info`.
+- **Firmware**: update to the latest stable or nightly Mayhem build — fetched
+  in the browser from [hackrf.app](https://hackrf.app)'s own API (the Mayhem
+  project's), for the right device (HackRF One, HackRF Pro or PortaRF) — or
+  flash a `.bin` or Mayhem `.ppfw.tar` you pick. The PortaPack reboots when it's
+  done. It reboots to OS or DFU too.
+- **Switch it into HackRF mode**: Mayhem's own `hackrf` command, so the
+  PortaPack leaves the console and comes back as a HackRF the SDR jobs (survey,
+  SoapySDR, IQ…) can use. Put it back into device mode on the PortaPack itself.
+
+`pirate-portapack` (its own package) speaks Mayhem's serial command shell over
+USB, after Mayhem's firmware and MayhemHub (both GPL-2.0; the code here is
+Pirate Radio's own): a line a command, each answer ending at the `ch> ` prompt
+(`info`, `screenframeshort`, `button`/`touch`/`keyboard`, the `fopen`/`fread`/
+`fwb` file commands, `flash`, `hackrf`, `reboot`). It holds that console on ubus
+as `pirate.portapack`, scales each screen frame down so a live view fits the
+network, and sends uploads to the PortaPack a piece at a time. It waits while no
+PortaPack in device mode is plugged in, and gpsd leaves its serial port alone.
+Nothing here transmits; flashing writes only what you choose. `logread -e
+pirate-portapack` shows it connecting.
+
 **On the card** (`pirate-radio/<job>/<date>/`):
 
 | Files | Open with |
@@ -616,8 +654,18 @@ Tested in this repository's tests and builds:
   authoritative over adb and read from sysfs without it, the file listing
   keeping spaces in names, a mode switch asking adb for the right function,
   and the paths outside shared storage it refuses),
+  a HackRF/PortaPack on Mayhem firmware (pirate-portapack against
+  `tests/fakeportapack`, the Mayhem command shell on a pseudo-terminal:
+  connecting and reading its model, firmware, board and screen size; its info;
+  listing the SD card and a folder, folders flagged; whole-path and no-`..`
+  checks; mkdir, "already exists", and listed; uploading a file and reading it
+  back, a missing file refused; delete; buttons mapped to Mayhem's switch
+  numbers, touch in screen pixels, the keyboard sent as hex; the screen scaled,
+  a frame coming, changing when the menu moves and unchanged frames held back;
+  reboot and flash input checks; switching to HackRF mode leaving the console;
+  and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 700
+  slate-sdr (settings, card mount, card folder) and pirateradio.local: 747
   checks.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
@@ -639,6 +687,11 @@ Not yet run:
   started); a PortaPack in Mayhem mode was rightly taken for neither a radio
   nor a GPS. The GPS hook was driven only with a stand-in `/dev/ttyACM0`:
   gpsd started and stopped through procd as expected.
+- The PortaPack tab on a real HackRF/PortaPack: not yet run on hardware. Its
+  daemon and page are tested only against `tests/fakeportapack` (the Mayhem
+  shell on a pseudo-terminal) and the UI's demo mode. Untested on a device: the
+  live screen's speed and colours over the real console, large uploads and the
+  firmware flash, and the switch into HackRF mode.
 - The rename: a device on slate-sdr was flashed with the pirate-radio full
   build, settings kept. Its settings, its SLATESDR card (mount and folder),
   DreamPi and the UI's backends came back under the new names, and
@@ -664,11 +717,12 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
 | `feed/utils/pirate-meshcore/` | the Messenger tab's daemon (`src/pirate-meshcore.c`: a MeshCore radio's companion protocol, on ubus as `pirate.meshcore`) and its init script |
+| `feed/utils/pirate-portapack/` | the PortaPack tab's daemon (`src/pirate-portapack.c`: a PortaPack/Mayhem serial command shell, on ubus as `pirate.portapack`) and its init script |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
 | `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics and its ports (`pirate-router`), access (`pirate-access`: SSH, sign-ins, the terminal), firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
@@ -692,4 +746,5 @@ client, GPL-2.0-or-later. `feed/utils/pirate-meshcore/src/mco_emoji.h` is
 meshcore-open's table of reaction emoji, MIT, © 2025 zjs81.
 `feed/utils/pirate-radio-ui/files/mcoimg/` is MCO Advanced's MCOimg decoder
 (from HDDen/meshcore-open, its README there says from where exactly), MIT,
-© 2025 zjs81.
+© 2025 zjs81. `feed/utils/pirate-portapack/` is Pirate Radio's own, GPL-2.0-or-later
+(it follows Mayhem's and MayhemHub's serial command shell, both GPL-2.0).

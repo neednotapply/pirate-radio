@@ -1,0 +1,15 @@
+{
+	"pirate-portapack": {
+		"description": "Grant access to a PortaPack (Mayhem) on the USB port: its screen and buttons, its files, its details and firmware",
+		"read": {
+			"ubus": {
+				"pirate.portapack": [ "status", "info", "screen", "list", "read" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"pirate.portapack": [ "button", "touch", "keyboard", "write", "mkdir", "delete", "reboot", "hackrf", "flash" ]
+			}
+		}
+	}
+}

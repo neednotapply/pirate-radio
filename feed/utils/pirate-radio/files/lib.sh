@@ -39,7 +39,7 @@ pirate_usb_notes() {
 		read -r vid < "$d/idVendor"
 		read -r pid < "$d/idProduct"
 		case "$vid:$pid" in
-		1d50:6018) echo "PortaPack ($vid:$pid) is in Mayhem mode: switch it to HackRF mode to use it here" ;;
+		1d50:6018) echo "PortaPack ($vid:$pid) is in Mayhem mode: drive it on the PortaPack tab, or switch it to HackRF mode to use it as a radio here" ;;
 		esac
 	done
 }

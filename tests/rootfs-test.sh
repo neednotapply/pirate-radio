@@ -1758,6 +1758,125 @@ if [ "$FAIL" != 0 ]; then
 fi
 kill "$FZ_DAEMON" "$FZ_FAKE" "$FZ_UBUSD" 2> /dev/null
 
+echo "# PortaPack (pirate-portapack; tests/fakeportapack plays the Mayhem shell)"
+PP="$T/portapack"
+mkdir -p "$PP"
+check "portapack: ACL is valid JSON" sh -c 'jsonfilter -i /usr/share/rpcd/acl.d/pirate-portapack.json -e "@" > /dev/null'
+# Each call the page makes, let through by rpcd's ACL (one it leaves out is refused)
+check "portapack: the ACL lets through every call the page makes" sh -c '
+	a=$(jsonfilter -i /usr/share/rpcd/acl.d/pirate-portapack.json -e "@[\"pirate-portapack\"].read.ubus[\"pirate.portapack\"][*]" -e "@[\"pirate-portapack\"].write.ubus[\"pirate.portapack\"][*]")
+	for m in $(grep -o "call(\"pirate.portapack\", \"[a-z_]*\"" /www/app.js | sed "s/.*\"\([a-z_]*\)\"\$/\1/" | sort -u); do
+		echo "$a" | grep -qx "$m" || { echo "not in the ACL: $m"; exit 1; }
+	done'
+# A PortaPack in device (Mayhem) mode takes /dev/ttyACM0, as a GPS would: gpsd keeps off it
+mkusb 1-6 1d50 6018 "" "PortaPack"
+mkdir -p "$T/sys/bus/usb/devices/1-6/1-6:1.0"
+rm -f "$T/sys/class/tty/ttyACM0/device"
+ln -s "$T/sys/bus/usb/devices/1-6/1-6:1.0" "$T/sys/class/tty/ttyACM0/device"
+check "gps pnp: a PortaPack console is not a GPS" [ "$(gsync)" = stop ]
+ubusd -s "$PP/ubus.sock" > "$PP/ubusd.log" 2>&1 &
+PP_UBUSD=$!
+fakeportapack -l "$PP/tty" > "$PP/fake.log" 2>&1 &
+PP_FAKE=$!
+i=0
+while [ ! -e "$PP/tty" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
+pirate-portapack -d "$PP/tty" -u "$PP/ubus.sock" > "$PP/daemon.log" 2>&1 &
+PP_DAEMON=$!
+pp() { "$FZ_UBUS" -s "$PP/ubus.sock" -t 30 call pirate.portapack "$@" 2> /dev/null; }
+pps() { pp status | jsonfilter -e "$1"; }
+ppe() { pp "$@" | jsonfilter -e '@.error'; }
+pp_ok() { [ "$(pp "$@" | jsonfilter -e '@.ok')" = true ]; }
+# Wait (up to 30 s) for the state to be $1
+pp_state() {
+	i=0
+	while [ $i -lt 30 ]; do
+		[ "$(pps '@.state')" = "$1" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+# Read a file into memory: busy, then ready (or an error)
+pp_read() {
+	i=0
+	while [ $i -lt 30 ]; do
+		r=$(pp read "{\"path\":\"$1\"}")
+		[ "$(echo "$r" | jsonfilter -e '@.busy')" = true ] || break
+		sleep 1
+		i=$((i + 1))
+	done
+	echo "$r"
+}
+check "portapack: connects and finds the shell" pp_state ready
+check "portapack: status: model, firmware, board" [ "$(pps '@.model') / $(pps '@.firmware') / $(pps '@.board')" = "HackRF One / v2.4.0 / HackRF R9" ]
+check "portapack: status: device type and screen size" [ "$(pps '@.devtype') $(pps '@.screen_w')x$(pps '@.screen_h')" = "PORTAPACK 60x80" ]
+check "portapack: status: the shell was asked about itself" sh -c 'grep -qx info "$0" && grep -qx getres "$0" && grep -qx getdevtype "$0"' "$PP/fake.log"
+pp info > "$PP/info.json"
+check "portapack: info: Mayhem's own labels, spaces made underscores" [ "$(jsonfilter -i "$PP/info.json" -e '@.info.Mayhem_Version') $(jsonfilter -i "$PP/info.json" -e '@.info.Device')" = "v2.4.0 HackRF One" ]
+check "portapack: list /: the SD card's folders and files" [ "$(pp list '{"path":"/"}' | jsonfilter -e '@.files[*].name' | sort | tr '\n' ' ')" = "APPS FIRMWARE SETTINGS notes.txt " ]
+check "portapack: list /: folders flagged" [ "$(pp list '{"path":"/"}' | jsonfilter -e '@.files[@.name="APPS"].dir') $(pp list '{"path":"/"}' | jsonfilter -e '@.files[@.name="notes.txt"].dir')" = "true false" ]
+check "portapack: list /APPS" [ "$(pp list '{"path":"/APPS"}' | jsonfilter -e '@.files[*].name' | tr '\n' ' ')" = "analogtv.ppma " ]
+check "portapack: paths: whole ones only" [ "$(ppe list '{"path":"APPS"}')" = "path: a full path on the SD card, such as /FIRMWARE" ]
+check "portapack: paths: no .." [ "$(ppe read '{"path":"/APPS/../x"}')" = "path: no . or .. parts" ]
+check "portapack: mkdir" pp_ok mkdir '{"path":"/SUBGHZ"}'
+check "portapack: mkdir: made, and listed" [ "$(pp list '{"path":"/"}' | jsonfilter -e '@.files[@.name="SUBGHZ"].dir')" = true ]
+check "portapack: mkdir: there already" [ "$(ppe mkdir '{"path":"/SUBGHZ"}')" = "directory already exists." ]
+check "portapack: mkdir: asked for" grep -qx "mkdir /SUBGHZ" "$PP/fake.log"
+# Upload a file (base64 of "hello"), read it back
+check "portapack: write: a file" [ "$(pp write '{"path":"/FIRMWARE/t.txt","offset":0,"data":"aGVsbG8=","more":false}' | jsonfilter -e '@.size')" = 5 ]
+check "portapack: write: 5 bytes, as sent to the shell" grep -qx "write /FIRMWARE/t.txt 5" "$PP/fake.log"
+r=$(pp_read /FIRMWARE/t.txt)
+check "portapack: read: into memory" [ "$(echo "$r" | jsonfilter -e '@.ready') $(echo "$r" | jsonfilter -e '@.size')" = "true 5" ]
+check "portapack: read: its bytes, base64" [ "$(pp read '{"path":"/FIRMWARE/t.txt","offset":0}' | jsonfilter -e '@.data')" = "aGVsbG8=" ]
+check "portapack: read: no such file" [ "$(pp_read /FIRMWARE/nope.txt | jsonfilter -e '@.error')" = "Error: no such file" ]
+# Delete
+check "portapack: delete" pp_ok delete '{"path":"/FIRMWARE/t.txt"}'
+check "portapack: delete: asked for" grep -qx "delete /FIRMWARE/t.txt" "$PP/fake.log"
+check "portapack: delete: gone" [ "$(ppe read '{"path":"/FIRMWARE/t.txt"}')" = "Error: no such file" ]
+# Buttons, touch, the keyboard
+check "portapack: button: a key maps to a switch number" pp_ok button '{"key":"up"}'
+check "portapack: button: up is switch 4" grep -qx "button 4" "$PP/fake.log"
+pp button '{"key":"select"}' > /dev/null
+check "portapack: button: select is switch 5" grep -qx "button 5" "$PP/fake.log"
+check "portapack: button: a bad key" [ "$(ppe button '{"key":"middle"}')" = "key: up, down, left, right, select, dial_left or dial_right" ]
+check "portapack: button: a raw switch number" pp_ok button '{"n":7}'
+check "portapack: button: n out of range" [ "$(ppe button '{"n":9}')" = "button: n is 1..8" ]
+check "portapack: touch" pp_ok touch '{"x":10,"y":20}'
+check "portapack: touch: sent in screen pixels" grep -qx "touch 10 20" "$PP/fake.log"
+pp keyboard '{"text":"Hi"}' > /dev/null
+check "portapack: keyboard: 'Hi' sent as hex 4869" grep -qx "keyboard 4869" "$PP/fake.log"
+check "portapack: keyboard: not ASCII" [ "$(ppe keyboard '{"text":"héllo"}')" = "text: plain ASCII only" ]
+# The screen: a frame comes, scaled; it changes when a button moves the menu
+r=$(pp screen '{"seq":0}')
+s1=$(echo "$r" | jsonfilter -e '@.seq')
+f1=$(echo "$r" | jsonfilter -e '@.frame')
+check "portapack: screen: a frame, 60x80, scaled" [ "$(echo "$r" | jsonfilter -e '@.width')x$(echo "$r" | jsonfilter -e '@.height')" = "60x80" ]
+check "portapack: screen: 4800 pixels, base64" [ "${#f1}" = 6400 ]
+pp button '{"key":"down"}' > /dev/null
+r=$(pp screen "{\"seq\":$s1}")
+s2=$(echo "$r" | jsonfilter -e '@.seq')
+f2=$(echo "$r" | jsonfilter -e '@.frame')
+check "portapack: screen: a new frame after a button" [ "$s2" -gt "$s1" ] 2> /dev/null
+check "portapack: screen: the menu moved" [ -n "$f2" -a "$f2" != "$f1" ]
+r=$(pp screen "{\"seq\":$s2}")
+check "portapack: screen: an unchanged screen gives no frame" [ "$(echo "$r" | jsonfilter -e '@.seq')/$(echo "$r" | jsonfilter -e '@.frame')" = "$s2/" ]
+# reboot/flash are checked for their input; the actual switch (which ends the
+# device) is tested last, with hackrf
+check "portapack: reboot: a bad mode" [ "$(ppe reboot '{"mode":"bios"}')" = "mode: os or dfu" ]
+check "portapack: flash: a bad path" [ "$(ppe flash '{"path":"notfull"}')" = "path: give a full path, such as /FIRMWARE" ]
+# Switch to HackRF mode: the PortaPack leaves the console; the daemon goes absent
+check "portapack: hackrf (switch to HackRF mode)" pp_ok hackrf
+check "portapack: hackrf: the shell was told to" pp_state absent
+check "portapack: hackrf: asked for" grep -qx hackrf "$PP/fake.log"
+check "portapack: unplugged: nothing to list" [ "$(ppe list '{"path":"/"}')" = "no PortaPack in device mode is plugged in" ]
+check "portapack: the daemon is still running" kill -0 "$PP_DAEMON"
+if [ "$FAIL" != 0 ]; then
+	tail -n 30 "$PP/daemon.log" | sed 's/^/  pirate-portapack: /'
+	tail -n 30 "$PP/fake.log" | sed 's/^/  fakeportapack: /'
+	tail -n 10 "$PP/ubusd.log" | sed 's/^/  ubusd: /'
+fi
+kill "$PP_DAEMON" "$PP_FAKE" "$PP_UBUSD" 2> /dev/null
+
 echo "# MeshCore (pirate-meshcore; tests/fakemeshcore plays the radio)"
 MC="$T/meshcore"
 mkdir -p "$MC"
