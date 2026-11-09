@@ -16,9 +16,9 @@ work fine.
 |---|---|---|---|---|
 | `soapy` | both | SoapySDR network server for SDR++, GQRX, CubicSDR, SDRangel, GNU Radio | `tcp://<router>:55132` | – |
 | `rtltcp` | RTL-SDR | rtl_tcp server (SDR#, SDR++, GQRX) | `<router>:1234` | – |
-| `adsb` | RTL-SDR | aircraft, 1090 MHz (dump1090) | map on `:8080`, SBS `:30003`, Beast `:30005` | aircraft table every minute |
-| `ism` | RTL-SDR | sensors, remotes, meters on 433/868/915 MHz (rtl_433, 200+ protocols) | `:8433` | JSON lines |
-| `ais` | RTL-SDR | ships, 162 MHz (rtl_ais) | NMEA on TCP `:10110` (OpenCPN) | NMEA |
+| `adsb` | RTL-SDR (or HackRF) | aircraft, 1090 MHz (dump1090; readsb on the HackRF) | map on `:8080`, SBS `:30003`, Beast `:30005` | aircraft table every minute |
+| `ism` | RTL-SDR (or HackRF) | sensors, remotes, meters on 433/868/915 MHz (rtl_433, 200+ protocols) | `:8433` | JSON lines |
+| `ais` | RTL-SDR (or HackRF) | ships, 162 MHz (rtl_ais; AIS-catcher on the HackRF) | NMEA on TCP `:10110` (OpenCPN) | NMEA |
 | `survey` | HackRF | spectrum sweep 1 MHz – 6 GHz (hackrf_sweep) | – | CSV, hourly, gzipped |
 | `rtlsurvey` | RTL-SDR | spectrum sweep 24 MHz – 1.7 GHz (rtl_power) | – | CSV, hourly, gzipped |
 | `iq` | either | raw IQ recording, continuous, in segments | – | SigMF (`.sigmf-data` + `.sigmf-meta`) |
@@ -27,6 +27,13 @@ work fine.
 Out of the box, `soapy`, `adsb` (RTL-SDR) and `survey` (HackRF, one sweep a
 minute) are on. Each radio runs one job at a time. Between survey sweeps the
 HackRF is free for network clients.
+
+The three decoder jobs default to the RTL-SDR but take `option radio 'hackrf'`
+to run from a HackRF instead — ADS-B through readsb, ISM through rtl_433's
+SoapySDR backend, AIS through AIS-catcher, all via SoapySDR's `driver=hackrf`.
+A HackRF is less sensitive at these frequencies than a purpose-tuned RTL-SDR,
+and decoding its wider minimum stream is heavier on the 775 MHz CPU, so reach
+for this mainly when a HackRF is the only SDR on hand.
 
 ## How this relates to w1700k-sdr
 
@@ -165,7 +172,7 @@ the left (on a phone, the menu button at the top opens them):
 
 *Receivers* has the same status as the status page, with every address the
 receivers serve, the aircraft map and the recorded files; using a radio hands
-the RTL-SDR to that job. *Sensors* has one row per device rtl_433 has decoded,
+that radio (the RTL-SDR or the HackRF, whichever the job is set to) to that job. *Sensors* has one row per device rtl_433 has decoded,
 with its latest readings. Ports and radios go by what they are on the
 GL-AR750S: the WAN jack and LAN 1 and 2, the 5 GHz radio (QCA9887: the
 access point and the uplink) and the 2.4 GHz one (QCA9563: monitor mode),
@@ -680,6 +687,13 @@ Not yet run:
   SoapySDR clients), the card reader's write speed, and Wi-Fi spectral scan on
   this hardware. `ath10k` spectral on the QCA9887 specifically has not been
   confirmed.
+- The HackRF decoder paths (`option radio 'hackrf'`): ADS-B through readsb, ISM
+  through rtl_433's SoapySDR backend, AIS through AIS-catcher, all on
+  `driver=hackrf`. The packages cross-compile and the job wiring is covered by
+  the QEMU tests against mock decoders, but none has been run against a real
+  HackRF. Real-time decode at the HackRF's 2 MS/s minimum may be CPU-bound on
+  the 775 MHz MIPS core, and a HackRF is less sensitive at these frequencies
+  than a purpose-tuned RTL-SDR.
 - Plug and play: pulling out a HackRF, a real USB GPS, and the boot-time start
   with a radio already plugged in. On the device, a real RTL-SDR has been
   plugged in and pulled out (the ISM job and the SoapySDR server started and
@@ -717,7 +731,7 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `rtl_433`, `readsb`, `ais-catcher`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
@@ -731,8 +745,9 @@ Not yet run:
 | `build-full.sh` | the full source build |
 | `tests/` | runtime tests on OpenWrt's MIPS userland under QEMU |
 
-rtl-sdr, rtl_433, dump1090 and rtl-ais come from OpenWrt's own package
-feed.
+rtl-sdr, dump1090 and rtl-ais come from OpenWrt's own package feed. rtl_433 is
+rebuilt here with SoapySDR (so ISM can use a HackRF), and readsb and AIS-catcher
+are packaged here for ADS-B and AIS on a HackRF.
 
 ## Licence
 

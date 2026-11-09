@@ -54,8 +54,8 @@ pirate_radio_present() {
 pirate_job_radio() {
 	local radio
 	case "$2" in
-	rtl_tcp|adsb|ism|ais) radio=rtlsdr ;;
-	sweep|iq) config_get radio "$1" radio rtlsdr ;;
+	rtl_tcp) radio=rtlsdr ;;
+	adsb|ism|ais|sweep|iq) config_get radio "$1" radio rtlsdr ;;
 	*) radio= ;;
 	esac
 	echo "$radio"

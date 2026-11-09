@@ -28,6 +28,9 @@ sed -E \
 echo "src-link pirateradio $here/feed" >> feeds.conf
 ./scripts/feeds update -a
 ./scripts/feeds install -a
+# Our rtl_433 (SoapySDR-enabled) shares the name of OpenWrt's package; force
+# ours so ISM can decode from the HackRF as well as the RTL-SDR.
+./scripts/feeds install -f -p pirateradio rtl_433
 
 cp "$here/config/full.config" .config
 sed 's/#.*//' "$here/config/packages.txt" | xargs -n 1 | sed 's/.*/CONFIG_PACKAGE_&=y/' >> .config
@@ -92,9 +95,9 @@ run_make() {
 	[ ! -s "$logs/make.rc" ] || report_failure "$what"
 }
 
-# dump1090 enables HackRF, SoapySDR and LimeSDR support when pkg-config finds
-# them, and this build has the first two; its package declares only
-# librtlsdr. ADS-B runs on the RTL-SDR, so keep those off.
+# OpenWrt's dump1090 (FlightAware's) is RTL-SDR only and ignores these; the
+# HackRF ADS-B path is our readsb package, which sets its own backends on the
+# make line. Left as a harmless default for anything else that reads them.
 export HACKRF=no SOAPYSDR=no LIMESDR=no
 
 run_make "Download" download -j8

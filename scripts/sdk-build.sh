@@ -40,7 +40,7 @@ cat > .config <<-CONFIG
 CONFIG
 quiet make defconfig
 
-for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote dreampi pirate-flipper pirate-meshcore pirate-portapack; do
+for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote dreampi pirate-flipper pirate-meshcore pirate-portapack rtl_433 readsb ais-catcher; do
 	echo "-- $p"
 	make -j"$(nproc)" "package/$p/compile"
 done

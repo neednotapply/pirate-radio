@@ -177,26 +177,38 @@ job_rtl_tcp() {
 
 # --- decoders ----------------------------------------------------------------
 
-# ADS-B: dump1090 serves the SBS/Beast feeds and writes the aircraft table;
-# the map on port 8080 (dump1090's web page, on a uhttpd of its own) runs only
-# while this job does. Every log_every seconds (0: never) the aircraft table is
-# appended to the card.
+# ADS-B: dump1090 (RTL-SDR) or readsb (HackRF, through SoapySDR) serves the
+# SBS/Beast feeds and writes the aircraft table; the map on port 8080 (a uhttpd
+# of its own) runs only while this job does. readsb writes the same
+# aircraft.json, so the map is the same either way. Every log_every seconds
+# (0: never) the aircraft table is appended to the card.
 job_adsb() {
-	local dev gain ppm lat lon every last f day
+	local radio dev gain ppm lat lon every last f day
+	config_get radio "$JOB" radio rtlsdr
 	config_get dev "$JOB" device 0
 	config_get gain "$JOB" gain
 	config_get ppm "$JOB" ppm
 	config_get lat "$JOB" lat
 	config_get lon "$JOB" lon
 	config_get every "$JOB" log_every 60
-	wait_radio rtlsdr
+	wait_radio "$radio"
 	mkdir -p /var/run/dump1090
 	uhttpd -f -h /usr/share/dump1090 -n 3 -N 20 -R -p 0.0.0.0:8080 -p '[::]:8080' &
 	MAP=$!
-	set -- dump1090 --quiet --net --device-index "$dev" --write-json /var/run/dump1090
-	[ -n "$gain" ] && set -- "$@" --gain "$gain"
-	[ -n "$ppm" ] && set -- "$@" --ppm "$ppm"
-	[ -n "$lat" ] && [ -n "$lon" ] && set -- "$@" --lat "$lat" --lon "$lon"
+	if [ "$radio" = hackrf ]; then
+		# A HackRF at 1090 MHz is far less sensitive than an RTL-SDR, so expect
+		# fewer aircraft; readsb drives it through SoapySDR.
+		set -- readsb --device-type soapysdr --soapy-device driver=hackrf \
+			--net --net-bo-port 30005 --net-sbs-port 30003 \
+			--write-json /var/run/dump1090 --write-json-every 1 --quiet
+		[ -n "$gain" ] && set -- "$@" --soapy-gain-element "$gain"
+		[ -n "$lat" ] && [ -n "$lon" ] && set -- "$@" --lat "$lat" --lon "$lon"
+	else
+		set -- dump1090 --quiet --net --device-index "$dev" --write-json /var/run/dump1090
+		[ -n "$gain" ] && set -- "$@" --gain "$gain"
+		[ -n "$ppm" ] && set -- "$@" --ppm "$ppm"
+		[ -n "$lat" ] && [ -n "$lon" ] && set -- "$@" --lat "$lat" --lon "$lon"
+	fi
 
 	# shellcheck disable=SC2086
 	"$@" $EXTRA &
@@ -222,7 +234,9 @@ add_freq() {
 }
 
 ism_exec() {
-	set -- rtl_433 -d "$ISM_DEV" -M time:iso:utc -M level -M protocol -F "json:$1"
+	set -- rtl_433 -d "$ISM_DEV"
+	[ -n "$ISM_RATE" ] && set -- "$@" -s "$ISM_RATE"
+	set -- "$@" -M time:iso:utc -M level -M protocol -F "json:$1"
 	[ -n "$ISM_HTTP" ] && set -- "$@" -F "http:0.0.0.0:$ISM_HTTP"
 	[ -n "$ISM_GAIN" ] && set -- "$@" -g "$ISM_GAIN"
 	[ -n "$ISM_PPM" ] && set -- "$@" -p "$ISM_PPM"
@@ -230,21 +244,30 @@ ism_exec() {
 	exec "$@" $ISM_FREQS $EXTRA
 }
 
-# ISM-band sensors with rtl_433: one JSON object per line, one file a day,
-# and a live view on http://<router>:<http_port>/.
+# ISM-band sensors with rtl_433: one JSON object per line, one file a day, and
+# a live view on http://<router>:<http_port>/. On the HackRF (radio 'hackrf')
+# rtl_433 tunes through SoapySDR (-d driver=hackrf) at a 2.4 Msps sample rate;
+# on the RTL-SDR it uses the device index and its native lower rate.
 job_ism() {
-	local hop out
-	config_get ISM_DEV "$JOB" device 0
+	local radio hop out
+	config_get radio "$JOB" radio rtlsdr
 	config_get ISM_GAIN "$JOB" gain
 	config_get ISM_PPM "$JOB" ppm
 	config_get ISM_HTTP "$JOB" http_port 8433
 	config_get hop "$JOB" hop_interval 600
+	if [ "$radio" = hackrf ]; then
+		config_get ISM_DEV "$JOB" device driver=hackrf
+		config_get ISM_RATE "$JOB" rate 2400000
+	else
+		config_get ISM_DEV "$JOB" device 0
+		ISM_RATE=
+	fi
 	ISM_FREQS='' ISM_NFREQ=0
 	config_list_foreach "$JOB" frequency add_freq
 	[ "$ISM_NFREQ" -gt 0 ] || add_freq 433.92M
 	[ "$ISM_NFREQ" -gt 1 ] && ISM_FREQS="$ISM_FREQS -H $hop"
 	while :; do
-		wait_radio rtlsdr
+		wait_radio "$radio"
 		out=/dev/null
 		have_storage && out="$(day_dir)/ism-$(date +%Y%m%d).json"
 		run_for "$(pirate_secs_to_boundary day)" ism_exec "$out"
@@ -253,6 +276,16 @@ job_ism() {
 
 ais_exec() {
 	local log="$1"
+	if [ "$AIS_RADIO" = hackrf ]; then
+		# AIS-catcher on the HackRF: NMEA to the card (stdout) and to the TCP
+		# server on AIS_PORT. The device is pinned by the HackRF's serial.
+		set -- AIS-catcher
+		[ -n "$AIS_DEV" ] && [ "$AIS_DEV" != - ] && set -- "$@" -d "$AIS_DEV"
+		# shellcheck disable=SC2153  # AIS_RATE is set in job_ais, not ISM_RATE
+		set -- "$@" -s "$AIS_RATE" -gf lna "$AIS_LNA" vga "$AIS_VGA" preamp "$AIS_AMP" -S "$AIS_PORT" -o 1
+		# shellcheck disable=SC2086
+		exec "$@" $EXTRA >> "$log"
+	fi
 	set -- rtl_ais -d "$AIS_DEV" -T -P "$AIS_PORT" -n
 	[ -n "$AIS_GAIN" ] && set -- "$@" -g "$AIS_GAIN"
 	[ -n "$AIS_PPM" ] && set -- "$@" -p "$AIS_PPM"
@@ -260,16 +293,28 @@ ais_exec() {
 	exec "$@" $EXTRA 2>>"$log"
 }
 
-# Ships with rtl_ais: NMEA on a TCP server (OpenCPN etc.), and the
-# sentences logged to the card, one file a day.
+# Ships (AIS) with rtl_ais on the RTL-SDR, or AIS-catcher on the HackRF
+# (radio 'hackrf'): NMEA on a TCP server (OpenCPN etc.) and the sentences
+# logged to the card, one file a day.
 job_ais() {
-	local out
-	config_get AIS_DEV "$JOB" device 0
+	local out amp
+	config_get AIS_RADIO "$JOB" radio rtlsdr
 	config_get AIS_PORT "$JOB" port 10110
 	config_get AIS_GAIN "$JOB" gain
 	config_get AIS_PPM "$JOB" ppm
+	config_get AIS_DEV "$JOB" device 0
+	# HackRF-only tunables (AIS-catcher); harmless defaults on the RTL-SDR path.
+	config_get AIS_RATE "$JOB" rate 2304000
+	config_get AIS_LNA "$JOB" lna 16
+	config_get AIS_VGA "$JOB" vga 20
+	config_get_bool amp "$JOB" amp 0
+	AIS_AMP=off
+	[ "$amp" = 1 ] && AIS_AMP=on
 	while :; do
-		wait_radio rtlsdr
+		wait_radio "$AIS_RADIO"
+		# On the HackRF, pin AIS-catcher to its serial (an RTL-SDR may share the bus).
+		[ "$AIS_RADIO" = hackrf ] &&
+			AIS_DEV=$(pirate_usb_radios | awk '$1 == "hackrf" { print $3; exit }')
 		out=/dev/null
 		have_storage && out="$(day_dir)/ais-$(date +%Y%m%d).nmea"
 		run_for "$(pirate_secs_to_boundary day)" ais_exec "$out"
