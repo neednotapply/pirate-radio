@@ -198,7 +198,7 @@ job_adsb() {
 	if [ "$radio" = hackrf ]; then
 		# A HackRF at 1090 MHz is far less sensitive than an RTL-SDR, so expect
 		# fewer aircraft; readsb drives it through SoapySDR.
-		set -- readsb --device-type soapysdr --soapy-device driver=hackrf \
+		set -- readsb-soapy --device-type soapysdr --soapy-device driver=hackrf \
 			--net --net-bo-port 30005 --net-sbs-port 30003 \
 			--write-json /var/run/dump1090 --write-json-every 1 --quiet
 		[ -n "$gain" ] && set -- "$@" --soapy-gain-element "$gain"
@@ -234,7 +234,7 @@ add_freq() {
 }
 
 ism_exec() {
-	set -- rtl_433 -d "$ISM_DEV"
+	set -- "$ISM_BIN" -d "$ISM_DEV"
 	[ -n "$ISM_RATE" ] && set -- "$@" -s "$ISM_RATE"
 	set -- "$@" -M time:iso:utc -M level -M protocol -F "json:$1"
 	[ -n "$ISM_HTTP" ] && set -- "$@" -F "http:0.0.0.0:$ISM_HTTP"
@@ -256,9 +256,11 @@ job_ism() {
 	config_get ISM_HTTP "$JOB" http_port 8433
 	config_get hop "$JOB" hop_interval 600
 	if [ "$radio" = hackrf ]; then
+		ISM_BIN=rtl_433-soapy
 		config_get ISM_DEV "$JOB" device driver=hackrf
 		config_get ISM_RATE "$JOB" rate 2400000
 	else
+		ISM_BIN=rtl_433
 		config_get ISM_DEV "$JOB" device 0
 		ISM_RATE=
 	fi

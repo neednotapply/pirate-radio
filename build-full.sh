@@ -28,9 +28,6 @@ sed -E \
 echo "src-link pirateradio $here/feed" >> feeds.conf
 ./scripts/feeds update -a
 ./scripts/feeds install -a
-# Our rtl_433 (SoapySDR-enabled) shares the name of OpenWrt's package; force
-# ours so ISM can decode from the HackRF as well as the RTL-SDR.
-./scripts/feeds install -f -p pirateradio rtl_433
 
 cp "$here/config/full.config" .config
 sed 's/#.*//' "$here/config/packages.txt" | xargs -n 1 | sed 's/.*/CONFIG_PACKAGE_&=y/' >> .config

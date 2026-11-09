@@ -32,7 +32,8 @@ check "SoapySDRServer runs" sh -c 'SoapySDRServer --help 2>&1 | grep -q "Soapy S
 check "rtl_433 runs" sh -c 'rtl_433 -V 2>&1 | grep -q "rtl_433 version"'
 check "rtl_power runs" sh -c 'rtl_power 2>&1 | grep -q "No frequency range provided"'
 check "rtl_ais runs" sh -c 'rtl_ais -x 2>&1 | grep -q "rtl_ais"'
-check "readsb runs (ADS-B on the HackRF)" sh -c 'readsb --help 2>&1 | grep -q Usage'
+check "readsb-soapy runs (ADS-B on the HackRF)" sh -c 'readsb-soapy --help 2>&1 | grep -q Usage'
+check "rtl_433-soapy runs (ISM on the HackRF)" sh -c 'rtl_433-soapy -V 2>&1 | grep -q "rtl_433 version"'
 check "AIS-catcher runs (AIS on the HackRF)" sh -c 'AIS-catcher -L 2>&1 | grep -qi catcher'
 check "shell has 64-bit arithmetic" [ $((20000000 * 3600)) = 72000000000 ]
 
@@ -122,14 +123,20 @@ mock rtl_433 <<-'EOF'
 	for a; do case "$a" in json:*) f=${a#json:} ;; esac; done
 	while :; do echo '{"time":"2026-10-24T12:00:00Z","model":"Mock-Sensor","id":1}' >> "$f"; sleep 1; done
 EOF
+# ISM on the HackRF uses the SoapySDR-enabled rtl_433-soapy binary.
+mock rtl_433-soapy <<-'EOF'
+	f=
+	for a; do case "$a" in json:*) f=${a#json:} ;; esac; done
+	while :; do echo '{"time":"2026-10-24T12:00:00Z","model":"Mock-Sensor","id":1}' >> "$f"; sleep 1; done
+EOF
 mock rtl_ais <<-'EOF'
 	while :; do echo '!AIVDM,1,1,,A,13u?etPv2;0n:dDPwUM1U1Cb069D,0*23' >&2; sleep 1; done
 EOF
 mock dump1090 <<-'EOF'
 	while :; do echo '{ "now" : 1, "aircraft" : [ { "hex" : "abc123" } ] }' > /var/run/dump1090/aircraft.json; sleep 1; done
 EOF
-# ADS-B on the HackRF: readsb writes the same aircraft.json dump1090 does.
-mock readsb <<-'EOF'
+# ADS-B on the HackRF: readsb-soapy writes the same aircraft.json dump1090 does.
+mock readsb-soapy <<-'EOF'
 	while :; do echo '{ "now" : 1, "aircraft" : [ { "hex" : "def456" } ] }' > /var/run/dump1090/aircraft.json; sleep 1; done
 EOF
 # AIS on the HackRF: AIS-catcher prints NMEA on stdout (the job logs it).
@@ -282,7 +289,7 @@ echo "# decoders on the HackRF (SoapySDR)"
 : > "$T/calls.log"
 set_job ism radio=hackrf
 run_job ism 6
-check "ism/hackrf: rtl_433 arguments" has "$T/calls.log" "rtl_433 -d driver=hackrf -s 2400000 -M time:iso:utc -M level -M protocol -F json:$DATA/ism/$TODAY/ism-$(date +%Y%m%d).json -F http:0.0.0.0:8433 -f 433.92M -f 868M -H 600"
+check "ism/hackrf: rtl_433-soapy arguments" has "$T/calls.log" "rtl_433-soapy -d driver=hackrf -s 2400000 -M time:iso:utc -M level -M protocol -F json:$DATA/ism/$TODAY/ism-$(date +%Y%m%d).json -F http:0.0.0.0:8433 -f 433.92M -f 868M -H 600"
 check "ism/hackrf: events logged" [ "$(grep -c Mock-Sensor "$DATA/ism/$TODAY/ism-$(date +%Y%m%d).json")" -ge 3 ]
 set_job ism radio=rtlsdr
 
@@ -298,7 +305,7 @@ set_job ais radio=rtlsdr
 : > "$T/calls.log"
 set_job adsb radio=hackrf log_every=3 lat=51.5 lon=-0.1
 run_job adsb 11
-check "adsb/hackrf: readsb arguments" has "$T/calls.log" "readsb --device-type soapysdr --soapy-device driver=hackrf --net --net-bo-port 30005 --net-sbs-port 30003 --write-json /var/run/dump1090 --write-json-every 1 --quiet --lat 51.5 --lon -0.1"
+check "adsb/hackrf: readsb-soapy arguments" has "$T/calls.log" "readsb-soapy --device-type soapysdr --soapy-device driver=hackrf --net --net-bo-port 30005 --net-sbs-port 30003 --write-json /var/run/dump1090 --write-json-every 1 --quiet --lat 51.5 --lon -0.1"
 check "adsb/hackrf: aircraft snapshots on the card" sh -c "grep -q def456 '$DATA/adsb/$TODAY/aircraft-$(date +%Y%m%d).json'"
 check "adsb/hackrf: map server runs with the job" has "$T/calls.log" "uhttpd -f -h /usr/share/dump1090 .*-p 0.0.0.0:8080"
 check "adsb/hackrf: no stray receivers" no_strays

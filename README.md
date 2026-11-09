@@ -731,7 +731,7 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `rtl_433`, `readsb`, `ais-catcher`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `rtl433-soapy`, `readsb-soapy`, `ais-catcher`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
@@ -745,9 +745,11 @@ Not yet run:
 | `build-full.sh` | the full source build |
 | `tests/` | runtime tests on OpenWrt's MIPS userland under QEMU |
 
-rtl-sdr, dump1090 and rtl-ais come from OpenWrt's own package feed. rtl_433 is
-rebuilt here with SoapySDR (so ISM can use a HackRF), and readsb and AIS-catcher
-are packaged here for ADS-B and AIS on a HackRF.
+rtl-sdr, rtl_433, dump1090 and rtl-ais come from OpenWrt's own package feed and
+drive the RTL-SDR paths. The HackRF decoder paths add separate SoapySDR-enabled
+builds packaged here under distinct names, so they don't collide with OpenWrt's:
+rtl433-soapy (rtl_433 for ISM), readsb-soapy (readsb for ADS-B) and ais-catcher
+(AIS).
 
 ## Licence
 
