@@ -79,7 +79,7 @@
 #define MAX_QUEUE   16
 #define MAX_WAITERS 8
 #define MAX_KV      96
-#define SCREEN_MAX  24000              /* a scaled frame's pixels, at most */
+#define SCREEN_MAX  80000              /* a frame's pixels, at most (240x320 fits whole) */
 
 #define SCREEN_WAIT_MS 1200
 #define STREAM_IDLE_MS 8000
@@ -625,43 +625,49 @@ static void waiter_answer(struct waiter *w)
 }
 
 /* screenframeshort: an echo line, then <scr_h> rows of <scr_w> printable bytes
- * (each a pixel, value+32; MayhemHub reads charCode-32), then "ok". Scale it
- * down so the browser gets a frame that fits one reply, in the same colours. */
+ * (each a pixel, value+32; MayhemHub reads charCode-32), then "ok". A 240x320
+ * screen fits one reply whole; a larger one (HackRF Pro) is scaled down. */
 static void on_screen(struct cmd *c, const char *body, size_t len)
 {
-	struct lines l;
-	const char *line;
-	size_t ll;
+	const char *p = body, *end = body + len, *nl;
 	const char *rows[1536];
 	int rlen[1536], nrows = 0, w = 0, step, fw, fh, x, y, i;
-	uint8_t nf[SCREEN_MAX];
+	static uint8_t nf[SCREEN_MAX];
 	size_t oi = 0;
 	bool first = true;
 
 	(void)c;
-	lines_init(&l, body, len);
-	while (lines_next(&l, &line, &ll) && nrows < (int)(sizeof(rows) / sizeof(rows[0]))) {
-		bool data = true;
-		size_t k;
+	/* Walk the lines stripping only the CR: a space (0x20) is a black pixel, so
+	 * trailing blanks must stay. Trimming them as if a text line would drop
+	 * all-black rows and squash the picture. */
+	while (p < end && nrows < (int)(sizeof(rows) / sizeof(rows[0]))) {
+		size_t ll, k;
+		bool data;
 
-		if (first) {               /* echo */
+		nl = memchr(p, '\n', end - p);
+		ll = (nl ? nl : end) - p;
+		if (ll && p[ll - 1] == '\r')
+			ll--;
+		if (first) {                   /* the echoed command */
 			first = false;
-			continue;
-		}
-		if (ll < 16)
-			continue;              /* "ok", blanks: not a pixel row */
-		for (k = 0; k < ll; k++)
-			if (line[k] < 0x20 || line[k] > 0x5f) {
-				data = false;
-				break;
+		} else if (ll >= 16) {         /* "ok" and blank lines are shorter */
+			data = true;
+			for (k = 0; k < ll; k++)
+				if (p[k] < 0x20 || p[k] > 0x5f) {
+					data = false;
+					break;
+				}
+			if (data) {
+				rows[nrows] = p;
+				rlen[nrows] = ll;
+				if ((int)ll > w)
+					w = ll;
+				nrows++;
 			}
-		if (!data)
-			continue;
-		rows[nrows] = line;
-		rlen[nrows] = ll;
-		if ((int)ll > w)
-			w = ll;
-		nrows++;
+		}
+		if (!nl)
+			break;
+		p = nl + 1;
 	}
 	if (nrows < 8 || w < 8)
 		return;                        /* not a frame; keep the last one */

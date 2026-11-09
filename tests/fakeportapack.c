@@ -157,8 +157,10 @@ static void cmd_screenframeshort(void)
 	int x, y;
 
 	for (y = 0; y < SCR_H; y++) {
+		/* Every 16th row all-black (0x20): a daemon that trims trailing
+		 * blanks like a text line would drop these and squash the picture. */
 		for (x = 0; x < SCR_W; x++)
-			row[x] = 0x20 + ((x + y + sel * 7) & 0x3f);
+			row[x] = (y % 16 == 0) ? 0x20 : (char)(0x20 + ((x + y + sel * 7) & 0x3f));
 		row[SCR_W] = '\r';
 		row[SCR_W + 1] = '\n';
 		out(row, SCR_W + 2);
