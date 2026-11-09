@@ -2878,11 +2878,11 @@
 			onclick: function (ev) { ev.stopPropagation(); } }));
 		return wrap;
 	}
-	// A compact link card: an icon, a title, where it goes.
+	// A compact link card: an icon, a title, where it goes. (mc-link*: mc-card* is a profile's)
 	function mcCard(img, icon, title, sub) {
-		return el("a", { class: "mc-embed mc-card", href: img.page, target: "_blank", rel: "noopener noreferrer nofollow", title: img.page },
-			el("span", { class: "mc-cardicon", "aria-hidden": "true", text: icon }),
-			el("span", { class: "mc-cardtext" }, el("span", { class: "mc-cardtitle", text: title }), el("span", { class: "mc-cardsub", text: sub })));
+		return el("a", { class: "mc-embed mc-linkcard", href: img.page, target: "_blank", rel: "noopener noreferrer nofollow", title: img.page },
+			el("span", { class: "mc-linkicon", "aria-hidden": "true", text: icon }),
+			el("span", { class: "mc-linktext" }, el("span", { class: "mc-linktitle", text: title }), el("span", { class: "mc-linksub", text: sub })));
 	}
 
 	function mcAgo(t) {
