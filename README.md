@@ -164,16 +164,19 @@ the left (on a phone, the menu button at the top opens them):
 | Group | Pages |
 |---|---|
 | Overview | Dashboard, Messenger (a MeshCore radio's messages, below) |
-| Radio | Receivers (the SDR jobs and their addresses), Sensors (what rtl_433 has decoded) |
+| Radio | Receivers (pick a feature for each radio, and where to reach it), Sensors (what rtl_433 has decoded) |
 | Wi-Fi | Survey, Threats, Handshakes |
 | Network | Uplink (the network it joins), Clients (its own network's, and ad blocking), Hosts, Capture |
 | USB devices | Drives, Phone, Flipper, PortaPack, DreamPi |
 | System | Status (its system, jacks, radios and slots), Access, Terminal, Firmware |
 
-*Receivers* has the same status as the status page, with every address the
-receivers serve, the aircraft map and the recorded files; using a radio hands
-that radio (the RTL-SDR or the HackRF, whichever the job is set to) to that job. *Sensors* has one row per device rtl_433 has decoded,
-with its latest readings. Ports and radios go by what they are on the
+*Receivers* lists each radio it detects and the features it can do in plain
+language — *Live SDR on my computer*, *Decode aircraft/sensors/ships*,
+*Spectrum sweep*, *Record raw IQ*, *rtl_tcp server*. Pick one and it switches
+the radio to it (one at a time per radio); a *Where to connect* panel shows the
+live addresses. A PortaPack in Mayhem mode is offered as a HackRF: choosing a
+feature switches it to HackRF mode first. *Sensors* has one row per device
+rtl_433 has decoded, with its latest readings. Ports and radios go by what they are on the
 GL-AR750S: the WAN jack and LAN 1 and 2, the 5 GHz radio (QCA9887: the
 access point and the uplink) and the 2.4 GHz one (QCA9563: monitor mode),
 the USB port and the microSD slot, with the system's own names (`phy0-sta0`,

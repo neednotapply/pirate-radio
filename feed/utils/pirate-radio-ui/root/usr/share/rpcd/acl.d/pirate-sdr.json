@@ -8,7 +8,7 @@
 		},
 		"write": {
 			"ubus": {
-				"pirate.sdr": [ "use" ]
+				"pirate.sdr": [ "use", "free" ]
 			}
 		}
 	}

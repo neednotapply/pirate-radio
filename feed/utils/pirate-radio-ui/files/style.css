@@ -1093,3 +1093,18 @@ a { color: var(--link); }
 	.mc-proute { grid-area: rt; }
 	.mc-pwhat { grid-area: w; }
 }
+
+/* Receivers: one card per feature a radio can do, highlighted when active */
+.radio-group { margin: 6px 0 18px; }
+.radio-group:last-child { margin-bottom: 2px; }
+.feature {
+	display: flex; align-items: center; gap: 12px;
+	padding: 10px 12px; margin: 6px 0;
+	border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2);
+}
+.feature.on { border-color: var(--accent); background: var(--accent-soft); }
+.feature-main { flex: 1 1 auto; min-width: 0; }
+.feature-main strong { font-size: 14px; color: var(--hi); }
+.feature-main .descr { margin: 3px 0 0; }
+.feature-act { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; }
+.feature-act .small { font-size: 12px; }

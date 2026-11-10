@@ -42,13 +42,7 @@ quiet make defconfig
 
 for p in fftw3f hackrf soapysdr soapy-hackrf soapy-rtlsdr soapy-remote dreampi pirate-flipper pirate-meshcore pirate-portapack rtl433-soapy readsb-soapy ais-catcher; do
 	echo "-- $p"
-	# The three SoapySDR decoder packages are new; build them verbosely (-j1
-	# V=sc) so a failure prints the actual compiler/cmake error, not just a
-	# summary. TODO: drop V=sc once they build cleanly.
-	case "$p" in
-	rtl433-soapy | readsb-soapy | ais-catcher) make -j1 V=sc "package/$p/compile" ;;
-	*) make -j"$(nproc)" "package/$p/compile" ;;
-	esac
+	make -j"$(nproc)" "package/$p/compile"
 done
 
 # pirate-radio and the pirate-radio-ui package (UI + its backends) are scripts only:

@@ -2,11 +2,18 @@
 # rpcd plugin for pirate-sdr.
 #
 #   ubus call pirate.sdr use '{"job":"ism"}'
+#   ubus call pirate.sdr use '{"job":"adsb","radio":"hackrf"}'
 #
-# Hands a job its radio: other enabled jobs on the same radio and device are
-# switched off, the job is switched on, and the service reloads, which
-# restarts only the instances that changed. Nothing changes when the job
-# already holds the radio.
+# Hands a job its radio. With "radio" it first sets which radio (rtlsdr or
+# hackrf) the job decodes from, so a feature like ADS-B or ISM can run on
+# either. Other enabled jobs on that radio and device are switched off, the
+# job is switched on, and the service reloads (only the changed instances
+# restart). Nothing changes when the job already holds the radio.
+#
+#   ubus call pirate.sdr free '{"radio":"hackrf"}'
+#
+# Frees a radio for the always-on SoapySDR server (live use from a computer
+# with SDR++, GQRX, ...): switches off every job holding that radio.
 #
 #   ubus call pirate.sdr devices
 #
@@ -22,6 +29,7 @@ RADIO=
 DEV=
 STOPPED=
 
+# Switch off another enabled job that holds RADIO on the same device as JOB.
 release_radio() {
 	local cfg="$1" type radio dev enabled
 
@@ -38,6 +46,20 @@ release_radio() {
 	STOPPED="$STOPPED $cfg"
 }
 
+# Switch off every enabled job that holds RADIO (any device), to free it.
+free_radio() {
+	local cfg="$1" type radio enabled
+
+	config_get type "$cfg" type
+	radio=$(pirate_job_radio "$cfg" "$type")
+	[ "$radio" = "$RADIO" ] || return 0
+	config_get_bool enabled "$cfg" enabled 0
+	[ "$enabled" = 1 ] || return 0
+
+	uci set "pirate-radio.$cfg.enabled=0"
+	STOPPED="$STOPPED $cfg"
+}
+
 reply_error() {
 	json_init
 	json_add_string error "$1"
@@ -45,12 +67,27 @@ reply_error() {
 	exit 0
 }
 
+dump_stopped() {
+	local cfg
+	json_add_array stopped
+	for cfg in $STOPPED; do json_add_string "" "$cfg"; done
+	json_close_array
+}
+
+reload_if() {
+	[ "$1" = 1 ] || return 0
+	uci commit pirate-radio
+	# PIRATE_INIT: another init script to reload (tests)
+	"${PIRATE_INIT:-/etc/init.d/pirate-radio}" reload >/dev/null 2>&1
+}
+
 use_job() {
-	local input type enabled changed=0 cfg
+	local input type enabled changed=0 newradio
 
 	read -r input
 	json_load "$input"
 	json_get_var JOB job
+	json_get_var newradio radio
 
 	case "$JOB" in
 	''|*[!A-Za-z0-9_]*) reply_error "invalid job name" ;;
@@ -60,7 +97,18 @@ use_job() {
 	config_get type "$JOB" type
 	[ -n "$type" ] || reply_error "no job '$JOB' in /etc/config/pirate-radio"
 
-	RADIO=$(pirate_job_radio "$JOB" "$type")
+	# Optional: set which radio this job decodes from (e.g. ADS-B on a HackRF).
+	# uci set does not update the already-loaded config, so take RADIO from it.
+	case "$newradio" in
+	rtlsdr | hackrf)
+		uci set "pirate-radio.$JOB.radio=$newradio"
+		changed=1
+		RADIO="$newradio"
+		;;
+	'') RADIO=$(pirate_job_radio "$JOB" "$type") ;;
+	*) reply_error "radio must be rtlsdr or hackrf" ;;
+	esac
+
 	config_get DEV "$JOB" device 0
 	[ -n "$RADIO" ] && config_foreach release_radio job
 
@@ -71,22 +119,40 @@ use_job() {
 	fi
 	[ -n "$STOPPED" ] && changed=1
 
-	if [ "$changed" = 1 ]; then
-		uci commit pirate-radio
-		# PIRATE_INIT: another init script to reload (tests)
-		"${PIRATE_INIT:-/etc/init.d/pirate-radio}" reload >/dev/null 2>&1
-		logger -t pirate-radio "LuCI handed the ${RADIO:-radio} to job '$JOB'${STOPPED:+, stopped:$STOPPED}"
-	fi
+	reload_if "$changed"
+	[ "$changed" = 1 ] && logger -t pirate-radio "handed the ${RADIO:-radio} to job '$JOB'${STOPPED:+, stopped:$STOPPED}"
 
 	json_init
 	json_add_string job "$JOB"
 	json_add_string radio "$RADIO"
 	json_add_boolean switched "$changed"
-	json_add_array stopped
-	for cfg in $STOPPED; do
-		json_add_string "" "$cfg"
-	done
-	json_close_array
+	dump_stopped
+	json_dump
+}
+
+free_cmd() {
+	local input changed=0
+
+	read -r input
+	json_load "$input"
+	json_get_var RADIO radio
+
+	case "$RADIO" in
+	rtlsdr | hackrf) ;;
+	*) reply_error "radio must be rtlsdr or hackrf" ;;
+	esac
+
+	config_load pirate-radio
+	config_foreach free_radio job
+	[ -n "$STOPPED" ] && changed=1
+
+	reload_if "$changed"
+	[ "$changed" = 1 ] && logger -t pirate-radio "freed the $RADIO for live use${STOPPED:+, stopped:$STOPPED}"
+
+	json_init
+	json_add_string radio "$RADIO"
+	json_add_boolean switched "$changed"
+	dump_stopped
 	json_dump
 }
 
@@ -97,11 +163,12 @@ list_devices() {
 
 case "$1" in
 list)
-	echo '{ "use": { "job": "str" }, "devices": {} }'
+	echo '{ "use": { "job": "str", "radio": "str" }, "free": { "radio": "str" }, "devices": {} }'
 	;;
 call)
 	case "$2" in
 	use) use_job ;;
+	free) free_cmd ;;
 	devices) list_devices ;;
 	esac
 	;;

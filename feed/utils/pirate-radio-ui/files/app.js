@@ -90,20 +90,25 @@
 
 	// Mutable demo job table so "Use the radio" visibly switches jobs in demo.
 	var DEMO_JOBS = [
-		{ name: "soapy", type: "soapy", radio: "hackrf", state: "running" },
+		{ name: "soapy", type: "soapy_server", radio: "-", state: "running" },
 		{ name: "adsb", type: "adsb", radio: "rtlsdr", state: "running" },
-		{ name: "survey", type: "hackrf_sweep", radio: "hackrf", state: "stopped" },
-		{ name: "ism", type: "rtl_433", radio: "rtlsdr", state: "off" },
-		{ name: "ais", type: "rtl_ais", radio: "rtlsdr", state: "off" },
-		{ name: "rtltcp", type: "rtl_tcp", radio: "rtlsdr", state: "off" }
+		{ name: "survey", type: "sweep", radio: "hackrf", state: "off" },
+		{ name: "rtltcp", type: "rtl_tcp", radio: "rtlsdr", state: "off" },
+		{ name: "ism", type: "ism", radio: "rtlsdr", state: "off" },
+		{ name: "ais", type: "ais", radio: "rtlsdr", state: "off" },
+		{ name: "rtlsurvey", type: "sweep", radio: "rtlsdr", state: "off" },
+		{ name: "iq", type: "iq", radio: "hackrf", state: "off" },
+		{ name: "wifi", type: "wifi_spectral", radio: "-", state: "running" }
 	];
 	function demoStatus() {
-		var head = "pirate-radio\n  microSD:  mounted /mnt/sdcard (PIRATERADIO, 29.7G free)\n" +
-			"  RTL-SDR:  present (Realtek RTL2838U, serial 00000001)\n" +
-			"  HackRF:   present (serial 457863)\n\n  job        type           radio    state\n";
+		var head = "Radios:\n" +
+			"  hackrf  1d50:6089  serial 0000000000000000629461dc23304f53  HackRF One\n" +
+			"  rtlsdr  0bda:2838  serial 00000001  RTL-SDR (RTL2838U)\n\n" +
+			"microSD card (/mnt/sdcard):\n  mounted, 29.7G free, data in /mnt/sdcard/pirate-radio\n\n" +
+			"Jobs:\n  JOB        TYPE           RADIO    STATE\n";
 		return head + DEMO_JOBS.map(function (j) {
 			return "  " + pad(j.name, 10) + " " + pad(j.type, 14) + " " + pad(j.radio, 8) + " " + j.state;
-		}).join("\n");
+		}).join("\n") + "\n\nWi-Fi spectral scan: available";
 	}
 
 	// A MeshCore radio, for the Messenger page
@@ -854,12 +859,20 @@
 			var job = DEMO_JOBS.filter(function (j) { return j.name === p.job; })[0];
 			var stopped = [];
 			if (job) {
+				if (p.radio) job.radio = p.radio;
 				DEMO_JOBS.forEach(function (j) {
-					if (j.radio === job.radio && j.name !== job.name && j.state === "running") { j.state = "off"; stopped.push(j.name); }
+					if (j.radio === job.radio && j.name !== job.name && j.state !== "off") { j.state = "off"; stopped.push(j.name); }
 				});
 				job.state = "running";
 			}
 			return { job: p.job, radio: job ? job.radio : "", switched: true, stopped: stopped };
+		},
+		"pirate.sdr:free": function (p) {
+			var stopped = [];
+			DEMO_JOBS.forEach(function (j) {
+				if (j.radio === p.radio && j.state !== "off") { j.state = "off"; stopped.push(j.name); }
+			});
+			return { radio: p.radio, switched: stopped.length > 0, stopped: stopped };
 		},
 		"pirate.sdr:devices": function () {
 			return { now: Math.floor(Date.now() / 1000), enabled: true,
@@ -1862,32 +1875,142 @@
 		});
 	}
 
-	/* ---------- Receivers: the SDR jobs and where to reach them ---------- */
+	/* ---------- Receivers: pick a feature for each detected radio ---------- */
+
+	// A feature is a capability in plain language. Selecting one enables the job
+	// it maps to and stops whatever else held that radio (one at a time). job:
+	// the pirate-radio job (a map by radio kind when they differ); setRadio:
+	// also point that job at the detected radio (ADS-B/ISM/AIS run on either);
+	// action "free": hand the radio to the always-on SoapySDR server (live use).
+	var FEATURES = [
+		{ id: "live", label: "Live SDR on my computer", action: "free", radios: ["hackrf", "rtlsdr"],
+			desc: "Stream the raw radio to SDR++, GQRX, SDRangel or CubicSDR on your PC." },
+		{ id: "adsb", label: "Decode aircraft (ADS-B)", job: "adsb", setRadio: true, radios: ["hackrf", "rtlsdr"],
+			desc: "1090 MHz: a live map, and the aircraft table saved to the card." },
+		{ id: "ism", label: "Decode sensors (ISM)", job: "ism", setRadio: true, radios: ["hackrf", "rtlsdr"],
+			desc: "433 / 868 / 915 MHz weather stations, meters and tyre sensors." },
+		{ id: "ais", label: "Decode ships (AIS)", job: "ais", setRadio: true, radios: ["hackrf", "rtlsdr"],
+			desc: "162 MHz: NMEA to OpenCPN, and logged to the card." },
+		{ id: "sweep", label: "Spectrum sweep", job: { hackrf: "survey", rtlsdr: "rtlsurvey" }, radios: ["hackrf", "rtlsdr"],
+			desc: "A power sweep across the band, saved to the card as CSV." },
+		{ id: "iq", label: "Record raw IQ", job: "iq", setRadio: true, radios: ["hackrf", "rtlsdr"],
+			desc: "Continuous SigMF recordings to the card (inspectrum, URH, GNU Radio)." },
+		{ id: "rtltcp", label: "rtl_tcp server", job: "rtltcp", radios: ["rtlsdr"],
+			desc: "Serve the RTL-SDR to SDR#, SDR++ or GQRX over rtl_tcp." }
+	];
+	var RADIO_NAME = { hackrf: "HackRF", rtlsdr: "RTL-SDR" };
+	function featureJob(f, kind) { return (typeof f.job === "object") ? f.job[kind] : f.job; }
+
+	// Radios on the USB bus, parsed from the status text's "Radios:" section,
+	// plus a PortaPack in Mayhem mode shown as a HackRF we can switch to.
+	function detectRadios(status) {
+		var out = [], seen = {}, re = /^ {2}(hackrf|rtlsdr) +\S+ +serial \S+ +(.*)$/mg, m;
+		while ((m = re.exec(status || "")) !== null) {
+			if (seen[m[1]]) continue;
+			seen[m[1]] = 1;
+			out.push({ kind: m[1], name: (m[2] || "").trim() || RADIO_NAME[m[1]], mayhem: false });
+		}
+		if (!seen.hackrf && /Mayhem mode/.test(status || ""))
+			out.push({ kind: "hackrf", name: "HackRF (PortaPack, in Mayhem mode)", mayhem: true });
+		return out;
+	}
 
 	function renderReceivers() {
 		clear(VIEW);
-		VIEW.appendChild(viewHead("Receivers", "the SDR jobs running on this router, and where to reach them"));
+		VIEW.appendChild(viewHead("Receivers", "pick what each radio should do — one thing at a time per radio"));
 		var host = location.hostname || "192.168.1.1";
 
-		var jobsPanel = panel("Jobs");
-		jobsPanel.appendChild(el("p", { class: "descr", text:
-			"Each radio runs one job at a time. Hand a radio to another job and the service switches it over. A job starts when its radio is plugged in and stops when it is removed." }));
-		var jobsWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
-		jobsPanel.appendChild(jobsWrap);
+		var featPanel = panel("Radios");
+		var featWrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
+		featPanel.appendChild(featWrap);
 		var raw = el("details", { class: "raw" }, el("summary", { text: "Raw status" }));
 		var rawPre = el("pre", { class: "raw-pre" });
 		raw.appendChild(rawPre);
-		jobsPanel.appendChild(raw);
+		featPanel.appendChild(raw);
 
-		var addrPanel = panel("Addresses");
+		var addrPanel = panel("Where to connect");
 		addrPanel.style.marginTop = "14px";
 		var addrWrap = el("div");
 		addrPanel.appendChild(addrWrap);
 
-		VIEW.appendChild(jobsPanel); VIEW.appendChild(addrPanel);
+		VIEW.appendChild(featPanel); VIEW.appendChild(addrPanel);
 
 		var jobsMap = {};
-		function stateCls(s) { return s === "running" ? "sec-ok" : (s === "stopped" ? "sec-warn" : "sec-neutral"); }
+
+		// The feature currently active on a radio: the enabled (non-off) job
+		// holding it, mapped back to a feature; "live" when nothing holds it.
+		function activeFeature(kind) {
+			var held = null, name;
+			for (name in jobsMap)
+				if (jobsMap[name].radio === kind && jobsMap[name].state !== "off") { held = name; break; }
+			if (!held) return "live";
+			for (var i = 0; i < FEATURES.length; i++)
+				if (FEATURES[i].radios.indexOf(kind) >= 0 && featureJob(FEATURES[i], kind) === held)
+					return FEATURES[i].id;
+			return null;
+		}
+
+		function go(feature, kind) {
+			if (feature.action === "free") return call("pirate.sdr", "free", { radio: kind });
+			var p = { job: featureJob(feature, kind) };
+			if (feature.setRadio) p.radio = kind;
+			return call("pirate.sdr", "use", p);
+		}
+
+		// Poll the status until the HackRF re-enumerates after a mode switch.
+		function waitForHackrf(statusEl) {
+			var tries = 0;
+			return new Promise(function (resolve, reject) {
+				(function poll() {
+					fetchSdrStatus().then(function (s) {
+						if (/^ {2}hackrf /m.test(s || "")) return resolve();
+						if (++tries > 20) return reject(new Error("the PortaPack did not come back in HackRF mode"));
+						statusEl.textContent = "Switching to HackRF mode… (" + (tries * 3) + "s)";
+						setTimeout(poll, 3000);
+					}).catch(function () { setTimeout(poll, 3000); });
+				})();
+			});
+		}
+
+		function activate(feature, radio, statusEl) {
+			statusEl.textContent = "Switching…";
+			var done = function () { return fetchSdrStatus().then(fillFeatures); };
+			var fail = function (e) {
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				statusEl.textContent = String(e.message || e);
+			};
+			if (radio.mayhem) {
+				statusEl.textContent = "Switching the PortaPack to HackRF mode…";
+				call("pirate.portapack", "hackrf", {})
+					.then(function () { return waitForHackrf(statusEl); })
+					.then(function () { return go(feature, "hackrf"); })
+					.then(done).catch(fail);
+			} else {
+				go(feature, radio.kind).then(done).catch(fail);
+			}
+		}
+
+		function radioGroup(radio) {
+			var box = el("div", { class: "radio-group" });
+			box.appendChild(el("h4", { class: "sub-h2", text: radio.name }));
+			if (radio.mayhem)
+				box.appendChild(el("p", { class: "descr", text:
+					"It booted into its Mayhem menu. Choosing a feature switches it to HackRF mode first (takes a few seconds)." }));
+			var active = activeFeature(radio.kind);
+			FEATURES.filter(function (f) { return f.radios.indexOf(radio.kind) >= 0; }).forEach(function (f) {
+				var on = f.id === active;
+				var statusEl = el("span", { class: "muted small" });
+				var action = on
+					? badge("active", "sec-ok")
+					: btn("Use", { cls: "small", onclick: function () { activate(f, radio, statusEl); } });
+				box.appendChild(el("div", { class: "feature" + (on ? " on" : "") },
+					el("div", { class: "feature-main" },
+						el("strong", { text: f.label }),
+						el("div", { class: "descr", text: f.desc })),
+					el("div", { class: "feature-act" }, action, statusEl)));
+			});
+			return box;
+		}
 
 		function fillAddresses() {
 			function sb(job) {
@@ -1896,58 +2019,41 @@
 				if (s === "running") return badge("on", "sec-ok");
 				if (s === "stopped") return badge("stopped", "sec-warn");
 				if (s === "waiting") return badge("radio unplugged", "sec-neutral");
-				if (s === "off") return badge("off", "sec-neutral");
-				return badge("job " + job, "sec-neutral");
+				return badge("off", "sec-neutral");
 			}
 			function fmt(s) { return s.replace("%s", host); }
 			clear(addrWrap);
 			addrWrap.appendChild(el("h4", { class: "sub-h2", text: "Web pages" }));
-			addrWrap.appendChild(tableEl(["Page", "Address", "Runs when"], SDR_PAGES.map(function (p) {
+			addrWrap.appendChild(tableEl(["Page", "Address", "On"], SDR_PAGES.map(function (p) {
 				var u = fmt(p[1]);
 				return [p[0], el("a", { href: u, target: "_blank", rel: "noopener", text: u }), sb(p[2])];
 			})));
-			addrWrap.appendChild(el("h4", { class: "sub-h2", text: "Connect from a computer" }));
-			addrWrap.appendChild(tableEl(["Client", "Address", "Runs when"], SDR_CLIENTS.map(function (c) {
+			addrWrap.appendChild(el("h4", { class: "sub-h2", text: "From a computer" }));
+			addrWrap.appendChild(tableEl(["Client", "Address", "On"], SDR_CLIENTS.map(function (c) {
 				return [c[0], el("code", { text: fmt(c[1]) }), sb(c[2])];
 			})));
 		}
 
-		function fillJobs(status) {
+		function fillFeatures(status) {
 			rawPre.textContent = status || "No answer from /cgi-bin/pirate-radio.";
 			var jobs = parseJobs(status);
 			jobsMap = {};
 			jobs.forEach(function (j) { jobsMap[j.name] = j; });
-			clear(jobsWrap);
-			// "  note: ..." lines: a radio plugged in but in a mode it can't be used in.
-			var note, noteRe = /^ {2}note: (.+)$/mg;
-			while ((note = noteRe.exec(status || "")) !== null)
-				jobsWrap.appendChild(alertEl("warn", note[1]));
+			clear(featWrap);
+			var radios = detectRadios(status);
 			if (!jobs.length) {
-				jobsWrap.appendChild(el("div", { class: "muted", text:
-					"No job status reported (is pirate-radio installed on this device?)." }));
+				featWrap.appendChild(el("div", { class: "muted", text:
+					"No status from pirate-radio (is it installed on this device?)." }));
+			} else if (!radios.length) {
+				featWrap.appendChild(el("div", { class: "placeholder", text:
+					"No radio detected. Plug in an RTL-SDR or a HackRF to pick a feature." }));
 			} else {
-				jobsWrap.appendChild(tableEl(["Job", "Radio", "Type", "State", ""], jobs.map(function (j) {
-					var action = j.state === "running"
-						? el("span", { class: "muted", text: "—" })
-						: j.state === "waiting"
-						? el("span", { class: "muted", text: "plug in " + (j.radio === "-" ? "an SDR" : "the " + j.radio) })
-						: btn("Use " + j.radio, { cls: "small", onclick: function () { handTo(j.name); } });
-					return [el("strong", { text: j.name }), j.radio, j.type, badge(j.state, stateCls(j.state)), action];
-				})));
+				radios.forEach(function (r) { featWrap.appendChild(radioGroup(r)); });
 			}
 			fillAddresses();
 		}
 
-		function handTo(job) {
-			call("pirate.sdr", "use", { job: job }).then(function () {
-				return fetchSdrStatus().then(fillJobs);
-			}).catch(function (e) {
-				if (String(e.message || e) === "unauthorized") return onError(e);
-				clear(jobsWrap).appendChild(alertEl("warn", String(e.message || e)));
-			});
-		}
-
-		fetchSdrStatus().then(fillJobs);
+		fetchSdrStatus().then(fillFeatures);
 	}
 
 	/* ---------- Sensors: what the ISM job has decoded ---------- */
@@ -1973,7 +2079,7 @@
 			if (!devs.length) {
 				clear(ismWrap).appendChild(el("div", { class: "placeholder", text: data.enabled
 					? "Nothing decoded yet — rtl_433 hops bands, so give it a few minutes."
-					: "Nothing decoded yet, and the ISM job is not running: hand it the RTL-SDR on the Receivers page." }));
+					: "Nothing decoded yet, and the sensor decoder isn't running: turn on “Decode sensors” on the Receivers page." }));
 				return;
 			}
 			clear(ismWrap).appendChild(tableEl(["Device", "ID", "Latest readings", "Band", "Heard", "Last"], devs.map(function (d) {

@@ -234,9 +234,10 @@ add_freq() {
 }
 
 ism_exec() {
+	local out="$1"
 	set -- "$ISM_BIN" -d "$ISM_DEV"
 	[ -n "$ISM_RATE" ] && set -- "$@" -s "$ISM_RATE"
-	set -- "$@" -M time:iso:utc -M level -M protocol -F "json:$1"
+	set -- "$@" -M time:iso:utc -M level -M protocol -F "json:$out"
 	[ -n "$ISM_HTTP" ] && set -- "$@" -F "http:0.0.0.0:$ISM_HTTP"
 	[ -n "$ISM_GAIN" ] && set -- "$@" -g "$ISM_GAIN"
 	[ -n "$ISM_PPM" ] && set -- "$@" -p "$ISM_PPM"
