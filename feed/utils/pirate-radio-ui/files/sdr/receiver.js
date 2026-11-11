@@ -128,8 +128,10 @@
 	function AudioOut() {
 		var AC = window.AudioContext || window.webkitAudioContext;
 		var ctx = null, gain = null, nextT = 0, vol = 0.7, muted = false;
-		var LEAD = 0.12;       // seconds of cushion when (re)starting, against jitter
-		var AHEAD = 0.6;       // more than this queued: the clocks drifted, drop a piece
+		// Seconds of sound kept in hand against jitter. The HackRF's samples
+		// come 55 ms at a time, and a network adds its own unevenness: when
+		// the sound runs dry while it is flowing, a little more is kept.
+		var lead = 0.14, lastAt = -1;
 
 		function apply() { if (gain) gain.gain.value = muted ? 0 : vol * vol; }
 		this.ok = !!AC;
@@ -157,8 +159,11 @@
 		this.push = function (samples, rate) {
 			if (!ctx || ctx.state !== "running" || !samples.length) return;
 			var now = ctx.currentTime;
-			if (nextT < now + 0.01) nextT = now + LEAD;
-			else if (nextT > now + AHEAD) return;
+			if (nextT < now + 0.01) {
+				if (now - lastAt < 0.25 && lead < 0.4) lead += 0.04;
+				nextT = now + lead;
+			} else if (nextT > now + lead + 0.45) return;   // far ahead (the clocks drift apart): this piece is let go
+			lastAt = now;
 			var buf = ctx.createBuffer(1, samples.length, rate || 48000);
 			if (buf.copyToChannel) buf.copyToChannel(samples, 0);
 			else buf.getChannelData(0).set(samples);
