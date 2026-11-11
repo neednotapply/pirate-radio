@@ -54,7 +54,8 @@
 	var FFT_FOR_ZOOM = { 1: 4096, 2: 8192, 4: 16384, 8: 32768, 16: 32768 };
 
 	// Places to go, in plain words: where the dial lands, and how to listen
-	// there. (Frequencies as used in the Americas where they differ.)
+	// there. (Frequencies as used in the Americas where they differ.) off: how
+	// far the band's channels sit from whole steps of the dial, where they do.
 	var BANDS = [
 		{ label: "FM radio", lo: 87.5e6, hi: 108e6, tune: 98.1e6, mode: "wfm" },
 		{ label: "Aircraft", lo: 118e6, hi: 137e6, tune: 121.5e6, mode: "am", step: 25000 },
@@ -65,7 +66,7 @@
 		{ label: "FRS / GMRS", lo: 462.5e6, hi: 467.75e6, tune: 462.5625e6, mode: "nfm" },
 		{ label: "433 MHz", lo: 433.05e6, hi: 434.79e6, tune: 433.92e6, mode: "nfm", step: 5000 },
 		{ label: "915 MHz", lo: 902e6, hi: 928e6, tune: 915e6, mode: "nfm" },
-		{ label: "CB", lo: 26.965e6, hi: 27.405e6, tune: 27.185e6, mode: "am", step: 10000 }
+		{ label: "CB", lo: 26.965e6, hi: 27.405e6, tune: 27.185e6, mode: "am", step: 10000, off: 5000 }
 	];
 
 	// A gain stage, as its radio names it: what to call it, and what it is
@@ -142,6 +143,177 @@
 			});
 		});
 		return out.sort(function (a, b) { return a.f - b.f || (a.mode < b.mode ? -1 : a.mode > b.mode ? 1 : 0); });
+	}
+
+	/* ---------- scanning: where signals stand out ----------
+	   From a line of the spectrum (dB in each bin, lowest frequency first,
+	   smoothed over a few lines): the dial frequencies at which a channel
+	   holds markedly more than noise does, lowest first, each with how many
+	   dB its channel is over the noise.
+
+	   The bins are added up along the line a stretch at a time: rather less
+	   than a channel's worth, as a signal fills rather less than its channel,
+	   so that two channels side by side show as two. What noise alone comes
+	   to is taken from the line itself: the sum that a fifth of those
+	   stretches stay under. A signal is looked for where a stretch holds more
+	   than every other within half a channel of it; it is at the middle of
+	   what its channel holds over the noise (the centre of its weight), and
+	   it counts when the whole channel there is `margin` dB over the noise.
+	   Not counted: the shoulders of something much stronger nearby; the
+	   radio's own carrier, a spike every line can have at its centre; and
+	   what only shows at the very end of the line, where most of the signal
+	   may lie beyond it (the scan looks again from there, the radio moved).
+
+	   o: bw (the channel's width, Hz), mode, step (the dial's, Hz), off (how
+	   far its steps are from whole ones, Hz, if they are), margin (dB). null
+	   when the channel is too wide a share of the line for noise and signal
+	   to be told apart in it. */
+	var SCAN_MARGIN = 8, SCAN_SHOULDER = 15;
+	function signalsIn(spec, center, rate, o) {
+		var n = spec.length, binHz = rate / n, base = center - rate / 2;
+		var k = Math.max(1, Math.round(o.bw / binHz)), w = Math.max(1, Math.round(k * 0.6)), i, j;
+		// (3 % at either end of the line is the slope of the radio's filter)
+		var lo = Math.ceil(n * 0.03), end = Math.floor(n * 0.97);
+		if (k > n / 4 || end - lo <= 2 * k) return null;
+		var lin = new Float64Array(n);
+		for (i = 0; i < n; i++) lin[i] = Math.pow(10, spec[i] / 10);
+		// The radio's own carrier: the bins at the centre made like the ones beside them
+		var mid = n >> 1, dc = Math.max(2, Math.ceil(1500 / binHz)), sum = 0, cnt = 0;
+		for (i = mid - 3 * dc; i <= mid + 3 * dc; i++) {
+			if (i < 0 || i >= n || Math.abs(i - mid) <= dc) continue;
+			sum += lin[i];
+			cnt++;
+		}
+		if (cnt) for (i = Math.max(0, mid - dc); i <= Math.min(n - 1, mid + dc); i++) lin[i] = sum / cnt;
+		var pre = new Float64Array(n + 1);
+		for (i = 0; i < n; i++) pre[i + 1] = pre[i] + lin[i];
+		// The stretches (for a wide channel, a sixteenth of one apart)
+		var stride = Math.max(1, Math.floor(w / 16)), count = Math.floor((end - w - lo) / stride) + 1;
+		var S = new Float64Array(count);
+		for (j = 0; j < count; j++) S[j] = pre[lo + j * stride + w] - pre[lo + j * stride];
+		var bin = new Float64Array(S).sort()[Math.floor(count * 0.2)] / w;     // the noise in one bin
+		if (!(bin > 0)) return [];
+		// (a signal may fill its channel or a part of it: the stretch is held to a little less than the channel is)
+		var least = bin * w * Math.pow(10, (o.margin - 3) / 10), half = Math.max(1, Math.round(k / 2 / stride)), found = [];
+		for (j = 1; j < count - 1; j++) {
+			if (S[j] < least) continue;
+			var top = true;
+			for (i = Math.max(0, j - half); i <= Math.min(count - 1, j + half) && top; i++)
+				if (S[i] > S[j] || (S[i] === S[j] && i < j)) top = false;
+			if (!top) continue;
+			// Its channel, about the stretch; then about the centre of what is in it over the noise
+			var at = lo + j * stride + w / 2, a = 0, m = 0, pass, x;
+			for (pass = 0; pass < 2; pass++) {
+				a = Math.min(Math.max(Math.round(at - k / 2), lo), end - k);
+				for (m = 0, sum = 0, i = a; i < a + k; i++) {
+					x = lin[i] - bin;
+					if (x > 0) { m += x; sum += x * (i + 0.5); }
+				}
+				if (m > 0) at = sum / m;
+			}
+			a = Math.min(Math.max(Math.round(at - k / 2), lo), end - k);
+			var over = 10 * Math.log((pre[a + k] - pre[a]) / (bin * k)) / Math.LN10, f = base + at * binHz;
+			if (over < o.margin) continue;
+			if (o.mode === "usb") f -= o.bw / 2;
+			if (o.mode === "lsb") f += o.bw / 2;
+			found.push({ f: f, over: over });
+		}
+		found = found.filter(function (p) {
+			return !found.some(function (q) { return q !== p && Math.abs(q.f - p.f) <= 1.5 * o.bw && q.over - p.over >= SCAN_SHOULDER; });
+		});
+		// On the dial's steps, lowest first: two that land on the same step are one
+		var out = [], off = o.off || 0;
+		found.map(function (p) { return { f: Math.round((p.f - off) / o.step) * o.step + off, over: p.over }; })
+			.sort(function (p, q) { return p.f - q.f; })
+			.forEach(function (p) {
+				var last = out[out.length - 1];
+				if (last && last.f === p.f) last.over = Math.max(last.over, p.over);
+				else out.push(p);
+			});
+		return out;
+	}
+
+	// The band a frequency is in, of the ones the page knows (the narrowest, of two)
+	function bandAt(f) {
+		var best = null;
+		BANDS.forEach(function (b) {
+			if (f >= b.lo && f <= b.hi && (!best || b.hi - b.lo < best.hi - best.lo)) best = b;
+		});
+		return best;
+	}
+
+	/* ---------- scanning: where to look next ----------
+	   A scan goes up the dial from where it began, stays a while on every
+	   signal it finds, and goes on from there, until it is stopped. It keeps
+	   inside a band only while that band is what is being listened to: the
+	   dial in it, and the mode the band's own (broadcast FM in wide FM,
+	   aircraft in AM, the two-way bands in narrow FM). There it goes round:
+	   from the band's top on from its bottom, up to where it last stayed.
+	   Once round with nothing else found, it leaves the band and goes on
+	   above it, as it does from the start anywhere else: on up the dial,
+	   and from the top of what the radio tunes round to the bottom.
+
+	   scanFrom(f, mode, step, reach): a scan's beginning. reach: what the
+	   radio tunes, [lowest, highest]. What it is, s:
+	     at       the lowest dial frequency not looked at yet
+	     from     where it began, or last stayed
+	     lo, hi   what it is to go round: the band, or all the radio tunes
+	     band     the band's name, while it keeps inside one
+	     left     the name of the band it has left behind, once it has
+	     wrapped  past the top, and on from the bottom
+
+	   scanStep(s, dr, sig, step, bw, reach): the next step, from what a look
+	   has shown. dr: the dial frequencies the radio takes in now, [lowest,
+	   highest]; sig: the signals found there (signalsIn). What comes back:
+	     { tune: f }     a signal: the scan stays on it a while
+	     { move: true }  the radio is to go up, s.at just inside the bottom of what it takes in
+	     { look: true }  s.at is in what the radio takes in already: the same look serves again
+	     { over: true }  all the way round what the radio tunes, and nothing
+
+	   scanOn(s, f, step): on, from the signal at f it has stayed on: a round
+	   is counted from there.
+
+	   scanCentre(at, rate, below, limits): the radio's centre for a move.
+	   below: how far under the dial the channel reaches (less than nought). */
+	function scanFrom(f, mode, step, reach) {
+		var b = bandAt(f);
+		if (b && b.mode !== mode) b = null;
+		return {
+			at: f + step / 2, from: f, lo: b ? Math.max(b.lo, reach[0]) : reach[0], hi: b ? Math.min(b.hi, reach[1]) : reach[1],
+			band: b ? b.label : "", left: "", wrapped: false
+		};
+	}
+	function scanOn(s, f, step) {
+		s.from = f;
+		s.at = f + step / 2;
+		s.wrapped = false;
+	}
+	function scanStep(s, dr, sig, step, bw, reach) {
+		// (this leg ends at the top; the next, just short of where the scan began)
+		var end = s.wrapped ? s.from - step / 2 : s.hi, top = Math.min(dr[1], end), i;
+		if (s.at <= top) for (i = 0; i < sig.length; i++) if (sig[i].f >= s.at && sig[i].f <= top) return { tune: sig[i].f };
+		if (top < end) {
+			// (from half a channel under the top: what only shows at the very end of a line is not counted)
+			s.at = Math.max(top - bw / 2, s.at + 1);
+			return { move: true };
+		}
+		if (!s.wrapped) {                       // the top: on, from the bottom
+			s.wrapped = true;
+			s.at = s.lo;
+		} else if (s.band) {                    // once round the band, nothing else in it: on, above it
+			s.left = s.band;
+			s.band = "";
+			s.at = s.hi;
+			s.lo = reach[0];
+			s.hi = reach[1];
+			s.wrapped = false;
+		} else {
+			return { over: true };
+		}
+		return s.at >= dr[0] && s.at <= dr[1] ? { look: true } : { move: true };
+	}
+	function scanCentre(at, rate, below, limits) {
+		return Math.round(clamp(at + rate * 0.45 + below, limits[0], limits[1]));
 	}
 
 	/* ---------- sound ----------
@@ -274,6 +446,7 @@
 		var upBtn = el("button", { type: "button", class: "btn sdr-nudge", text: "▶", title: "One step up (right arrow key)" });
 		var favBtn = el("button", { type: "button", class: "btn sdr-star", text: "☆", "aria-label": "Favourite" });
 		var favBox = el("div", { class: "sdr-favs" });
+		var scanBtn = null;
 		var modeBox = el("div", { class: "sdr-modes", role: "group", "aria-label": "How to listen" });
 		var meterFill = el("span"), meterMark = el("i");
 		var meterTxt = el("span", { class: "sdr-meter-txt", text: "" });
@@ -603,6 +776,7 @@
 			cur = row;
 			followRange(q);
 			applySquelch(false);
+			if (scan) scanLook();
 			dirty.spec = true;
 			if (hover) dirty.over = true;
 		}
@@ -691,6 +865,7 @@
 				halt("The receiver stopped", (ev && ev.message) || "its engine failed to load");
 			};
 			st.running = true;
+			noteText = "";
 			hist = []; cur = null; specAvg = null; range.set = false; needFull = true; lastStat = null;
 			// The gains kept from last time go to the radio with the start: what
 			// it says of its gains before then is not news
@@ -712,6 +887,7 @@
 			if (hwT) { clearTimeout(hwT); hwT = null; }
 			hwNext = {};
 			st.running = false;
+			if (scan) { if (scan.timer) clearTimeout(scan.timer); scan = null; paintScan(); }
 			audio.stop();
 			meterFill.style.width = "0";
 			meterTxt.textContent = "";
@@ -750,7 +926,9 @@
 			meterTxt.textContent = m.outside ? "" : Math.round(lvl) + " dB";
 			var parts = [(opts.demo || (st.info && st.info.sim) ? "A simulated radio" : radioName()),
 				fmtHz(st.rate) + " wide"], kind = "";
-			if (m.outside) parts.push("the dial is outside what the radio takes in: click the display to tune");
+			if (scan) parts.unshift(scanSays());
+			else if (noteText && Date.now() < noteUntil) parts.unshift(noteText);
+			if (m.outside && !scan) parts.push("the dial is outside what the radio takes in: click the display to tune");
 			if (typeof m.load === "number") parts.push("this computer " + Math.round(m.load * 100) + "% busy");
 			if (m.dropped) parts.push(m.dropped + " lost on the network");
 			if (m.clients > 1) parts.push(m.clients + " listening");
@@ -775,7 +953,9 @@
 
 		/* --- tuning --- */
 
-		function snap(f) { return Math.round(f / st.step) * st.step; }
+		// On the dial's steps: counted from a channel, in a band whose channels are off the whole steps
+		function stepOff(f) { var b = bandAt(f); return b && b.off && st.step === b.step ? b.off : 0; }
+		function snap(f) { var off = stepOff(f); return Math.round((f - off) / st.step) * st.step + off; }
 		function limits() { return st.info && st.info.range && st.info.range.length === 2 ? st.info.range : [1e6, 6e9]; }
 
 		function setCenter(c) {
@@ -801,12 +981,14 @@
 		// One step: past the edge of the band the radio comes along, so the
 		// dial stays where it is on the screen
 		function nudge(steps) {
+			endScan();
 			var f = snap(st.vfo) + steps * st.step;
 			if (!inBand(f) && inBand(st.vfo)) setCenter(st.center + (f - st.vfo));
 			tune(f);
 		}
 		// Slide along the band: the view first, then the radio itself
 		function pan(df) {
+			endScan();
 			var want = st.viewCenter + df, half = span() / 2;
 			var lo = st.center - st.rate / 2 + half, hi = st.center + st.rate / 2 - half;
 			if (want < lo) setCenter(st.center + (want - lo));
@@ -818,6 +1000,7 @@
 		function setZoom(z, keepF, keepFrac) {
 			z = clamp(z, ZOOMS[0], ZOOMS[ZOOMS.length - 1]);
 			if (z === st.zoom) return;
+			endScan();
 			st.zoom = z;
 			// What was under the pointer stays under it; without one, the dial stays in view
 			if (keepF != null) st.viewCenter = keepF - (keepFrac - 0.5) * span();
@@ -828,6 +1011,7 @@
 		}
 		function setMode(id) {
 			if (!MODES[id] || id === st.mode) return;
+			endScan();
 			st.mode = id;
 			st.bw = MODES[id].bw;
 			st.step = MODES[id].step;
@@ -839,6 +1023,7 @@
 			save();
 		}
 		function goBand(b) {
+			endScan();
 			st.mode = b.mode;
 			st.bw = MODES[b.mode].bw;
 			st.step = b.step || MODES[b.mode].step;
@@ -853,25 +1038,141 @@
 			paint();
 			save();
 		}
-		// The strongest channel in view: the most power in any stretch as wide
-		// as the channel, not merely the tallest bin
-		function strongest() {
-			if (!cur || !specAvg) return;
-			var n = cur.n, binHz = cur.rate / n, base = cur.center - cur.rate / 2;
-			var a = clamp(Math.floor((viewLo() - base) / binHz), 0, n - 1),
-				b = clamp(Math.ceil((viewLo() + span() - base) / binHz), a + 1, n);
-			var k = Math.max(1, Math.round(st.bw / binHz)), sum = 0, best = -1, bestAt = a, i;
-			var lin = new Float64Array(b - a);
-			for (i = a; i < b; i++) lin[i - a] = Math.pow(10, specAvg[i] / 10);
-			for (i = 0; i < lin.length; i++) {
-				sum += lin[i];
-				if (i >= k) sum -= lin[i - k];
-				if (i >= k - 1 && sum > best) { best = sum; bestAt = a + i - (k - 1) / 2; }
+		/* --- the scan: up the dial, a while on every signal that stands out ---
+		   It goes on until it is stopped: by its button, or by tuning by
+		   hand. It looks first in what the radio takes in now; then, with
+		   nothing there above where it has got to, the radio itself goes up,
+		   a span at a time, each look waiting for a few lines of what it
+		   hears there. On a signal it stays, to be listened to, and then
+		   goes on from it. Where it looks next is scanStep's to say (above):
+		   round the band that is being listened to, then on above it;
+		   anywhere else, on up the dial. No sound while the radio is on its
+		   way. */
+
+		var SCAN_LINES = 6;            // lines of the spectrum listened to after the radio has moved
+		var SCAN_STAY = 5000;          // ms on a signal before the scan goes on
+		var SCAN_BACK = 2500;          // ms after going on in which stopping still means the signal just left
+		var scan = null, noteText = "", noteUntil = 0;
+
+		// Something the status line goes on saying for a few seconds
+		function note(text) {
+			noteText = text;
+			noteUntil = Date.now() + 8000;
+			if (!st.running) say(text);
+		}
+		// What a scan has to say of itself, while there is one
+		function scanSays() {
+			if (!scan) return "";
+			if (scan.stay) {
+				return "Scanning: here for " + Math.max(1, Math.ceil((scan.stay.until - Date.now()) / 1000)) +
+					" s more, then on. Stop scan to stay.";
 			}
-			var f = base + (bestAt + 0.5) * binHz;
-			if (st.mode === "usb") f -= st.bw / 2;
-			if (st.mode === "lsb") f += st.bw / 2;
-			tune(snap(f));
+			return scan.said || "Scanning…";
+		}
+		// The dial frequencies whose channel lies inside what the radio takes in
+		function dialRange() {
+			var e = chanEdges(0);
+			return [st.center - st.rate * 0.47 - e[0], st.center + st.rate * 0.47 - e[1]];
+		}
+		// The button, and the status line at once (not at the meter's next reading)
+		function paintScan() {
+			scanBtn.textContent = scan ? "Stop scan" : "Scan";
+			scanBtn.classList.toggle("on", !!scan);
+			if (st.running && lastStat) onMeter(lastStat);
+		}
+		// The button: a scan begins; or the one there is stops. Stopped a
+		// moment after it went on from a signal, it is that signal that was
+		// meant: back to it.
+		function scanButton() {
+			var sc = scan;
+			if (!sc) {
+				if (!st.running || !cur || !specAvg) { note("Press Start first: a scan goes by what the radio hears."); return; }
+				noteText = "";
+				scan = { s: scanFrom(st.vfo, st.mode, st.step, reach()), wait: null, quiet: false, stay: null, timer: null, last: null, said: "" };
+				paintScan();
+				scanLook();
+				return;
+			}
+			var back = !sc.stay && sc.last && Date.now() - sc.last.at < SCAN_BACK ? sc.last.f : null;
+			endScan();
+			if (back != null) tune(back);
+		}
+		// Over: stopped, by the button or by tuning by hand; or nothing found anywhere
+		function endScan(text) {
+			var sc = scan;
+			if (!sc) return;
+			scan = null;
+			if (sc.timer) clearTimeout(sc.timer);
+			if (sc.quiet) push({ audio: true });
+			if (text) note(text);
+			paintScan();
+		}
+		// With a line of the spectrum to go by: a signal above where the scan
+		// has got to? If not, the radio goes further up, and the next look
+		// waits for what it hears there.
+		function scanLook() {
+			var sc = scan;
+			if (!sc || sc.stay || !cur || !specAvg) return;
+			if (sc.wait) {
+				if (Math.abs(cur.center - sc.wait.center) > 1 || cur.rate !== st.rate) {
+					if (Date.now() - sc.wait.since > 4000) endScan("The radio did not go where the scan sent it: the scan has stopped.");
+					return;
+				}
+				if (++sc.wait.lines < SCAN_LINES) return;
+				sc.wait = null;
+			}
+			var sig = signalsIn(specAvg, cur.center, cur.rate, { bw: st.bw, mode: st.mode, step: st.step, off: stepOff(st.vfo), margin: SCAN_MARGIN });
+			if (!sig) {
+				endScan("The channel is too wide a part of this span to scan by: choose a wider span.");
+				return;
+			}
+			var s = sc.s, r, tries = 0, band, from;
+			do {
+				band = s.band;
+				r = scanStep(s, dialRange(), sig, st.step, st.bw, reach());
+				if (band && s.left) sc.said = "Scanning: nothing else stands out in " + s.left + ", so on above it…";
+			} while (r.look && ++tries < 4);
+			if (r.tune != null) {
+				scanStay(r.tune);
+			} else if (r.over) {
+				from = s.from;
+				endScan("Nothing stands out anywhere this radio tunes: the scan has stopped.");
+				tune(from);
+			} else {
+				scanMove();
+			}
+		}
+		// On a signal: the dial there, its sound on, and after a while on from it
+		function scanStay(f) {
+			var sc = scan;
+			sc.stay = { f: f, until: Date.now() + SCAN_STAY };
+			sc.said = "";
+			if (sc.quiet) { sc.quiet = false; push({ audio: true }); }
+			tune(f);
+			sc.timer = setTimeout(function () {
+				if (scan !== sc || !sc.stay) return;
+				sc.timer = null;
+				sc.last = { f: sc.stay.f, at: Date.now() };
+				scanOn(sc.s, sc.stay.f, st.step);
+				sc.stay = null;
+				scanLook();
+				paintScan();
+			}, SCAN_STAY);
+			paintScan();
+		}
+		// The radio, up to where the scan has got to: that frequency just
+		// inside the bottom of what it takes in
+		function scanMove() {
+			var sc = scan, s = sc.s, e = chanEdges(0);
+			var c = scanCentre(s.at, st.rate, e[0], limits());
+			if (!sc.quiet) { sc.quiet = true; push({ audio: false }); }
+			st.center = c;
+			cmdAt.center = Date.now();
+			st.vfo = snap(clamp(s.at, c - st.rate * 0.47 - e[0], c + st.rate * 0.47 - e[1]));
+			push({ center: c, vfo: st.vfo });
+			sc.wait = { center: c, lines: 0, since: Date.now() };
+			fitView();
+			paint();
 		}
 
 		/* --- favourites: channels kept, to come back to --- */
@@ -895,6 +1196,7 @@
 				say("This browser did not keep that: its storage for this page is switched off, or full.", "err");
 		}
 		function goFav(v) {
+			endScan();
 			closeFavForm();
 			if (v.mode !== st.mode || v.bw !== st.bw) {
 				st.mode = v.mode;
@@ -1082,7 +1384,7 @@
 		freqIn.addEventListener("keydown", function (ev) {
 			if (ev.key === "Enter") {
 				var f = parseFreq(freqIn.value);
-				if (f) { freqIn.blur(); tune(f); } else freqIn.select();
+				if (f) { freqIn.blur(); endScan(); tune(f); } else freqIn.select();
 			} else if (ev.key === "Escape") { freqIn.value = fmtMHz(st.vfo); freqIn.blur(); }
 		});
 		freqIn.addEventListener("focus", function () { freqIn.select(); });
@@ -1101,12 +1403,15 @@
 			bandBox.appendChild(el("button", { type: "button", class: "sdr-band", "data-band": String(i), text: b.label,
 				title: fmtMHz(b.tune) + " MHz, " + MODES[b.mode].label, onclick: function () { goBand(b); } }));
 		});
-		bandBox.appendChild(el("button", { type: "button", class: "sdr-band sdr-find", text: "Strongest signal",
-			title: "Tune to the strongest signal in view", onclick: strongest }));
+		scanBtn = el("button", { type: "button", class: "sdr-band sdr-find", text: "Scan",
+			title: "Scan up the dial: a few seconds on every signal that stands out, then on to the next, until you stop it. Stop it on one to stay there.",
+			onclick: scanButton });
+		bandBox.appendChild(scanBtn);
 
 		muteBtn.addEventListener("click", function () { st.muted = !st.muted; audio.mute(st.muted); paint(); });
 		volIn.addEventListener("input", function () { st.volume = +volIn.value / 100; audio.volume(st.volume); save(); });
 		rateSel.addEventListener("change", function () {
+			endScan();
 			st.rate = +rateSel.value;
 			pushHw({ rate: st.rate });
 			if (!inBand(st.vfo)) setCenter(st.vfo - offset());
@@ -1114,7 +1419,7 @@
 			paint();
 			save();
 		});
-		bwSel.addEventListener("change", function () { st.bw = +bwSel.value; push({ bw: st.bw }); applySquelch(true); paint(); save(); });
+		bwSel.addEventListener("change", function () { endScan(); st.bw = +bwSel.value; push({ bw: st.bw }); applySquelch(true); paint(); save(); });
 		stepSel.addEventListener("change", function () { st.step = +stepSel.value; save(); });
 		sqIn.addEventListener("input", function () {
 			st.squelch = +sqIn.value <= -110 ? null : +sqIn.value;
@@ -1166,7 +1471,7 @@
 			if (!drag || ev.pointerId !== drag.id) return;
 			var d = drag;
 			drag = null;
-			if (!d.moved && ev.type === "pointerup") tune(snap(fAtCss(d.x)));
+			if (!d.moved && ev.type === "pointerup") { endScan(); tune(snap(fAtCss(d.x))); }
 		}
 		over.addEventListener("pointerup", endDrag);
 		over.addEventListener("pointercancel", endDrag);
@@ -1226,5 +1531,9 @@
 		};
 	}
 
-	window.PirateSDR = { mount: mount };
+	// (pure: the parts with no page to them, for tests/sdr/page.test.js)
+	window.PirateSDR = { mount: mount, pure: {
+		signalsIn: signalsIn, scanFrom: scanFrom, scanStep: scanStep, scanOn: scanOn, scanCentre: scanCentre,
+		cleanFavs: cleanFavs, SCAN_MARGIN: SCAN_MARGIN
+	} };
 })();

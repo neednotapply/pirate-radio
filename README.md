@@ -185,7 +185,16 @@ and a waterfall, and its sound — broadcast FM, narrow FM, AM, sideband and
 Morse. Click a signal to tune to it, drag to move along the band, scroll to
 zoom, or type a frequency; the buttons above the display go to places worth a
 listen (FM radio, aircraft, weather radio, marine, the amateur bands), and
-*Strongest signal* tunes to the strongest thing in view. The star beside the
+*Scan* goes up the dial and stays five seconds on every signal that stands
+out from the noise (8 dB over it in its channel: about what the squelch opens
+for when it sets itself), then goes on to the next, until it is stopped: by
+its button, which leaves the dial on the signal it is on (or has just left),
+or by tuning by hand. With no signal in what the radio takes in, the radio
+itself goes up, a span at a time. In one of those bands, listened to the
+band's own way (broadcast FM in wide FM, aircraft in AM, the two-way bands in
+narrow FM), the scan keeps to the band and goes round it, from signal to
+signal; a band with nothing else in it is left behind, and the scan goes on
+above it, as it does anywhere else. The star beside the
 frequency keeps the channel the dial is on as a favourite, under a name (its
 frequency, how it is listened to and how wide): favourites sit in a row above
 the display, a click goes back to one, and the star on one that is kept
@@ -720,8 +729,11 @@ Tested in this repository's tests and builds:
   checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
-  made by the formula, and the engine against a stand-in for the bridge
-  (`node tests/sdr/run.js`, 53 tests); and the bridge, built for the machine
+  made by the formula, the engine against a stand-in for the bridge, and
+  the page's own reckoning: where a scan finds signals in a line of the
+  spectrum, where it looks next, and what is made of the favourites a
+  browser kept (`node tests/sdr/run.js`, 75 tests); and the bridge, built
+  for the machine
   at hand with its simulated radio, through its protocol end to end, then
   with the engine run against it, then again under the address and
   undefined-behaviour sanitizers (`sh tests/websdr/run.sh`, 30 and 6 tests);
@@ -757,7 +769,17 @@ Not yet run:
   radio kept open, each at the radio's pace with nothing lost, and the span
   changed between 2.4 and 4.8 MHz four times, the frames coming 50 and 100 a
   second as they should. Listened to in the browser since, Stop and Start
-  sound right; and favourites have been kept and recalled there. Before
+  sound right; and favourites have been kept and recalled there. The Scan
+  button's first form (to the next signal at a press) was run on that
+  HackRF with the page in a browser on a computer, the stream relayed to
+  it: from 96.9 MHz to the next stations up, 100.7 and 102.5, and from
+  there round the top of the FM band to 96.9 again in 2.4 s (they are the
+  three that stand 10 dB over the noise there). Tried in the router's own
+  page at 160 MHz, it came back to where it began: it kept to the marine
+  band, which had nothing else in it. The scan as it is now (staying on each
+  signal and going on by itself, and leaving a band with nothing else in
+  it) has been run in a browser against the simulated band, and then tried
+  in the router's own page on that HackRF, where it worked. Before
   that, the receiver's two halves were run there with the page's engine
   driven from Node on a computer on the LAN: against the bridge's simulated
   radio (every simulated station heard as the tone it carries, no frame lost

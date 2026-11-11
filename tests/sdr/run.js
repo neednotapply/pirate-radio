@@ -5,6 +5,8 @@
    dsp.test.js     the signal processing, against signals made by the formula
    siggen.test.js  the simulated band the demo and the mock bridge play
    engine.test.js  the engine, in demo mode and against a mock of the bridge
+   page.test.js    the page's own reckoning: where a scan finds signals, and
+                   what is made of the favourites a browser kept
    bench.js        how fast it is (reported; a failure only with --strict, or
                    when it could not keep up with the radio at all)
 
@@ -22,6 +24,8 @@
 	failed += await require("./siggen.test.js")();
 	console.log("");
 	failed += await require("./engine.test.js")();
+	console.log("");
+	failed += await require("./page.test.js")();
 	if (process.argv.indexOf("--no-bench") < 0 && !process.env.ONLY) {
 		console.log("");
 		const b = require("./bench.js").bench({ quick: true });
