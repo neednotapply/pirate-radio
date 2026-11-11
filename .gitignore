@@ -1,2 +1,6 @@
 out/
 build/
+__pycache__/
+# pirate-websdr built in its source directory (make -C feed/utils/pirate-websdr/src)
+feed/utils/pirate-websdr/src/*.o
+feed/utils/pirate-websdr/src/pirate-websdr
