@@ -185,7 +185,13 @@ and a waterfall, and its sound — broadcast FM, narrow FM, AM, sideband and
 Morse. Click a signal to tune to it, drag to move along the band, scroll to
 zoom, or type a frequency; the buttons above the display go to places worth a
 listen (FM radio, aircraft, weather radio, marine, the amateur bands), and
-*Strongest signal* tunes to the strongest thing in view. Between stations it
+*Strongest signal* tunes to the strongest thing in view. The star beside the
+frequency keeps the channel the dial is on as a favourite, under a name (its
+frequency, how it is listened to and how wide): favourites sit in a row above
+the display, a click goes back to one, and the star on one that is kept
+renames or removes it. They are kept in the browser, not on the router, as
+the rest of what the page remembers is: another browser, or the router under
+another address, starts without them. Between stations it
 is quiet: the squelch sets itself a little above the noise (or is set by
 hand). It needs the radio to itself: when a job holds it the page says which, and stops it on request,
 and a PortaPack in Mayhem mode is switched to HackRF mode first. Giving the
@@ -751,7 +757,7 @@ Not yet run:
   radio kept open, each at the radio's pace with nothing lost, and the span
   changed between 2.4 and 4.8 MHz four times, the frames coming 50 and 100 a
   second as they should. Listened to in the browser since, Stop and Start
-  sound right. Before
+  sound right; and favourites have been kept and recalled there. Before
   that, the receiver's two halves were run there with the page's engine
   driven from Node on a computer on the LAN: against the bridge's simulated
   radio (every simulated station heard as the tone it carries, no frame lost

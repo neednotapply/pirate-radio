@@ -1158,6 +1158,15 @@ a { color: var(--link); }
 .sdr-band:hover { border-color: var(--line-3); color: var(--hi); }
 .sdr-band.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 .sdr-find { margin-left: auto; color: var(--link); border-style: dashed; }
+/* Favourites: the star beside the dial, and the channels it has kept */
+.sdr-star { padding: 6px 9px; font-size: 15px; line-height: 1.15; color: var(--muted); }
+.sdr-favs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; }
+.sdr-favs > .sdr-lbl { margin-right: 4px; }
+.sdr-fav { max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sdr-fav:disabled { opacity: .45; cursor: default; border-color: var(--line-2); color: var(--muted); }
+.sdr-favhint { font-size: 12px; color: var(--muted); }
+.sdr-favedit { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sdr-favedit .inp { width: 20ch; padding: 3px 8px; font-size: 12px; }
 .sdr-display {
 	position: relative; overflow: hidden; line-height: 0; user-select: none; -webkit-user-select: none;
 	border: 1px solid var(--line-2); border-radius: var(--r); background: var(--inset);

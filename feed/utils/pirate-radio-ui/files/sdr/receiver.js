@@ -120,6 +120,30 @@
 		try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (e) {}
 	}
 
+	// Favourites: channels to come back to, kept with the rest of what this
+	// browser remembers, for both radios. Each has a name, a frequency, and
+	// how it is listened to. What is kept is not trusted to be whole: only
+	// what makes sense comes out of it, one of each channel, along the dial.
+	var MAX_FAVS = 100, FAV_NAME = 28;
+	function shortMHz(hz) { return String(+(hz / 1e6).toFixed(6)); }
+	function favName(text, f, mode) {
+		return String(text == null ? "" : text).replace(/\s+/g, " ").trim().slice(0, FAV_NAME) || shortMHz(f) + " " + MODES[mode].label;
+	}
+	function cleanFavs(list) {
+		var out = [];
+		(Array.isArray(list) ? list : []).forEach(function (v) {
+			if (!v || typeof v.f !== "number" || !isFinite(v.f) || v.f <= 0 || !MODES[v.mode] || out.length >= MAX_FAVS) return;
+			var f = Math.round(v.f);
+			if (out.some(function (o) { return o.f === f && o.mode === v.mode; })) return;
+			out.push({
+				name: favName(v.name, f, v.mode), f: f, mode: v.mode,
+				bw: typeof v.bw === "number" && v.bw > 0 ? v.bw : MODES[v.mode].bw,
+				step: typeof v.step === "number" && v.step > 0 ? v.step : MODES[v.mode].step
+			});
+		});
+		return out.sort(function (a, b) { return a.f - b.f || (a.mode < b.mode ? -1 : a.mode > b.mode ? 1 : 0); });
+	}
+
 	/* ---------- sound ----------
 	   The page is not a secure context (plain HTTP), so there is no
 	   AudioWorklet: each piece of audio the engine sends becomes a buffer
@@ -204,6 +228,7 @@
 		var radio = opts.radio === "rtlsdr" ? "rtlsdr" : "hackrf";
 		var prefs = loadPrefs(), mine = prefs[radio] || {};
 		var alive = true, worker = null, audio = new AudioOut();
+		var favs = cleanFavs(prefs.favs), favChips = [], favForm = null, favReach = "";
 
 		var st = {
 			running: false,
@@ -247,6 +272,8 @@
 			title: "The frequency you are listening to, in MHz. Type another and press Enter." });
 		var downBtn = el("button", { type: "button", class: "btn sdr-nudge", text: "◀", title: "One step down (left arrow key)" });
 		var upBtn = el("button", { type: "button", class: "btn sdr-nudge", text: "▶", title: "One step up (right arrow key)" });
+		var favBtn = el("button", { type: "button", class: "btn sdr-star", text: "☆", "aria-label": "Favourite" });
+		var favBox = el("div", { class: "sdr-favs" });
 		var modeBox = el("div", { class: "sdr-modes", role: "group", "aria-label": "How to listen" });
 		var meterFill = el("span"), meterMark = el("i");
 		var meterTxt = el("span", { class: "sdr-meter-txt", text: "" });
@@ -283,10 +310,11 @@
 		root.appendChild(el("div", { class: "sdr" },
 			el("div", { class: "sdr-top" },
 				powerBtn,
-				el("div", { class: "sdr-freqbox" }, downBtn, freqIn, el("span", { class: "sdr-unit", text: "MHz" }), upBtn),
+				el("div", { class: "sdr-freqbox" }, downBtn, freqIn, el("span", { class: "sdr-unit", text: "MHz" }), upBtn, favBtn),
 				modeBox, meter,
 				el("div", { class: "sdr-volbox" }, muteBtn, volIn)),
 			bandBox,
+			favBox,
 			display,
 			el("div", { class: "sdr-controls" },
 				field("Span", "How much of the band the radio takes in. Wider needs a faster network and more of this computer.", rateSel),
@@ -739,6 +767,7 @@
 			// Somebody else moved the radio from under the dial: the dial follows
 			if (!inBand(st.vfo)) { st.vfo = snap(st.center + offset()); push({ vfo: st.vfo }); }
 			buildRadio();
+			if (reach().join() !== favReach) buildFavs();   // (what it tunes is known now)
 			fitView();
 			paint();
 			save();
@@ -845,6 +874,114 @@
 			tune(snap(f));
 		}
 
+		/* --- favourites: channels kept, to come back to --- */
+
+		// The one the dial is on, if it is one
+		function favHere() {
+			for (var i = 0; i < favs.length; i++) if (favs[i].f === st.vfo && favs[i].mode === st.mode) return favs[i];
+			return null;
+		}
+		// What this radio tunes: as it says once it is open, as its kind does before
+		function reach() {
+			return st.info && st.info.range && st.info.range.length === 2 ? st.info.range
+				: radio === "rtlsdr" ? [24e6, 1766e6] : [1e6, 6e9];
+		}
+		// Into what this browser remembers; and said, when it would not keep it
+		function keepFavs() {
+			var p = loadPrefs();
+			p.favs = favs;
+			savePrefs(p);
+			if (JSON.stringify(cleanFavs(loadPrefs().favs)) !== JSON.stringify(favs))
+				say("This browser did not keep that: its storage for this page is switched off, or full.", "err");
+		}
+		function goFav(v) {
+			closeFavForm();
+			if (v.mode !== st.mode || v.bw !== st.bw) {
+				st.mode = v.mode;
+				st.bw = v.bw;
+				push({ mode: st.mode, bw: st.bw });
+				applySquelch(true);
+			}
+			st.step = v.step;
+			buildSelects();
+			tune(v.f);
+		}
+		// The row of them: a favourite this radio cannot reach is shown, not offered
+		function buildFavs() {
+			var r = reach(), here = favHere();
+			favReach = r.join();
+			favChips = [];
+			clear(favBox);
+			favBox.appendChild(el("span", { class: "sdr-lbl", text: "Favourites" }));
+			favs.forEach(function (v) {
+				var far = v.f < r[0] || v.f > r[1];
+				var b = el("button", { type: "button", class: "sdr-band sdr-fav" + (v === here ? " on" : ""), text: v.name,
+					title: fmtMHz(v.f) + " MHz, " + MODES[v.mode].label + (far ? ": outside what this radio tunes" : ""),
+					onclick: function () { goFav(v); } });
+				b.disabled = far;
+				favChips.push({ b: b, v: v });
+				favBox.appendChild(b);
+			});
+			if (favForm) favBox.appendChild(favForm);
+			else if (!favs.length) favBox.appendChild(el("span", { class: "sdr-favhint",
+				text: "none yet: tune to a channel and press ☆ beside the frequency to keep it here" }));
+		}
+		// The star: keep the channel the dial is on, under a name. On one that
+		// is kept already: another name for it, or let it go.
+		function openFavForm() {
+			var was = favHere();
+			if (!was && favs.length >= MAX_FAVS) { say("That is " + MAX_FAVS + " favourites: let one go first.", "err"); return; }
+			var ch = { f: st.vfo, mode: st.mode, bw: st.bw, step: st.step };
+			var nameIn = el("input", { class: "inp", type: "text", maxlength: String(FAV_NAME), spellcheck: "false",
+				autocomplete: "off", "aria-label": "A name for this favourite" });
+			nameIn.value = was ? was.name : favName("", ch.f, ch.mode);
+			function done() {
+				favForm = null;
+				keepFavs();
+				buildFavs();
+				paint();
+				favBtn.focus();
+			}
+			// (by where they are, not by which was found when the form opened:
+			// another tab may have kept the same channel meanwhile)
+			function others() { return favs.filter(function (v) { return v.f !== ch.f || v.mode !== ch.mode; }); }
+			function keep() {
+				ch.name = favName(nameIn.value, ch.f, ch.mode);
+				favs = cleanFavs([ch].concat(others()));
+				done();
+			}
+			function drop() {
+				favs = others();
+				done();
+			}
+			nameIn.addEventListener("keydown", function (ev) {
+				if (ev.key === "Enter") { ev.preventDefault(); keep(); }
+				else if (ev.key === "Escape") { ev.preventDefault(); closeFavForm(); favBtn.focus(); }
+			});
+			favForm = el("span", { class: "sdr-favedit" },
+				el("span", { class: "sdr-val", text: fmtMHz(ch.f) + " " + MODES[ch.mode].label }), nameIn,
+				el("button", { type: "button", class: "btn small primary", text: "Save", onclick: keep }),
+				was ? el("button", { type: "button", class: "btn small reset", text: "Remove", onclick: drop }) : null,
+				el("button", { type: "button", class: "btn small", text: "Cancel", onclick: closeFavForm }));
+			buildFavs();
+			nameIn.focus();
+			nameIn.select();
+		}
+		function closeFavForm() {
+			if (!favForm) return;
+			favForm = null;
+			buildFavs();
+		}
+		// Kept in another tab or window of this browser: shown here too
+		function onStorage(ev) {
+			if (ev.key !== PREF_KEY && ev.key !== null) return;
+			var theirs = cleanFavs(loadPrefs().favs);
+			if (JSON.stringify(theirs) === JSON.stringify(favs)) return;
+			favs = theirs;
+			buildFavs();
+			paint();
+		}
+
 		/* --- the controls, kept in step with what is so --- */
 
 		function option(sel, value, label) { sel.appendChild(el("option", { value: String(value), text: label })); }
@@ -923,6 +1060,12 @@
 			});
 			muteBtn.textContent = st.muted ? "Unmute" : "Mute";
 			muteBtn.classList.toggle("on", st.muted);
+			var here = favHere();
+			favBtn.textContent = here ? "★" : "☆";
+			favBtn.classList.toggle("on", !!here);
+			favBtn.setAttribute("aria-pressed", here ? "true" : "false");
+			favBtn.title = here ? "“" + here.name + "” is a favourite: rename it, or remove it" : "Keep this channel as a favourite";
+			favChips.forEach(function (c) { c.b.classList.toggle("on", c.v === here); });
 			paintSquelch();
 			zoomTxt.textContent = st.zoom + "×";
 			zoomOut.disabled = st.zoom <= ZOOMS[0];
@@ -946,6 +1089,7 @@
 		freqIn.addEventListener("blur", function () { freqIn.value = fmtMHz(st.vfo); });
 		downBtn.addEventListener("click", function () { nudge(-1); });
 		upBtn.addEventListener("click", function () { nudge(1); });
+		favBtn.addEventListener("click", function () { if (favForm) closeFavForm(); else openFavForm(); });
 
 		MODE_ORDER.forEach(function (id) {
 			modeBox.appendChild(el("button", { type: "button", class: "sdr-mode", "data-mode": id, text: MODES[id].label,
@@ -1053,11 +1197,13 @@
 		var ro = null;
 		if (window.ResizeObserver) { ro = new ResizeObserver(resize); ro.observe(display); }
 		window.addEventListener("resize", resize);
+		window.addEventListener("storage", onStorage);
 
 		/* --- begin --- */
 
 		buildSelects();
 		buildRadio();
+		buildFavs();
 		paint();
 		showMsg("Press Start to listen", opts.demo ? "A simulated band: no radio is used." : "");
 		if (!audio.ok) say("This browser has no Web Audio: the display works, there is no sound.", "err");
@@ -1072,6 +1218,7 @@
 				cancelAnimationFrame(raf);
 				document.removeEventListener("keydown", onKey);
 				window.removeEventListener("resize", resize);
+				window.removeEventListener("storage", onStorage);
 				if (ro) ro.disconnect();
 				audio.close();
 				if (saveT) { clearTimeout(saveT); saveT = null; }
