@@ -745,18 +745,24 @@ Not yet run:
   the stop falls on a buffer half read, one in four or so, it hands out old
   samples from then on, as fast as they are asked for: three times the
   radio's pace, as measured here), and that is what the bridge did. The
-  bridge now makes a new stream for every start; that is tested against a
-  stand-in for the driver, and not yet run on the device. Before
+  bridge now makes a new stream for every start (0.1.1). That is tested
+  against a stand-in for the driver, and has been run on the device with the
+  page's engine driven from Node: eight Stops and Starts in a row with the
+  radio kept open, each at the radio's pace with nothing lost, and the span
+  changed between 2.4 and 4.8 MHz four times, the frames coming 50 and 100 a
+  second as they should. Listened to in the browser since, Stop and Start
+  sound right. Before
   that, the receiver's two halves were run there with the page's engine
   driven from Node on a computer on the LAN: against the bridge's simulated
   radio (every simulated station heard as the tone it carries, no frame lost
   at 2.4 Msps, the router about 28 % busy and the bridge at 3 MB), and in one
   session of 22 s on the HackRF: no frame lost, no overflow, broadcast FM
   stations found along the band and one of them demodulated to programme
-  audio, the radio closed 5 s after the listener left. Untested: spans wider
-  than 2.4 MHz and several listeners on the real radio, the RTL-SDR through
-  the bridge, a job taking the radio back from a page that listens, and a
-  phone.
+  audio, the radio closed 5 s after the listener left. Untested: sound at
+  spans wider than 2.4 MHz (4.8 MHz has only been streamed, 3 s at a time,
+  with nothing lost), several listeners on the real radio, the RTL-SDR
+  through the bridge, a job taking the radio back from a page that listens,
+  and a phone.
 - The HackRF decoder paths (`option radio 'hackrf'`): ADS-B through readsb, ISM
   through rtl_433's SoapySDR backend, AIS through AIS-catcher, all on
   `driver=hackrf`. The packages cross-compile and the job wiring is covered by
