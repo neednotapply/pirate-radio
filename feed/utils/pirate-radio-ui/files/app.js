@@ -91,6 +91,7 @@
 	// Mutable demo job table so "Use the radio" visibly switches jobs in demo.
 	var DEMO_JOBS = [
 		{ name: "soapy", type: "soapy_server", radio: "-", state: "running" },
+		{ name: "websdr", type: "websdr", radio: "-", state: "running" },
 		{ name: "adsb", type: "adsb", radio: "rtlsdr", state: "running" },
 		{ name: "survey", type: "sweep", radio: "hackrf", state: "off" },
 		{ name: "rtltcp", type: "rtl_tcp", radio: "rtlsdr", state: "off" },
@@ -860,8 +861,9 @@
 			var stopped = [];
 			if (job) {
 				if (p.radio) job.radio = p.radio;
+				// (A job that holds no radio, "-", takes none from another)
 				DEMO_JOBS.forEach(function (j) {
-					if (j.radio === job.radio && j.name !== job.name && j.state !== "off") { j.state = "off"; stopped.push(j.name); }
+					if (job.radio !== "-" && j.radio === job.radio && j.name !== job.name && j.state !== "off") { j.state = "off"; stopped.push(j.name); }
 				});
 				job.state = "running";
 			}
@@ -1470,6 +1472,7 @@
 	}
 	var SDR_PAGES = [
 		["Pirate Radio status", "http://%s/cgi-bin/pirate-radio", null],
+		["Receiver in the browser (Listen)", "http://%s/#listen", "websdr"],
 		["Aircraft map", "http://%s:8080/", "adsb"],
 		["Recorded data", "http://%s:8081/pirate-radio/", null]
 	];
@@ -1881,8 +1884,12 @@
 	// it maps to and stops whatever else held that radio (one at a time). job:
 	// the pirate-radio job (a map by radio kind when they differ); setRadio:
 	// also point that job at the detected radio (ADS-B/ISM/AIS run on either);
-	// action "free": hand the radio to the always-on SoapySDR server (live use).
+	// action "free": leave the radio to whoever asks for it live — the receiver
+	// on the Listen page (open: the page a feature opens once the radio is
+	// free) or a program on a computer, through the always-on SoapySDR server.
 	var FEATURES = [
+		{ id: "web", label: "Listen in the browser", action: "free", open: "listen", radios: ["hackrf", "rtlsdr"],
+			desc: "A receiver right here: the band on screen and its sound — FM, AM, sideband." },
 		{ id: "live", label: "Live SDR on my computer", action: "free", radios: ["hackrf", "rtlsdr"],
 			desc: "Stream the raw radio to SDR++, GQRX, SDRangel or CubicSDR on your PC." },
 		{ id: "adsb", label: "Decode aircraft (ADS-B)", job: "adsb", setRadio: true, radios: ["hackrf", "rtlsdr"],
@@ -1914,6 +1921,39 @@
 			out.push({ kind: "hackrf", name: "HackRF (PortaPack, in Mayhem mode)", mayhem: true });
 		return out;
 	}
+	// The job holding a radio now (enabled, whatever it is doing), from the
+	// status text's jobs by name; and the feature that job is
+	function radioHolder(jobs, kind) {
+		for (var name in jobs)
+			if (jobs[name].radio === kind && jobs[name].state !== "off") return name;
+		return null;
+	}
+	function featureOfJob(job, kind) {
+		for (var i = 0; i < FEATURES.length; i++)
+			if (FEATURES[i].radios.indexOf(kind) >= 0 && featureJob(FEATURES[i], kind) === job) return FEATURES[i];
+		return null;
+	}
+	// Poll the status until the HackRF is back on USB after the PortaPack's
+	// switch of mode; say(text) hears how it is going.
+	function waitForHackrf(say) {
+		var tries = 0;
+		return new Promise(function (resolve, reject) {
+			(function poll() {
+				fetchSdrStatus().then(function (s) {
+					if (/^ {2}hackrf /m.test(s || "")) return resolve();
+					if (++tries > 20) return reject(new Error("the PortaPack did not come back in HackRF mode"));
+					say("Switching to HackRF mode… (" + (tries * 3) + "s)");
+					setTimeout(poll, 3000);
+				}).catch(function () { setTimeout(poll, 3000); });
+			})();
+		});
+	}
+	// The radio the Listen page is to open with (the one its feature was
+	// chosen under on the Receivers page); else the first one found
+	var LISTEN_RADIO = null;
+	// What the page on show has to put away when it is left (the Listen page:
+	// its receiver, which holds a radio and plays sound)
+	var LEAVE = null;
 
 	function renderReceivers() {
 		clear(VIEW);
@@ -1937,17 +1977,13 @@
 
 		var jobsMap = {};
 
-		// The feature currently active on a radio: the enabled (non-off) job
-		// holding it, mapped back to a feature; "live" when nothing holds it.
+		// The feature currently active on a radio: the one whose job holds
+		// it; "live" when nothing does.
 		function activeFeature(kind) {
-			var held = null, name;
-			for (name in jobsMap)
-				if (jobsMap[name].radio === kind && jobsMap[name].state !== "off") { held = name; break; }
+			var held = radioHolder(jobsMap, kind);
 			if (!held) return "live";
-			for (var i = 0; i < FEATURES.length; i++)
-				if (FEATURES[i].radios.indexOf(kind) >= 0 && featureJob(FEATURES[i], kind) === held)
-					return FEATURES[i].id;
-			return null;
+			var f = featureOfJob(held, kind);
+			return f ? f.id : null;
 		}
 
 		function go(feature, kind) {
@@ -1957,24 +1993,13 @@
 			return call("pirate.sdr", "use", p);
 		}
 
-		// Poll the status until the HackRF re-enumerates after a mode switch.
-		function waitForHackrf(statusEl) {
-			var tries = 0;
-			return new Promise(function (resolve, reject) {
-				(function poll() {
-					fetchSdrStatus().then(function (s) {
-						if (/^ {2}hackrf /m.test(s || "")) return resolve();
-						if (++tries > 20) return reject(new Error("the PortaPack did not come back in HackRF mode"));
-						statusEl.textContent = "Switching to HackRF mode… (" + (tries * 3) + "s)";
-						setTimeout(poll, 3000);
-					}).catch(function () { setTimeout(poll, 3000); });
-				})();
-			});
-		}
-
 		function activate(feature, radio, statusEl) {
 			statusEl.textContent = "Switching…";
-			var done = function () { return fetchSdrStatus().then(fillFeatures); };
+			// A feature with a page of its own goes there once the radio is free
+			var done = function () {
+				if (feature.open) { LISTEN_RADIO = radio.kind; return setTab(feature.open); }
+				return fetchSdrStatus().then(fillFeatures);
+			};
 			var fail = function (e) {
 				if (String(e.message || e) === "unauthorized") return onError(e);
 				statusEl.textContent = String(e.message || e);
@@ -1982,7 +2007,7 @@
 			if (radio.mayhem) {
 				statusEl.textContent = "Switching the PortaPack to HackRF mode…";
 				call("pirate.portapack", "hackrf", {})
-					.then(function () { return waitForHackrf(statusEl); })
+					.then(function () { return waitForHackrf(function (t) { statusEl.textContent = t; }); })
 					.then(function () { return go(feature, "hackrf"); })
 					.then(done).catch(fail);
 			} else {
@@ -1998,11 +2023,14 @@
 					"It booted into its Mayhem menu. Choosing a feature switches it to HackRF mode first (takes a few seconds)." }));
 			var active = activeFeature(radio.kind);
 			FEATURES.filter(function (f) { return f.radios.indexOf(radio.kind) >= 0; }).forEach(function (f) {
-				var on = f.id === active;
+				var on = f.id === active && !radio.mayhem;
 				var statusEl = el("span", { class: "muted small" });
-				var action = on
-					? badge("active", "sec-ok")
-					: btn("Use", { cls: "small", onclick: function () { activate(f, radio, statusEl); } });
+				var action;
+				if (f.open && active === "live" && !radio.mayhem)
+					// The radio is free already: straight to the feature's page
+					action = btn("Open", { primary: true, cls: "small", onclick: function () { LISTEN_RADIO = radio.kind; setTab(f.open); } });
+				else if (on) action = badge("active", "sec-ok");
+				else action = btn("Use", { cls: "small", onclick: function () { activate(f, radio, statusEl); } });
 				box.appendChild(el("div", { class: "feature" + (on ? " on" : "") },
 					el("div", { class: "feature-main" },
 						el("strong", { text: f.label }),
@@ -2054,6 +2082,167 @@
 		}
 
 		fetchSdrStatus().then(fillFeatures);
+	}
+
+	/* ---------- Listen: a receiver in the page ----------
+	   The spectrum, the waterfall and the sound are the receiver's own doing
+	   (sdr/receiver.js, and its engine in a worker): pirate-websdr on the
+	   router hands it the radio's raw samples over a WebSocket and the browser
+	   does the signal processing. This page sees to what must be so first:
+	   a radio in HackRF mode that no job holds, and the stream switched on. */
+
+	// The receiver's script, loaded the first time the page is opened
+	var sdrLoad = null;
+	function sdrReady() {
+		if (window.PirateSDR) return Promise.resolve();
+		if (!sdrLoad) {
+			sdrLoad = new Promise(function (ok, bad) {
+				var s = document.createElement("script");
+				s.src = "sdr/receiver.js" + (MC_UIV ? "?v=" + MC_UIV : "");
+				s.onload = function () { ok(); };
+				s.onerror = function () { bad(new Error("The receiver's script wouldn't load.")); };
+				document.head.appendChild(s);
+			});
+			sdrLoad.catch(function () { sdrLoad = null; });
+		}
+		return sdrLoad;
+	}
+
+	function renderListen() {
+		clear(VIEW);
+		VIEW.classList.add("view-wide");
+		VIEW.appendChild(viewHead("Listen", "a receiver in this page: see the band, tune around, hear it"));
+		var p = panel();
+		var pick = el("div", { class: "toolbar" });
+		var wrap = el("div", {}, loadingEl());
+		pick.hidden = true;
+		p.appendChild(pick); p.appendChild(wrap);
+		VIEW.appendChild(p);
+
+		var widget = null, shown = null, gone = false;
+		function away() { if (widget) { widget.destroy(); widget = null; } shown = null; }
+		LEAVE = function () { gone = true; away(); };
+		function failed(e) {
+			if (String(e.message || e) === "unauthorized") return onError(e);
+			away();
+			clear(wrap).appendChild(warnEl(e));
+		}
+		function refresh() { return fetchSdrStatus().then(show).catch(failed); }
+
+		// Something to see to before there can be listening: said, with the
+		// one thing to press
+		function hold(title, text, label, act) {
+			away();
+			var status = el("span", { class: "status" });
+			var b = label ? btn(label, { primary: true, onclick: function () {
+				b.disabled = true;
+				status.textContent = "Working…";
+				act(function (t) { status.textContent = t; }).then(refresh).catch(function (e) {
+					if (String(e.message || e) === "unauthorized") return onError(e);
+					b.disabled = false;
+					status.textContent = String(e.message || e);
+				});
+			} }) : null;
+			clear(wrap).appendChild(el("div", { class: "placeholder" },
+				el("b", { text: title }), el("div", { text: text }),
+				b ? el("div", { class: "toolbar sdr-hold" }, b, status) : null));
+		}
+
+		// What stands in the way of listening on this radio, if anything
+		function blocked(radio, jobs) {
+			if (radio.mayhem) {
+				hold("The PortaPack is showing its Mayhem menu",
+					"To listen, it has to be in HackRF mode. Switching takes a few seconds.",
+					"Switch to HackRF mode", function (say) {
+						// (and a moment for the stream's job to start, now that a radio is there)
+						return call("pirate.portapack", "hackrf", {}).then(function () { return waitForHackrf(say); })
+							.then(function () { return demoLater(DEMO ? 0 : 1500); });
+					});
+				return true;
+			}
+			var held = radioHolder(jobs, radio.kind), f = held && featureOfJob(held, radio.kind);
+			if (held) {
+				hold("The " + RADIO_NAME[radio.kind] + " is busy: " + (f ? f.label : "the job “" + held + "”"),
+					"A radio does one thing at a time. Stopping that frees it for listening; turn it back on from Receivers.",
+					"Stop that and listen", function () { return call("pirate.sdr", "free", { radio: radio.kind }); });
+				return true;
+			}
+			var ws = jobs.websdr;
+			if (!ws) {
+				hold("This router's firmware has no receiver for the browser yet",
+					"It comes with the pirate-websdr package, in firmware built from now on.");
+				return true;
+			}
+			if (ws.state === "off") {
+				hold("The receiver's stream is switched off",
+					"It passes the radio's signal to this page (pirate-websdr, port 8073), and holds no radio until a page listens.",
+					"Switch it on", function () {
+						return call("pirate.sdr", "use", { job: "websdr" }).then(function () { return demoLater(DEMO ? 0 : 1500); });
+					});
+				return true;
+			}
+			if (ws.state !== "running") {
+				hold("The receiver's stream isn't running",
+					"It should start by itself within a few seconds of a radio being plugged in. If it stays down, the log on the Status page says why.",
+					"Look again", function () { return demoLater(600); });
+				return true;
+			}
+			return false;
+		}
+
+		function show(status) {
+			if (gone) return;
+			var jobs = {}, radios = detectRadios(status);
+			parseJobs(status).forEach(function (j) { jobs[j.name] = j; });
+			if (!radios.length) {
+				pick.hidden = true;
+				away();
+				clear(wrap).appendChild(el("div", { class: "placeholder" },
+					el("b", { text: status ? "No radio detected" : "No answer from pirate-radio" }),
+					el("div", { text: status ? "Plug in an RTL-SDR or a HackRF to listen." : "Is it installed on this device?" })));
+				return;
+			}
+			var radio = radios.filter(function (r) { return r.kind === LISTEN_RADIO; })[0] || radios[0];
+			LISTEN_RADIO = radio.kind;
+			// Two radios: which one is listened to
+			clear(pick);
+			pick.hidden = radios.length < 2;
+			radios.forEach(function (r) {
+				pick.appendChild(el("button", { type: "button", class: "mode-chip sdr-pick" + (r === radio ? " on" : ""),
+					text: RADIO_NAME[r.kind], title: r.name, onclick: function () {
+						if (r === radio) return;
+						LISTEN_RADIO = r.kind;
+						away();
+						refresh();
+					} }));
+			});
+			if (blocked(radio, jobs)) return;
+			if (widget && shown === radio.kind) return;
+			away();
+			clear(wrap);
+			if (location.protocol === "https:" && !DEMO) {
+				var plain = "http://" + location.host + "/#listen";
+				wrap.appendChild(alertEl("warn", ["This page came over HTTPS and the radio's stream is plain (ws://), which browsers refuse from an HTTPS page. Open it over HTTP: ",
+					el("a", { class: "lnk", href: plain, text: plain })]));
+				return;
+			}
+			wrap.appendChild(loadingEl());
+			sdrReady().then(function () {
+				if (gone || widget) return;
+				clear(wrap);
+				shown = radio.kind;
+				widget = window.PirateSDR.mount(wrap, {
+					radio: radio.kind,
+					url: "ws://" + location.hostname + ":8073/",
+					workerUrl: "sdr/worker.js" + (MC_UIV ? "?v=" + MC_UIV : ""),
+					demo: DEMO,
+					// It stopped by itself: if the radio went to a job meanwhile, say so
+					onStop: function () { setTimeout(function () { if (!gone) refresh(); }, 1200); }
+				});
+			}).catch(failed);
+		}
+
+		refresh();
 	}
 
 	/* ---------- Sensors: what the ISM job has decoded ---------- */
@@ -7237,7 +7426,7 @@
 
 	var GROUPS = [
 		["Overview", [["dashboard", "Dashboard"], ["messenger", "Messenger"]]],
-		["Radio", [["receivers", "Receivers"], ["sensors", "Sensors"]]],
+		["Radio", [["receivers", "Receivers"], ["listen", "Listen"], ["sensors", "Sensors"]]],
 		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshakes"]]],
 		["Network", [["uplink", "Uplink"], ["clients", "Clients"], ["hosts", "Hosts"], ["capture", "Capture"]]],
 		["USB devices", [["drives", "Drives"], ["phone", "Phone"], ["flipper", "Flipper"], ["portapack", "PortaPack"], ["dreampi", "DreamPi"]]],
@@ -7306,14 +7495,17 @@
 
 	function setTab(id) {
 		id = ALIASES[id] || id;
+		// The page being left puts away what it holds (Listen: its radio)
+		if (LEAVE) { var leave = LEAVE; LEAVE = null; try { leave(); } catch (e) {} }
 		current = id;
-		VIEW.classList.remove("view-app");   // the Messenger's: the whole window
+		VIEW.classList.remove("view-app", "view-wide");   // the Messenger's: the whole window; Listen's: wider
 		showAddr();
 		renderTabs();
 		try { location.hash = id; } catch (e) {}
 		if (id === "dashboard") return loadDashboard();
 		if (id === "messenger") return renderMessenger();
 		if (id === "receivers") return renderReceivers();
+		if (id === "listen") return renderListen();
 		if (id === "sensors") return renderSensors();
 		if (id === "hosts") return renderHosts();
 		if (id === "survey") return renderSurvey();

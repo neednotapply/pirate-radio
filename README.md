@@ -2,9 +2,10 @@
 
 OpenWrt firmware that turns a **GL.iNet GL-AR750S(-EXT) "Slate"** into
 **Pirate Radio**, a receiver station for an **RTL-SDR** and a **HackRF** on
-its USB port. It decodes and logs to the **microSD card** by itself, and it
-shares both radios over the network with SDR software on a computer. On its
-network it answers at **`http://pirateradio.local/`**.
+its USB port. It decodes and logs to the **microSD card** by itself, it has a
+**receiver in its own web page** (a spectrum, a waterfall and sound, in the
+browser), and it shares both radios over the network with SDR software on a
+computer. On its network it answers at **`http://pirateradio.local/`**.
 
 (This project was called slate-sdr. An upgrade that keeps settings carries
 them over, and a card labelled `SLATESDR` keeps working.)
@@ -15,6 +16,7 @@ work fine.
 | Job | Radio | What | Live | On the card |
 |---|---|---|---|---|
 | `soapy` | both | SoapySDR network server for SDR++, GQRX, CubicSDR, SDRangel, GNU Radio | `tcp://<router>:55132` | – |
+| `websdr` | both | the receiver in the web UI (its *Listen* page): the radio's raw samples to the browser, which does the rest | `ws://<router>:8073` | – |
 | `rtltcp` | RTL-SDR | rtl_tcp server (SDR#, SDR++, GQRX) | `<router>:1234` | – |
 | `adsb` | RTL-SDR (or HackRF) | aircraft, 1090 MHz (dump1090; readsb on the HackRF) | map on `:8080`, SBS `:30003`, Beast `:30005` | aircraft table every minute |
 | `ism` | RTL-SDR (or HackRF) | sensors, remotes, meters on 433/868/915 MHz (rtl_433, 200+ protocols) | `:8433` | JSON lines |
@@ -24,8 +26,9 @@ work fine.
 | `iq` | either | raw IQ recording, continuous, in segments | – | SigMF (`.sigmf-data` + `.sigmf-meta`) |
 | `wifi` | built-in Wi-Fi | spectral scan of the 2.4 GHz (ath9k) and 5 GHz (ath10k) radios | – | raw FFT samples |
 
-Out of the box, `soapy`, `adsb` (RTL-SDR) and `survey` (HackRF, one sweep a
-minute) are on. Each radio runs one job at a time. Between survey sweeps the
+Out of the box, `soapy`, `websdr`, `adsb` (RTL-SDR) and `survey` (HackRF, one
+sweep a minute) are on. Each radio runs one job at a time; `soapy` and
+`websdr` hold no radio until somebody listens. Between survey sweeps the
 HackRF is free for network clients.
 
 The three decoder jobs default to the RTL-SDR but take `option radio 'hackrf'`
@@ -164,18 +167,47 @@ the left (on a phone, the menu button at the top opens them):
 | Group | Pages |
 |---|---|
 | Overview | Dashboard, Messenger (a MeshCore radio's messages, below) |
-| Radio | Receivers (pick a feature for each radio, and where to reach it), Sensors (what rtl_433 has decoded) |
+| Radio | Receivers (pick a feature for each radio, and where to reach it), Listen (a receiver in the page: the band on screen, and its sound), Sensors (what rtl_433 has decoded) |
 | Wi-Fi | Survey, Threats, Handshakes |
 | Network | Uplink (the network it joins), Clients (its own network's, and ad blocking), Hosts, Capture |
 | USB devices | Drives, Phone, Flipper, PortaPack, DreamPi |
 | System | Status (its system, jacks, radios and slots), Access, Terminal, Firmware |
 
 *Receivers* lists each radio it detects and the features it can do in plain
-language — *Live SDR on my computer*, *Decode aircraft/sensors/ships*,
-*Spectrum sweep*, *Record raw IQ*, *rtl_tcp server*. Pick one and it switches
-the radio to it (one at a time per radio); a *Where to connect* panel shows the
-live addresses. A PortaPack in Mayhem mode is offered as a HackRF: choosing a
-feature switches it to HackRF mode first. *Sensors* has one row per device
+language — *Listen in the browser*, *Live SDR on my computer*, *Decode
+aircraft/sensors/ships*, *Spectrum sweep*, *Record raw IQ*, *rtl_tcp server*.
+Pick one and it switches the radio to it (one at a time per radio); a *Where
+to connect* panel shows the live addresses. A PortaPack in Mayhem mode is
+offered as a HackRF: choosing a feature switches it to HackRF mode first.
+
+*Listen* is a receiver in the page, for either radio: the band as a spectrum
+and a waterfall, and its sound — broadcast FM, narrow FM, AM, sideband and
+Morse. Click a signal to tune to it, drag to move along the band, scroll to
+zoom, or type a frequency; the buttons above the display go to places worth a
+listen (FM radio, aircraft, weather radio, marine, the amateur bands), and
+*Strongest signal* tunes to the strongest thing in view. Between stations it
+is quiet: the squelch sets itself a little above the noise (or is set by
+hand). It needs the radio to itself: when a job holds it the page says which, and stops it on request,
+and a PortaPack in Mayhem mode is switched to HackRF mode first. Giving the
+radio to a job on the Receivers page takes it back from a listening page,
+which says so.
+
+The router does none of the signal processing — one 775 MHz core without an
+FPU could not, which is why this is not OpenWebRX. `pirate-websdr` passes the
+radio's raw 8-bit samples into a WebSocket (port 8073) and takes the tuning
+back, as the SoapySDR server does for a program on a computer, and the page
+does the rest in the browser: the FFT for the display, the channel filter,
+the demodulator. So it wants a reasonable computer, and a network that
+carries 4.8 MB/s for the default 2.4 MHz span (the HackRF's narrowest; the
+RTL-SDR goes down to 240 kHz, which a phone manages). Several pages can
+listen at once, to the same radio at the same tuning. The port answers on
+the router's own network, like the other SDR ports, and to the router's own
+pages only, reached by its address or its own name: a page from another site
+is refused (`option extra_args '--any-origin'` in the `websdr` job lifts
+that, for a router reached by some other name). The page comes over plain
+HTTP, so the stream is plain too (`ws://`).
+
+*Sensors* has one row per device
 rtl_433 has decoded, with its latest readings. Ports and radios go by what they are on the
 GL-AR750S: the WAN jack and LAN 1 and 2, the 5 GHz radio (QCA9887: the
 access point and the uplink) and the 2.4 GHz one (QCA9563: monitor mode),
@@ -734,19 +766,21 @@ Not yet run:
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `rtl433-soapy`, `readsb-soapy`, `ais-catcher`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `rtl433-soapy`, `readsb-soapy`, `ais-catcher`, `pirate-websdr`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
 | `feed/utils/pirate-meshcore/` | the Messenger tab's daemon (`src/pirate-meshcore.c`: a MeshCore radio's companion protocol, on ubus as `pirate.meshcore`) and its init script |
 | `feed/utils/pirate-portapack/` | the PortaPack tab's daemon (`src/pirate-portapack.c`: a PortaPack/Mayhem serial command shell, on ubus as `pirate.portapack`) and its init script |
+| `feed/utils/pirate-websdr/` | the Listen page's bridge on the router (`src/`: a radio's samples into a WebSocket, through SoapySDR, and the tuning back), and `DESIGN.md`: how the bridge, the engine and the page fit together, and what they say to each other |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
+| `feed/utils/pirate-radio-ui/files/sdr/` | the Listen page's receiver: the page's part (`receiver.js`) and the signal processing, which runs in a worker (`worker.js`, `dsp.js`; `siggen.js` is the simulated band of the demo mode) |
 | `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics and its ports (`pirate-router`), access (`pirate-access`: SSH, sign-ins, the terminal), firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
 | `config/full.config` | full-build options (spectral scan, ath10k) |
 | `build.sh`, `scripts/` | the Docker build (SDK, then ImageBuilder) |
 | `build-full.sh` | the full source build |
-| `tests/` | runtime tests on OpenWrt's MIPS userland under QEMU |
+| `tests/` | runtime tests on OpenWrt's MIPS userland under QEMU; `tests/sdr/` and `tests/websdr/`: the Listen page's engine and bridge, which run on any machine |
 
 rtl-sdr, rtl_433, dump1090 and rtl-ais come from OpenWrt's own package feed and
 drive the RTL-SDR paths. The HackRF decoder paths add separate SoapySDR-enabled

@@ -33,6 +33,34 @@ check "rtl_433 runs" sh -c 'rtl_433 -V 2>&1 | grep -q "rtl_433 version"'
 check "rtl_power runs" sh -c 'rtl_power 2>&1 | grep -q "No frequency range provided"'
 check "rtl_ais runs" sh -c 'rtl_ais -x 2>&1 | grep -q "rtl_ais"'
 check "rtl_433-soapy runs (ISM on the HackRF)" sh -c 'rtl_433-soapy -V 2>&1 | grep -q "rtl_433 version"'
+# The web UI's receiver (the Listen page): with --sim it serves a simulated
+# radio, so it runs here with no SDR. A plain request is told what the port
+# is for; a WebSocket one is upgraded (RFC 6455's own example key and answer).
+# ws_ask <request>: what the port answers within 3 s, to $T/ws.out
+ws_ask() {
+	(printf '%b' "$1"; sleep 2) | nc 127.0.0.1 18073 > "$T/ws.out" 2>/dev/null &
+	local pid=$!
+	sleep 3
+	kill "$pid" 2>/dev/null
+	wait "$pid" 2>/dev/null
+}
+pirate-websdr --sim --port 18073 > "$T/websdr.out" 2>&1 &
+wsd=$!
+sleep 2
+check "pirate-websdr runs (simulated radio)" kill -0 "$wsd"
+ws_ask 'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n'
+check "pirate-websdr: a plain HTTP request is answered 426" sh -c "head -n 1 $T/ws.out | grep -q ' 426 '"
+ws_ask 'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
+check "pirate-websdr: a WebSocket handshake is accepted" grep -q 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=' "$T/ws.out"
+check "pirate-websdr: and greeted (hello, protocol 1)" grep -q '"type":"hello","proto":1' "$T/ws.out"
+ws_ask 'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://elsewhere.example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
+check "pirate-websdr: another site's page is refused (403)" sh -c "head -n 1 $T/ws.out | grep -q ' 403 '"
+kill "$wsd" 2>/dev/null
+i=0
+while kill -0 "$wsd" 2>/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+check "pirate-websdr stops on TERM" sh -c "! kill -0 $wsd 2>/dev/null"
+kill -KILL "$wsd" 2>/dev/null
+[ "$FAIL" = 0 ] || sed 's/^/  pirate-websdr: /' "$T/websdr.out"
 # readsb-soapy and AIS-catcher link libraries (libzstd, ...) this QEMU test
 # rootfs does not carry; the full-source build already proves they compile and
 # link, and the mock-decoder argument tests below cover how they are driven.
@@ -148,6 +176,9 @@ mock uhttpd <<-'EOF'
 	while :; do sleep 1; done
 EOF
 mock SoapySDRServer <<-'EOF'
+	while :; do sleep 1; done
+EOF
+mock pirate-websdr <<-'EOF'
 	while :; do sleep 1; done
 EOF
 export PATH="$M:$PATH"
@@ -317,6 +348,11 @@ echo "# job: soapy server"
 run_job soapy 3
 check "soapy: SoapySDRServer --bind" has "$T/calls.log" "SoapySDRServer --bind$"
 
+echo "# job: the web UI's receiver"
+: > "$T/calls.log"
+run_job websdr 3
+check "websdr: pirate-websdr on port 8073, told where to say which radio it holds" has "$T/calls.log" "pirate-websdr --port 8073 --state-file $PIRATE_STATE/websdr$"
+
 echo "# configuration errors"
 uci set pirate-radio.bogus=job
 uci set pirate-radio.bogus.type=nonsense
@@ -363,7 +399,7 @@ cat > "$T/init-harness.sh" <<-'EOF'
 	start_service
 EOF
 PIRATE_DEBUGFS="$T/nodbg" sh "$T/init-harness.sh" > "$T/init.out" 2>&1
-check "init: default jobs soapy, adsb, survey" sh -c "grep -c '^instance' $T/init.out | grep -qx 3 && grep -q 'instance soapy: /usr/libexec/pirate-radio-job soapy' $T/init.out && grep -q 'instance adsb:' $T/init.out && grep -q 'instance survey:' $T/init.out"
+check "init: default jobs soapy, websdr, adsb, survey" sh -c "grep -c '^instance' $T/init.out | grep -qx 4 && grep -q 'instance soapy: /usr/libexec/pirate-radio-job soapy' $T/init.out && grep -q 'instance websdr: /usr/libexec/pirate-radio-job websdr' $T/init.out && grep -q 'instance adsb:' $T/init.out && grep -q 'instance survey:' $T/init.out"
 uci set pirate-radio.ism.enabled=1
 uci set pirate-radio.wifi.enabled=1
 uci commit pirate-radio
@@ -382,15 +418,15 @@ check "pnp: start marks the service active (for the hotplug hook)" [ -e "$T/stat
 mv "$T/sys/bus/usb/devices/1-2" "$T/hackrf-unplugged"
 PIRATE_DEBUGFS="$T/nodbg" sh "$T/init-harness.sh" > "$T/init.out" 2>&1
 check "pnp: HackRF job waits while the HackRF is unplugged" sh -c "grep -q \"job 'survey' waits: no hackrf on USB\" $T/init.out && ! grep -q 'instance survey' $T/init.out"
-check "pnp: RTL-SDR and SoapySDR jobs still start" sh -c "grep -q 'instance adsb:' $T/init.out && grep -q 'instance soapy:' $T/init.out"
+check "pnp: RTL-SDR, SoapySDR and web receiver jobs still start" sh -c "grep -q 'instance adsb:' $T/init.out && grep -q 'instance soapy:' $T/init.out && grep -q 'instance websdr:' $T/init.out"
 mv "$T/sys/bus/usb/devices/1-1" "$T/rtlsdr-unplugged"
 PIRATE_DEBUGFS="$T/nodbg" sh "$T/init-harness.sh" > "$T/init.out" 2>&1
-check "pnp: no radios, no jobs (SoapySDR server included)" sh -c "! grep -q '^instance' $T/init.out && grep -q \"job 'soapy' waits: no SDR on USB\" $T/init.out"
+check "pnp: no radios, no jobs (SoapySDR server and web receiver included)" sh -c "! grep -q '^instance' $T/init.out && grep -q \"job 'soapy' waits: no SDR on USB\" $T/init.out && grep -q \"job 'websdr' waits: no SDR on USB\" $T/init.out"
 mock ubus <<-'EOF'
 	echo '{"pirate-radio":{"instances":{}}}'
 EOF
 pirate-radio status > "$T/status-pnp.out" 2>&1
-check "pnp: status shows enabled jobs without their radio as waiting" sh -c "grep -q 'adsb .*adsb .*rtlsdr .*waiting' $T/status-pnp.out && grep -q 'soapy .*soapy_server .*- .*waiting' $T/status-pnp.out && grep -q 'ism .*ism .*rtlsdr .*off' $T/status-pnp.out"
+check "pnp: status shows enabled jobs without their radio as waiting" sh -c "grep -q 'adsb .*adsb .*rtlsdr .*waiting' $T/status-pnp.out && grep -q 'soapy .*soapy_server .*- .*waiting' $T/status-pnp.out && grep -q 'websdr .*websdr .*- .*waiting' $T/status-pnp.out && grep -q 'ism .*ism .*rtlsdr .*off' $T/status-pnp.out"
 
 # The USB hotplug hook (hotplug-call sources it; here it runs under sh).
 HP=/etc/hotplug.d/usb/20-pirate-radio
@@ -467,6 +503,32 @@ check "luci use+radio: reports the hackrf" [ "$(use_field radio)" = hackrf ]
 use_radio adsb bogus
 check "luci use+radio: rejects a bad radio" [ "$(use_field error)" = "radio must be rtlsdr or hackrf" ]
 
+# A browser listening to a radio (the Listen page) is asked for it back when a
+# job is given that radio: pirate-websdr names the radio it holds in its state
+# file, and lets go on SIGUSR1.
+mock killall <<-'EOF'
+	exit 0
+EOF
+mkdir -p "$PIRATE_STATE"
+cp "$T/pirate-radio.default" /etc/config/pirate-radio
+echo hackrf > "$PIRATE_STATE/websdr"
+: > "$T/calls.log"
+use_radio adsb hackrf
+check "luci use: asks the browser's receiver for the radio it holds" has "$T/calls.log" "killall -USR1 pirate-websdr"
+cp "$T/pirate-radio.default" /etc/config/pirate-radio
+echo rtlsdr > "$PIRATE_STATE/websdr"
+: > "$T/calls.log"
+use_radio adsb hackrf
+check "luci use: leaves the receiver be when it holds the other radio" sh -c "! grep -q killall $T/calls.log"
+rm -f "$PIRATE_STATE/websdr"
+# The receiver's stream itself, switched on from the Listen page: it holds no
+# radio, so nothing is stopped for it
+cp "$T/pirate-radio.default" /etc/config/pirate-radio
+uci set pirate-radio.websdr.enabled=0
+uci commit pirate-radio
+use_job websdr
+check "luci use: switches the web receiver's stream on, stopping nothing" [ "$(uci get pirate-radio.websdr.enabled) $(use_field switched) $(use_field 'stopped[0]')$(uci get pirate-radio.adsb.enabled)" = "1 true 1" ]
+
 # free a radio for the always-on SoapySDR server (the "Live SDR" feature).
 free_radio() { echo "{\"radio\":\"$1\"}" | PIRATE_INIT=true "$P" call free > "$T/use.out"; }
 cp "$T/pirate-radio.default" /etc/config/pirate-radio
@@ -474,7 +536,7 @@ uci set pirate-radio.iq.enabled=1
 uci commit pirate-radio
 free_radio hackrf
 check "luci free: switches off the hackrf jobs (survey, iq)" [ "$(uci get pirate-radio.survey.enabled)$(uci get pirate-radio.iq.enabled)" = 00 ]
-check "luci free: leaves the SoapySDR server on" [ "$(uci get pirate-radio.soapy.enabled)" = 1 ]
+check "luci free: leaves the SoapySDR server and the web receiver on" [ "$(uci get pirate-radio.soapy.enabled)$(uci get pirate-radio.websdr.enabled)" = 11 ]
 check "luci free: names what it stopped" [ -n "$(use_field 'stopped[0]')" ]
 free_radio bogus
 check "luci free: rejects a bad radio" [ "$(use_field error)" = "radio must be rtlsdr or hackrf" ]
@@ -1329,6 +1391,11 @@ uci -q batch <<-'EOF'
 EOF
 sh /etc/uci-defaults/10-pirate-radio-migrate
 check "rename: the old settings become pirate-radio's" sh -c '[ ! -e /etc/config/slate-sdr ] && [ "$(uci get pirate-radio.ism.enabled)" = 1 ]'
+check "upgrade: settings from before get the web receiver's job, switched on" [ "$(uci get pirate-radio.websdr.type)$(uci get pirate-radio.websdr.enabled)" = websdr1 ]
+uci set pirate-radio.websdr.enabled=0
+uci commit pirate-radio
+sh /etc/uci-defaults/10-pirate-radio-migrate
+check "upgrade: a web receiver switched off since stays off" [ "$(uci get pirate-radio.websdr.enabled)" = 0 ]
 check "rename: the card folder setting follows" [ "$(uci get pirate-radio.storage.dir)" = pirate-radio ]
 check "rename: a card labelled SLATESDR still mounts" sh -c '[ "$(uci get fstab.sdcard_slatesdr.label)" = SLATESDR ] && ! uci -q get fstab.slatesdr'
 check "rename: the card's file server keeps its settings" sh -c '[ "$(uci get uhttpd.pirateradio.listen_http)" = 0.0.0.0:8081 ] && ! uci -q get uhttpd.slatesdr'

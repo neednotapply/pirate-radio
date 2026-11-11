@@ -42,7 +42,7 @@ for opt in CONFIG_KERNEL_RELAY=y CONFIG_PACKAGE_ATH_SPECTRAL=y \
 	CONFIG_PACKAGE_kmod-ath10k=y CONFIG_PACKAGE_ath10k-firmware-qca9887=y \
 	CONFIG_PACKAGE_kmod-ath9k=y CONFIG_PACKAGE_pirate-radio=y CONFIG_PACKAGE_pirate-radio-ui=y \
 	CONFIG_PACKAGE_dreampi=y CONFIG_PACKAGE_pirate-flipper=y CONFIG_PACKAGE_pirate-meshcore=y \
-	CONFIG_PACKAGE_pirate-portapack=y \
+	CONFIG_PACKAGE_pirate-portapack=y CONFIG_PACKAGE_pirate-websdr=y \
 	CONFIG_PACKAGE_kmod-rt2800-usb=y CONFIG_PACKAGE_kmod-usb-acm=y \
 	CONFIG_PACKAGE_kmod-wireguard=y CONFIG_PACKAGE_kmod-zram=y \
 	CONFIG_PACKAGE_ksmbd-server=y CONFIG_PACKAGE_kmod-fs-ksmbd=y CONFIG_PACKAGE_wsdd2=y \

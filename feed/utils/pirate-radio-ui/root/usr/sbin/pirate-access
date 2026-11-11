@@ -255,7 +255,7 @@ cmd_ssh_status() {
 }
 
 cmd_ssh_set() {
-	local port="$1" pw="$2" taken="53 80 139 443 445 1234 5353 7681 8080 8081 8082 10110 30003 30005 55132"
+	local port="$1" pw="$2" taken="53 80 139 443 445 1234 5353 7681 8073 8080 8081 8082 10110 30003 30005 55132"
 
 	case "$port" in ''|*[!0-9]*) err "port: a number, 1 to 65535"; return ;; esac
 	if [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then err "port: a number, 1 to 65535"; return; fi

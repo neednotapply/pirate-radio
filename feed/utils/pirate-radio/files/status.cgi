@@ -36,6 +36,7 @@ code { background: #f3f3f3; padding: 0 .2rem; }
 <body>
 <h1>pirate-radio</h1>
 <p>
+<a href="/#listen">Listen (a receiver in the page)</a> &middot;
 <a href="http://$host:8080/">Aircraft map</a> &middot;
 <a href="http://$host:8433/">ISM sensors (live)</a> &middot;
 <a href="http://$host:8081/pirate-radio/">Recorded data</a> &middot;

@@ -53,13 +53,20 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_DATA) ./files/index.html $(1)/www/index.html
 	$(INSTALL_DATA) ./files/app.js $(1)/www/app.js
 	$(INSTALL_DATA) ./files/style.css $(1)/www/style.css
+	# The receiver on the Listen page: the page's part of it (receiver.js) and
+	# the signal processing, which runs in a worker (worker.js, dsp.js,
+	# siggen.js); loaded when the page is opened. pirate-websdr (a dependency
+	# of pirate-radio) hands it the radio's samples.
+	$(INSTALL_DIR) $(1)/www/sdr
+	$(INSTALL_DATA) ./files/sdr/*.js $(1)/www/sdr/
 	# MCO Advanced's MCOimg decoder (MIT), loaded when the Messenger shows an image
 	$(INSTALL_DIR) $(1)/www/mcoimg
 	$(INSTALL_DATA) ./files/mcoimg/mcoimg-codec.global.js ./files/mcoimg/mcoimg-v3-codec.global.js \
 		./files/mcoimg/mcoimg-browser.global.js ./files/mcoimg/LICENSE $(1)/www/mcoimg/
-	# The version index.html loads app.js and style.css under, so browsers
-	# take the new ones after an update (uhttpd sends no cache headers)
-	cat ./files/app.js ./files/style.css | md5sum | cut -c1-12 > $(1)/www/ui-version
+	# The version index.html loads app.js and style.css under (and app.js the
+	# receiver's scripts), so browsers take the new ones after an update
+	# (uhttpd sends no cache headers)
+	cat ./files/app.js ./files/style.css ./files/sdr/*.js | md5sum | cut -c1-12 > $(1)/www/ui-version
 	$(INSTALL_DIR) $(1)/www/cgi-bin
 	$(INSTALL_BIN) ./files/pirate-upload $(1)/www/cgi-bin/pirate-upload
 	$(INSTALL_DIR) $(1)/etc/uci-defaults

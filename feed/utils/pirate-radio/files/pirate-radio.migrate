@@ -1,7 +1,8 @@
 #!/bin/sh
-# First boot after an upgrade from slate-sdr, as this project was called
-# before (settings kept): its settings become pirate-radio's, and a card
-# labelled SLATESDR still mounts. Runs before pirate-radio's own first-boot
+# First boot after an upgrade that kept the settings: brings settings from
+# before up to date. From slate-sdr, as this project was called before, its
+# settings become pirate-radio's, and a card labelled SLATESDR still mounts;
+# jobs that came later are added. Runs before pirate-radio's own first-boot
 # script (90-pirate-radio). The card's slate-sdr/ folder is renamed when the
 # card is first used (pirate_storage_load).
 
@@ -11,6 +12,17 @@ if [ -f /etc/config/slate-sdr ]; then
 		uci set pirate-radio.storage.dir='pirate-radio'
 		uci commit pirate-radio
 	fi
+fi
+
+# The receiver in the web UI (the Listen page) came later: settings kept from
+# before it get its job, switched on as a fresh install has it
+if [ -f /etc/config/pirate-radio ] && ! uci -q get pirate-radio.websdr > /dev/null; then
+	uci -q batch <<-EOT
+		set pirate-radio.websdr=job
+		set pirate-radio.websdr.type='websdr'
+		set pirate-radio.websdr.enabled='1'
+		commit pirate-radio
+	EOT
 fi
 
 # The old card mount (label SLATESDR) stays, beside the new PIRATERADIO one

@@ -62,11 +62,12 @@ pirate_job_radio() {
 }
 
 # What a job type needs on USB before it runs: rtlsdr, hackrf, any (an SDR of
-# either kind; the SoapySDR server holds none of its own) or nothing.
+# either kind; the SoapySDR server and the web UI's receiver hold none of
+# their own) or nothing.
 # pirate_job_needs <section> <type>
 pirate_job_needs() {
 	case "$2" in
-	soapy_server) echo any ;;
+	soapy_server|websdr) echo any ;;
 	*) pirate_job_radio "$1" "$2" ;;
 	esac
 }

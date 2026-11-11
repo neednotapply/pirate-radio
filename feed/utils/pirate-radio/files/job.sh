@@ -160,6 +160,19 @@ job_soapy_server() {
 	exec SoapySDRServer --bind
 }
 
+# The receiver in the web UI (its Listen page): pirate-websdr moves a radio's
+# raw samples into a WebSocket and takes the tuning back; the browser does the
+# signal processing. Like the SoapySDR server it holds no radio until a page
+# asks for one. The state file names the radio it holds, so that pirate.sdr
+# can ask for it back when a job wants that radio.
+job_websdr() {
+	local port
+	config_get port "$JOB" port 8073
+	mkdir -p "$PIRATE_STATE"
+	# shellcheck disable=SC2086
+	exec pirate-websdr --port "$port" --state-file "$PIRATE_STATE/websdr" $EXTRA
+}
+
 job_rtl_tcp() {
 	local addr port dev gain ppm
 	config_get addr "$JOB" address 0.0.0.0
@@ -469,7 +482,7 @@ pirate_storage_load
 OUTDIR=
 
 case "$TYPE" in
-soapy_server|rtl_tcp|adsb|ism|ais|sweep|iq|wifi_spectral) "job_$TYPE" ;;
+soapy_server|websdr|rtl_tcp|adsb|ism|ais|sweep|iq|wifi_spectral) "job_$TYPE" ;;
 '') config_error "no job '$JOB' with a type in /etc/config/pirate-radio" ;;
 *) config_error "job '$JOB': unknown type '$TYPE'" ;;
 esac

@@ -6,7 +6,8 @@
 #
 # Hands a job its radio. With "radio" it first sets which radio (rtlsdr or
 # hackrf) the job decodes from, so a feature like ADS-B or ISM can run on
-# either. Other enabled jobs on that radio and device are switched off, the
+# either. Other enabled jobs on that radio and device are switched off, a
+# browser listening to that radio (the Listen page) is told to let go, the
 # job is switched on, and the service reloads (only the changed instances
 # restart). Nothing changes when the job already holds the radio.
 #
@@ -44,6 +45,20 @@ release_radio() {
 
 	uci set "pirate-radio.$cfg.enabled=0"
 	STOPPED="$STOPPED $cfg"
+}
+
+# The web UI's receiver (pirate-websdr, the Listen page) may hold RADIO for a
+# browser: its state file names the radio it has open, and on SIGUSR1 it lets
+# go at once and tells the page why. Then two seconds before the job starting
+# next opens the radio: a HackRF closed and opened again at once can drop off
+# USB (pirate-websdr keeps the same gap itself).
+release_websdr() {
+	local holds
+	[ -r "$PIRATE_STATE/websdr" ] || return 0
+	read -r holds < "$PIRATE_STATE/websdr"
+	[ "$holds" = "$RADIO" ] || return 0
+	killall -USR1 pirate-websdr 2>/dev/null || return 0
+	sleep 2
 }
 
 # Switch off every enabled job that holds RADIO (any device), to free it.
@@ -111,6 +126,7 @@ use_job() {
 
 	config_get DEV "$JOB" device 0
 	[ -n "$RADIO" ] && config_foreach release_radio job
+	[ -n "$RADIO" ] && release_websdr
 
 	config_get_bool enabled "$JOB" enabled 0
 	if [ "$enabled" != 1 ]; then

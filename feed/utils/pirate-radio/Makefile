@@ -21,7 +21,7 @@ define Package/pirate-radio
   TITLE:=SDR receiver jobs (ADS-B, ISM, AIS, sweeps, IQ, Wi-Fi spectral) to microSD
   DEPENDS:=+rtl-sdr +rtl_433 +dump1090 +rtl-ais +hackrf \
 	+rtl433-soapy +readsb-soapy +ais-catcher \
-	+soapy-remote-server +soapy-hackrf +soapy-rtlsdr +soapysdr-util \
+	+soapy-remote-server +soapy-hackrf +soapy-rtlsdr +soapysdr-util +pirate-websdr \
 	+iw +block-mount +uhttpd +jsonfilter
   PKGARCH:=all
 endef

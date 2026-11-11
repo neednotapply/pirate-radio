@@ -47,7 +47,7 @@ jobs:
           cd feed/net/dreampi/files
           shellcheck -s sh -e SC1091,SC3043,SC2034,SC2154 call.sh dcnow.sh nat.sh lib.sh dreampi.init dreampi.hotplug dreampi.defaults
           cd "$GITHUB_WORKSPACE"
-          shellcheck -s sh build.sh build-full.sh scripts/*.sh tests/run.sh
+          shellcheck -s sh build.sh build-full.sh scripts/*.sh tests/run.sh tests/websdr/run.sh
           shellcheck -s sh -e SC3043,SC2016,SC2012,SC1091,SC2015 tests/rootfs-test.sh
 
       - name: Build
@@ -87,6 +87,32 @@ jobs:
           [ -f test.log ] || exit 0
           tail -n 40 test.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g;s/^/::error title=Test log (last 40 lines)::/'
           grep '^FAIL - ' test.log | head -n 8 | sed 's/^FAIL - /::error title=Test failed::/' || true
+
+  # The receiver in the web UI (the Listen page), away from the router: its
+  # engine is JavaScript and its bridge builds for any machine with a simulated
+  # radio, so both are tested here in a minute or two, long before the
+  # firmware is built.
+  websdr:
+    name: Web receiver (engine and bridge, on this machine)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      # The browser's side: the signal processing against made-up signals, and
+      # the engine against a stand-in for the bridge. Node alone, no packages.
+      - name: Engine (the browser's side)
+        run: node tests/sdr/run.js
+
+      # The router's side, built for this machine: the protocol end to end
+      # against its simulated radio, and again under the address and
+      # undefined-behaviour sanitizers. With SoapySDR's headers installed, the
+      # source for the real radios is compiled as well.
+      - name: Bridge (the router's side)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libsoapysdr-dev
+          sh tests/websdr/run.sh
 
   full:
     name: Firmware with Wi-Fi spectral scan (full source build)
