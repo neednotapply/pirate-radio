@@ -707,8 +707,18 @@ Tested in this repository's tests and builds:
   reboot and flash input checks; switching to HackRF mode leaving the console;
   and gpsd keeping off its port),
   against mock radios and tools on that same userland, and the rename from
-  slate-sdr (settings, card mount, card folder) and pirateradio.local: 747
+  slate-sdr (settings, card mount, card folder) and pirateradio.local, and
+  the web UI's receiver (the bridge as built for the router, answering a
+  handshake with its simulated radio; its job among the others; the radio
+  taken back from a page that listens; old settings given the job): 863
   checks.
+- The receiver in the web UI has tests of its own that need no router (the
+  workflow's `websdr` job): the engine's signal processing against signals
+  made by the formula, and the engine against a stand-in for the bridge
+  (`node tests/sdr/run.js`, 53 tests); and the bridge, built for the machine
+  at hand with its simulated radio, through its protocol end to end, then
+  with the engine run against it, then again under the address and
+  undefined-behaviour sanitizers (`sh tests/websdr/run.sh`, 30 and 6 tests).
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -716,19 +726,36 @@ Tested in this repository's tests and builds:
 Not yet run:
 
 - Most of the radio work on a real GL-AR750S. So far, rtl_433 decodes from a
-  real RTL-SDR there, and hackrf_sweep surveys 1 MHz – 6 GHz from a real
-  HackRF (a PortaPack in HackRF mode) in under a second per sweep. Untested
-  there: high-rate streaming over the router's USB (raw IQ capture, rtl_tcp,
-  SoapySDR clients), the card reader's write speed, and Wi-Fi spectral scan on
-  this hardware. `ath10k` spectral on the QCA9887 specifically has not been
-  confirmed.
+  real RTL-SDR there, hackrf_sweep surveys 1 MHz – 6 GHz from a real
+  HackRF (a PortaPack in HackRF mode) in under a second per sweep, SDR++ on a
+  computer has listened to that HackRF through the SoapySDR server, and the
+  web receiver's bridge has streamed it at 2.4 Msps with nothing lost (next).
+  Untested there: raw IQ capture to the card, rtl_tcp, rates above 2.4 Msps,
+  the card reader's write speed, and Wi-Fi spectral scan on this hardware.
+  `ath10k` spectral on the QCA9887 specifically has not been confirmed.
+- The Listen page in a browser against the router. On the device the
+  receiver's two halves have been run with the page's engine driven from Node
+  on a computer on the LAN, not from a browser: against the bridge's
+  simulated radio (every simulated station heard as the tone it carries, no
+  frame lost at 2.4 Msps, the router about 28 % busy and the bridge at 3 MB),
+  and in one session of 22 s on a real HackRF (a PortaPack in HackRF mode) at
+  2.4 Msps: no frame lost, no overflow, broadcast FM stations found along the
+  band and one of them demodulated to programme audio, the radio closed 5 s
+  after the listener left. The page itself has been tried with the engine in
+  demo mode, and against the bridge's own code and simulated radio on a
+  computer. Untested: the page in a browser with the router's bridge, spans
+  wider than 2.4 MHz and several listeners on the real radio, the RTL-SDR
+  through the bridge, a job taking the radio back from a page that listens,
+  and a phone.
 - The HackRF decoder paths (`option radio 'hackrf'`): ADS-B through readsb, ISM
   through rtl_433's SoapySDR backend, AIS through AIS-catcher, all on
   `driver=hackrf`. The packages cross-compile and the job wiring is covered by
-  the QEMU tests against mock decoders, but none has been run against a real
-  HackRF. Real-time decode at the HackRF's 2 MS/s minimum may be CPU-bound on
-  the 775 MHz MIPS core, and a HackRF is less sensitive at these frequencies
-  than a purpose-tuned RTL-SDR.
+  the QEMU tests against mock decoders. Of the three, only ISM has met a real
+  HackRF: rtl_433 opened it through SoapySDR and streamed, but decoded
+  nothing in several minutes, most likely for want of gain (the job sets
+  none, and a HackRF starts at 0 dB). Real-time decode at the HackRF's
+  2 MS/s minimum may be CPU-bound on the 775 MHz MIPS core, and a HackRF is
+  less sensitive at these frequencies than a purpose-tuned RTL-SDR.
 - Plug and play: pulling out a HackRF, a real USB GPS, and the boot-time start
   with a radio already plugged in. On the device, a real RTL-SDR has been
   plugged in and pulled out (the ISM job and the SoapySDR server started and
