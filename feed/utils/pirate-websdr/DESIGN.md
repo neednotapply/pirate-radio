@@ -70,7 +70,7 @@ and the next `open` sets its `freq` and `rate`.
 JSON objects (these may nest).
 
 ```json
-{"type":"hello","proto":1,"server":"pirate-websdr 0.1.0","sim":false,"open":null}
+{"type":"hello","proto":1,"server":"pirate-websdr 0.1.1","sim":false,"open":null}
 ```
 Sent once, right after the handshake. `open` is the radio this bridge has open
 now (`"hackrf"`, `"rtlsdr"`) or `null`. `sim` is true when the bridge runs with
@@ -284,13 +284,21 @@ less the window's 3 dB, times the bins the channel is wide.
   element at 60 % of its range.
 - **Gentle on the radio** (a HackRF/PortaPack opened and closed in quick
   succession can drop off USB until it is replugged):
-  - after the last streaming client leaves, the stream is deactivated and the
+  - after the last streaming client leaves, the stream is stopped and the
     device kept open for `--linger` seconds (5) before it is closed, so a page
     reload reuses it;
   - at least 2 s between closing a device and opening one, and half a second
-    between stopping its stream and starting it again;
+    between stopping its stream and starting one again;
   - `deactivateStream`, `closeStream`, `unmake`, in that order, always:
     on `SIGTERM`/`SIGINT` too.
+- **A stream is started once.** Stopping it closes it (`deactivateStream`,
+  `closeStream`); the next start, and a change of sample rate, make a new one
+  (`setupStream`, `activateStream`) on the device, which stays open. A
+  driver's stream need not survive a stop and a start: SoapyHackRF's keeps
+  the buffer it had half handed out and from the next start counts its ring
+  of buffers one too few (below zero, in an unsigned count, when none has
+  arrived yet). Its reads then never wait for the radio again: they return
+  old samples over and over, as fast as they are asked for.
 - **SIGUSR1**: let go of the radio now (another job wants it): every streaming
   client gets `closed`, the device is closed at once (no linger).
 - `--state-file PATH`: while a device is open the file holds its radio kind

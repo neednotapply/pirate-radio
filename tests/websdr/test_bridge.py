@@ -357,11 +357,12 @@ def free_port():
 
 
 class Bridge:
-    """A pirate-websdr started with --sim on a port of its own."""
+    """A pirate-websdr started with --sim on a port of its own (sim=False:
+    with whatever it has for a radio, which test_radio.py makes a stand-in)."""
 
     last = None         # the one started last: its log is shown when a test fails
 
-    def __init__(self, binary, *args, env=None):
+    def __init__(self, binary, *args, env=None, sim=True):
         Bridge.last = self
         self.final_log = None
         self.host = "127.0.0.1"
@@ -369,7 +370,7 @@ class Bridge:
         self.log = tempfile.NamedTemporaryFile(prefix="websdr-test-", suffix=".log", delete=False)
         full = dict(os.environ)
         full.update(env or {})
-        self.proc = subprocess.Popen([binary, "--sim", "--port", str(self.port)] + list(args),
+        self.proc = subprocess.Popen([binary] + (["--sim"] if sim else []) + ["--port", str(self.port)] + list(args),
                                      stdout=self.log, stderr=self.log, env=full)
         deadline = time.monotonic() + 5
         while True:

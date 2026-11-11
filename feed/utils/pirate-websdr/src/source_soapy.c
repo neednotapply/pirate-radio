@@ -4,6 +4,15 @@
  * signed 8-bit I and Q, which is what both give natively, so nothing is
  * converted on the way.
  *
+ * A stream is started once. It is made when the samples are to start and
+ * closed when they stop; the radio itself stays open in between. A driver's
+ * stream that is stopped and started again can come back wrong: the
+ * HackRF's keeps the buffer it had only half handed out, and from the next
+ * start counts its buffers one too few (below nought, when none has come
+ * yet). Its reads then never wait for the radio again: they hand out old
+ * samples, over and over, as fast as they are asked for. A stream made anew
+ * starts clean, whatever the driver.
+ *
  * Every way out lets go of the radio in order: deactivateStream,
  * closeStream, unmake.
  *
@@ -71,18 +80,24 @@ static int make_stream(struct soapy_radio *s, char *err)
 	return 0;
 }
 
+/* The stream stopped, if it runs, and closed: it is not used again. */
+static void drop_stream(struct soapy_radio *s)
+{
+	if (!s->stream)
+		return;
+	if (s->active)
+		SoapySDRDevice_deactivateStream(s->dev, s->stream, 0, 0);
+	SoapySDRDevice_closeStream(s->dev, s->stream);
+	s->stream = NULL;
+	s->active = 0;
+}
+
 static void let_go(struct soapy_radio *s)
 {
-	if (s->stream) {
-		if (s->active)
-			SoapySDRDevice_deactivateStream(s->dev, s->stream, 0, 0);
-		SoapySDRDevice_closeStream(s->dev, s->stream);
-	}
+	drop_stream(s);
 	if (s->dev)
 		SoapySDRDevice_unmake(s->dev);
-	s->stream = NULL;
 	s->dev = NULL;
-	s->active = 0;
 }
 
 static void *soapy_open(const char *radio, double freq, double rate, char *err)
@@ -181,11 +196,7 @@ static void *soapy_open(const char *radio, double freq, double rate, char *err)
 	if (fr)
 		SoapySDR_free(fr);
 
-	if (make_stream(s, err) != 0) {
-		let_go(s);
-		return NULL;
-	}
-	return s;
+	return s;			/* (its stream is made when it is started) */
 }
 
 static void soapy_close(void *h)
@@ -199,12 +210,11 @@ static int soapy_start(void *h, char *err)
 
 	if (s->active)
 		return 0;
-	if (!s->stream) {
-		snprintf(err, SRC_ERR_LEN, "it has no stream");
+	if (make_stream(s, err) != 0)
 		return -1;
-	}
 	if (SoapySDRDevice_activateStream(s->dev, s->stream, 0, 0, 0) != 0) {
 		fail(err, "the stream did not start");
+		drop_stream(s);
 		return -1;
 	}
 	s->active = 1;
@@ -213,12 +223,7 @@ static int soapy_start(void *h, char *err)
 
 static void soapy_stop(void *h)
 {
-	struct soapy_radio *s = h;
-
-	if (!s->active || !s->stream)
-		return;
-	SoapySDRDevice_deactivateStream(s->dev, s->stream, 0, 0);
-	s->active = 0;
+	drop_stream(h);
 }
 
 static int soapy_set_freq(void *h, double hz, char *err)
@@ -233,39 +238,26 @@ static int soapy_set_freq(void *h, double hz, char *err)
 	return 0;
 }
 
-/* The stream is stopped around a change of rate, so that no buffer mixes
-   the two, and the RTL-SDR's is made anew, its buffers sized for the new
-   rate; the radio itself stays open. */
+/* The stream stops for a change of rate, so that no buffer mixes the two,
+   and a new one starts after it (the RTL-SDR's with its buffers sized for
+   the new rate); the radio itself stays open. */
 static int soapy_set_rate(void *h, double hz, char *err)
 {
 	struct soapy_radio *s = h;
+	char again[SRC_ERR_LEN];
 	int was = s->active, rc = 0;
 
-	if (was) {
-		SoapySDRDevice_deactivateStream(s->dev, s->stream, 0, 0);
-		s->active = 0;
-	}
+	drop_stream(s);
 	if (SoapySDRDevice_setSampleRate(s->dev, SOAPY_SDR_RX, 0, hz) != 0) {
 		fail(err, "it would not take the sample rate");
 		rc = -1;
 	} else {
 		s->info.rate = hz;
-		if (strcmp(s->radio, "rtlsdr") == 0) {
-			SoapySDRDevice_closeStream(s->dev, s->stream);
-			s->stream = NULL;
-			if (make_stream(s, err) != 0)
-				return -1;		/* no stream: reads fail, and the radio is closed */
-		}
 	}
-	if (was) {
-		if (SoapySDRDevice_activateStream(s->dev, s->stream, 0, 0, 0) != 0) {
-			if (rc == 0)
-				fail(err, "the stream did not start again");
-			rc = -1;
-		} else {
-			s->active = 1;
-		}
-	}
+	/* (at the rate it has: the new one, or the old one still. Should it
+	   not start, there is no stream: reads fail, and the radio is closed) */
+	if (was && soapy_start(s, rc == 0 ? err : again) != 0)
+		rc = -1;
 	return rc;
 }
 

@@ -107,7 +107,8 @@ jobs:
       # The router's side, built for this machine: the protocol end to end
       # against its simulated radio, and again under the address and
       # undefined-behaviour sanitizers. With SoapySDR's headers installed, the
-      # source for the real radios is compiled as well.
+      # source for the real radios is built as well, and tested with a
+      # stand-in for the library and its drivers behind it.
       - name: Bridge (the router's side)
         run: |
           sudo apt-get update -q

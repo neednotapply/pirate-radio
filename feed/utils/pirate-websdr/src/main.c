@@ -35,7 +35,7 @@
 #include "source.h"
 #include "ws.h"
 
-#define VERSION "0.1.0"
+#define VERSION "0.1.1"
 #define PROTO 1
 
 #define DEFAULT_PORT 8073

@@ -718,7 +718,10 @@ Tested in this repository's tests and builds:
   (`node tests/sdr/run.js`, 53 tests); and the bridge, built for the machine
   at hand with its simulated radio, through its protocol end to end, then
   with the engine run against it, then again under the address and
-  undefined-behaviour sanitizers (`sh tests/websdr/run.sh`, 30 and 6 tests).
+  undefined-behaviour sanitizers (`sh tests/websdr/run.sh`, 30 and 6 tests);
+  and the bridge's source for the real radios with a stand-in for the
+  SoapySDR library behind it, whose driver spoils a stream that is stopped
+  and started again, as the HackRF's does (8 tests, in the same run).
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -733,20 +736,27 @@ Not yet run:
   Untested there: raw IQ capture to the card, rtl_tcp, rates above 2.4 Msps,
   the card reader's write speed, and Wi-Fi spectral scan on this hardware.
   `ath10k` spectral on the QCA9887 specifically has not been confirmed.
-- The Listen page in a browser against the router. On the device the
-  receiver's two halves have been run with the page's engine driven from Node
-  on a computer on the LAN, not from a browser: against the bridge's
-  simulated radio (every simulated station heard as the tone it carries, no
-  frame lost at 2.4 Msps, the router about 28 % busy and the bridge at 3 MB),
-  and in one session of 22 s on a real HackRF (a PortaPack in HackRF mode) at
-  2.4 Msps: no frame lost, no overflow, broadcast FM stations found along the
-  band and one of them demodulated to programme audio, the radio closed 5 s
-  after the listener left. The page itself has been tried with the engine in
-  demo mode, and against the bridge's own code and simulated radio on a
-  computer. Untested: the page in a browser with the router's bridge, spans
-  wider than 2.4 MHz and several listeners on the real radio, the RTL-SDR
-  through the bridge, a job taking the radio back from a page that listens,
-  and a phone.
+- The Listen page on the device, beyond a first use. In a browser, against
+  the router's bridge and a real HackRF (a PortaPack in HackRF mode) at
+  2.4 Msps, the page has taken the radio from the survey job and broadcast FM
+  has been listened to. That use found a fault: Stop, then Start within the
+  5 s the radio is kept open, could bring sound that stutters. The HackRF's
+  driver does not survive its stream being stopped and started again (when
+  the stop falls on a buffer half read, one in four or so, it hands out old
+  samples from then on, as fast as they are asked for: three times the
+  radio's pace, as measured here), and that is what the bridge did. The
+  bridge now makes a new stream for every start; that is tested against a
+  stand-in for the driver, and not yet run on the device. Before
+  that, the receiver's two halves were run there with the page's engine
+  driven from Node on a computer on the LAN: against the bridge's simulated
+  radio (every simulated station heard as the tone it carries, no frame lost
+  at 2.4 Msps, the router about 28 % busy and the bridge at 3 MB), and in one
+  session of 22 s on the HackRF: no frame lost, no overflow, broadcast FM
+  stations found along the band and one of them demodulated to programme
+  audio, the radio closed 5 s after the listener left. Untested: spans wider
+  than 2.4 MHz and several listeners on the real radio, the RTL-SDR through
+  the bridge, a job taking the radio back from a page that listens, and a
+  phone.
 - The HackRF decoder paths (`option radio 'hackrf'`): ADS-B through readsb, ISM
   through rtl_433's SoapySDR backend, AIS through AIS-catcher, all on
   `driver=hackrf`. The packages cross-compile and the job wiring is covered by

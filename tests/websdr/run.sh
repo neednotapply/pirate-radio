@@ -9,8 +9,10 @@
 # Where the compiler has them, the tests run a second time against a build
 # with the address and undefined-behaviour sanitizers (SANITIZE=0 leaves that
 # out). With SoapySDR's headers installed (Debian/Ubuntu: libsoapysdr-dev),
-# the source for the real radios is compiled as well, as a check: nothing
-# here can run it.
+# the source for the real radios is built as well, with a stand-in for the
+# library behind it (fake_soapy.c: a HackRF and an RTL-SDR that are not
+# there, behind a driver as unforgiving as the HackRF's own), and
+# test_radio.py holds the bridge to what a driver can be asked.
 #
 # Nothing is left behind in the repository: it builds in a temporary
 # directory, and Python is told to write no bytecode.
@@ -30,11 +32,12 @@ cp "$src"/*.c "$src"/*.h "$src"/Makefile "$build/san/"
 
 make -s -C "$build/plain" SOAPY=0 CC="$cc" CFLAGS="-O2 -g"
 
-if printf '#include <SoapySDR/Device.h>\n' | $cc -E -x c - > /dev/null 2>&1; then
-	$cc -std=c99 -Wall -Wextra -O2 -DWITH_SOAPY -c -o "$build/soapy-check.o" "$src/source_soapy.c"
-	echo "ok - websdr: source_soapy.c compiles against this machine's SoapySDR"
-else
-	echo "ok - websdr: source_soapy.c compiles # SKIP (no SoapySDR headers here)"
+san=-fsanitize=address,undefined
+strict=-fno-sanitize-recover=undefined
+sanitized=
+if [ "${SANITIZE:-1}" != 0 ] &&
+	printf 'int main(void) { return 0; }\n' | $cc "$san" "$strict" -x c - -o "$build/san-check" > /dev/null 2>&1; then
+	sanitized="$san $strict"
 fi
 
 python3 "$here/test_bridge.py" --bin "$build/plain/pirate-websdr" "$@"
@@ -48,10 +51,20 @@ else
 	echo "ok - websdr: the engine against this bridge # SKIP (no node here)"
 fi
 
-san=-fsanitize=address,undefined
-strict=-fno-sanitize-recover=undefined
-if [ "${SANITIZE:-1}" != 0 ] &&
-	printf 'int main(void) { return 0; }\n' | $cc "$san" "$strict" -x c - -o "$build/san-check" > /dev/null 2>&1; then
+# The real radios' source (source_soapy.c), with fake_soapy.c where the
+# SoapySDR library would be: under the sanitizers, where there are any.
+if printf '#include <SoapySDR/Device.h>\n' | $cc -E -x c - > /dev/null 2>&1; then
+	mkdir "$build/radio"
+	cp "$src"/*.c "$src"/*.h "$here/fake_soapy.c" "$build/radio/"
+	# shellcheck disable=SC2086
+	(cd "$build/radio" && $cc -std=c99 -Wall -Wextra -O1 -g -fno-omit-frame-pointer $sanitized -DWITH_SOAPY \
+		-o pirate-websdr main.c ws.c json.c source_sim.c source_soapy.c fake_soapy.c -lm)
+	python3 "$here/test_radio.py" --bin "$build/radio/pirate-websdr" "$@"
+else
+	echo "ok - websdr radio: the real radios' source, with a stand-in for SoapySDR # SKIP (no SoapySDR headers here)"
+fi
+
+if [ -n "$sanitized" ]; then
 	echo "# again, with the address and undefined-behaviour sanitizers"
 	make -s -C "$build/san" SOAPY=0 CC="$cc" CFLAGS="-O1 -g -fno-omit-frame-pointer $san $strict" LDFLAGS="$san"
 	python3 "$here/test_bridge.py" --bin "$build/san/pirate-websdr" "$@"
