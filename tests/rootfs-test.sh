@@ -2634,8 +2634,10 @@ r=$(bt reports "{\"seq\":${s:-0}}")
 d=$(echo "$r" | jsonfilter -e '@.data')
 check "bluetooth: a record: the event as the adapter sent it" sh -c "case '$d' in FA??????PgIBAAD/7t3Mu6oDAgEGxA==) ;; *) exit 1 ;; esac"
 check "bluetooth: a record: one more to ask from" [ "$(echo "$r" | jsonfilter -e '@.seq')" = "$((s + 1))" ]
-# 5000 at once, of 37 bytes each as records: 3542 are held (128 KiB), 830 fit
-# an answer (30 KiB, 40948 characters of base64)
+# 5000 at once, of 38 bytes each as records (the thermometer's 19 bytes of
+# data, 12 of the report around them, and the record's 7): 3449 are held
+# (128 KiB), so 1551 are let go, and 808 fit an answer (30 KiB: 30704
+# bytes, 40940 characters of base64)
 s=$((s + 1))
 echo "many 5000" > "$BT/fifo"
 i=0
@@ -2643,11 +2645,11 @@ while [ "$(bts '@.heard')" != 5001 ] && [ $i -lt 30 ]; do sleep 1; i=$((i + 1));
 r=$(bt reports "{\"seq\":$s}")
 d=$(echo "$r" | jsonfilter -e '@.data')
 s2=$(echo "$r" | jsonfilter -e '@.seq')
-check "bluetooth: more than is held: the oldest are let go, and how many is said" [ "$(echo "$r" | jsonfilter -e '@.lost')" = 1458 ]
-check "bluetooth: more than an answer holds: as many as fit, whole" [ "${#d}" = 40948 ]
-check "bluetooth: and where to ask for the rest" [ "$s2" = "$((s + 1458 + 830))" ]
+check "bluetooth: more than is held: the oldest are let go, and how many is said" [ "$(echo "$r" | jsonfilter -e '@.lost')" = 1551 ]
+check "bluetooth: more than an answer holds: as many as fit, whole" [ "${#d}" = 40940 ]
+check "bluetooth: and where to ask for the rest" [ "$s2" = "$((s + 1551 + 808))" ]
 r=$(bt reports "{\"seq\":${s2:-0}}")
-check "bluetooth: asked from there: the next, none lost" [ "$(echo "$r" | jsonfilter -e '@.seq') $(echo "$r" | jsonfilter -e '@.lost')" = "$((s2 + 830)) " ]
+check "bluetooth: asked from there: the next, none lost" [ "$(echo "$r" | jsonfilter -e '@.seq') $(echo "$r" | jsonfilter -e '@.lost')" = "$((s2 + 808)) " ]
 # Stopped while it listens: the adapter is left as it was found
 : > "$BT/fake.log"
 kill "$BT_DAEMON"
