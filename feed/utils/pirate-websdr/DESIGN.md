@@ -247,9 +247,23 @@ late). `load`: time the DSP took / time the samples span (above ~0.9 it
 cannot keep up).
 
 The squelch is the page's to set: the engine only compares. The page sets it
-by itself (unless told a level by hand) a little above the noise in the
-channel, which it works out from the spectrum lines: the noise in a bin,
-less the window's 3 dB, times the bins the channel is wide.
+by itself (unless told a level by hand) a little above the noise the channel
+would hold with no signal in it, which it works out from the spectrum lines,
+taken as power: the noise in a bin beside the channel (or the whole line's,
+where that is less), less the window's 3 dB, times the bins the channel is
+wide. A line that comes after the radio has moved can still hold what was
+heard before. The first two or three do, because the engine marks a line
+with the centre it was told of and the samples on their way were taken at
+the old one. On the HackRF a line here and there does again for most of a
+second: SoapyHackRF takes its next buffer to fill from where its reader is
+and how many it holds, and counts the one being read twice while it is
+being read; filled then, a buffer lands one place on, and the place skipped
+is read later with what it held 15 buffers before (0.8 s, at 2.4 MHz). That
+happens when the bridge reads late, as it does while it moves the radio.
+The page does not ease the first three lines after a move into what it
+measures on, and begins its long average a second after. (The bridge could
+keep the driver from it by reading whole buffers, so that none is ever left
+half read between two calls. It does not yet.)
 
 ```js
 { type: "error", message: "..." }   // a bad setting, or something unexpected; the stream goes on

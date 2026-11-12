@@ -1125,7 +1125,9 @@ a { color: var(--link); }
 }
 .sdr-freq:focus { outline: none; border-color: var(--accent); }
 .sdr-unit { font-family: var(--mono); color: var(--muted); }
-.sdr-nudge { padding: 7px 8px; font-size: 10px; }
+.sdr-nudge { padding: 7px 8px; font-size: 10px; line-height: 12px; }
+/* The two that begin a scan, either side of the steps */
+.sdr-seek { padding: 7px 7px; font-size: 13px; }
 .sdr-modes { display: inline-flex; border: 1px solid var(--line-2); border-radius: var(--r); overflow: hidden; }
 .sdr-mode {
 	appearance: none; font: inherit; font-size: 12px; font-weight: 600; letter-spacing: .04em;
@@ -1157,7 +1159,6 @@ a { color: var(--link); }
 }
 .sdr-band:hover { border-color: var(--line-3); color: var(--hi); }
 .sdr-band.on { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
-.sdr-find { margin-left: auto; color: var(--link); border-style: dashed; }
 /* Favourites: the star beside the dial, and the channels it has kept */
 .sdr-star { padding: 6px 9px; font-size: 15px; line-height: 1.15; color: var(--muted); }
 .sdr-favs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; }
@@ -1199,5 +1200,5 @@ a { color: var(--link); }
 	.sdr-spec { height: 110px; }
 	.sdr-fall { height: 220px; }
 	.sdr-freq { font-size: 22px; }
-	.sdr-volbox, .sdr-find { margin-left: 0; }
+	.sdr-volbox { margin-left: 0; }
 }

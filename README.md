@@ -184,17 +184,32 @@ offered as a HackRF: choosing a feature switches it to HackRF mode first.
 and a waterfall, and its sound — broadcast FM, narrow FM, AM, sideband and
 Morse. Click a signal to tune to it, drag to move along the band, scroll to
 zoom, or type a frequency; the buttons above the display go to places worth a
-listen (FM radio, aircraft, weather radio, marine, the amateur bands), and
-*Scan* goes up the dial and stays five seconds on every signal that stands
-out from the noise (8 dB over it in its channel: about what the squelch opens
-for when it sets itself), then goes on to the next, until it is stopped: by
-its button, which leaves the dial on the signal it is on (or has just left),
-or by tuning by hand. With no signal in what the radio takes in, the radio
-itself goes up, a span at a time. In one of those bands, listened to the
+listen (FM radio, aircraft, weather radio, marine, the amateur bands). The
+two buttons outside the step buttons, ⏮ and ⏭, begin a scan, down the dial
+or up it: it stays five seconds on every signal that stands
+out from the noise beside it (6 dB over it in its channel; the squelch, when
+it sets itself, opens a dB under that, so what a scan stops on is heard),
+then goes on to the next, until it is stopped. A signal is taken as wide as
+it is: a broadcast station is one stop, at its middle, whether it is being
+listened to as wide FM or 8 kHz at a time, and the scan goes on from where
+the signal ends. What was in the channel listened to at a stop has been
+heard, and is not a stop of its own: of two carriers 7 kHz apart, listened
+to 12.5 kHz at a time, a scan up stops on the first. The dial goes to the
+nearest of its steps when the
+signal's middle is well inside the channel there; where the steps are wider
+than the channel (25 kHz, for 12.5 kHz of narrow FM) it can be between two,
+and the dial then goes to a finer step, where the signal is. Where the scan
+sees something it looks for a second before it
+says what (a station's carrier moves with its sound, and in less it is a
+dozen lumps); where it sees nothing it moves on at once. A scan is stopped
+by the button that began it (lit, while it runs), which leaves the dial on
+the signal it is on (or has just left), or by tuning by hand; the other
+button turns it round. With no signal in what the radio takes in, the radio
+itself goes on, a span at a time. In one of those bands, listened to the
 band's own way (broadcast FM in wide FM, aircraft in AM, the two-way bands in
 narrow FM), the scan keeps to the band and goes round it, from signal to
 signal; a band with nothing else in it is left behind, and the scan goes on
-above it, as it does anywhere else. The star beside the
+beyond it, as it does anywhere else. The star beside the
 frequency keeps the channel the dial is on as a favourite, under a name (its
 frequency, how it is listened to and how wide): favourites sit in a row above
 the display, a click goes back to one, and the star on one that is kept
@@ -730,10 +745,13 @@ Tested in this repository's tests and builds:
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
   made by the formula, the engine against a stand-in for the bridge, and
-  the page's own reckoning: where a scan finds signals in a line of the
-  spectrum, where it looks next, and what is made of the favourites a
-  browser kept (`node tests/sdr/run.js`, 75 tests); and the bridge, built
-  for the machine
+  the page's own reckoning: the noise in a line of the spectrum; the
+  signals in it, each as wide as it is, where the dial goes for one, and
+  where a scan looks next, up the dial or down it; the squelch that sets
+  itself by the same noise; the lines that come after the radio has
+  moved, which are not measured on; and what is made of the favourites a
+  browser kept (`node tests/sdr/run.js`, 94 tests); and the
+  bridge, built for the machine
   at hand with its simulated radio, through its protocol end to end, then
   with the engine run against it, then again under the address and
   undefined-behaviour sanitizers (`sh tests/websdr/run.sh`, 30 and 6 tests);
@@ -779,7 +797,103 @@ Not yet run:
   band, which had nothing else in it. The scan as it is now (staying on each
   signal and going on by itself, and leaving a band with nothing else in
   it) has been run in a browser against the simulated band, and then tried
-  in the router's own page on that HackRF, where it worked. Before
+  in the router's own page on that HackRF, where it worked, but went past
+  stations that could be heard. It wanted a channel 8 dB over the noise,
+  where the squelch, by a rougher reckoning off the picture, let through
+  what was 6 dB over (and less, zoomed in); and it took the noise from the
+  whole line. Both now go by one measure, taken on the lines as power: the
+  noise beside the channel, the scan stopping 6 dB over it and the squelch
+  opening a dB under that (the squelch by the whole line's noise too, where
+  that is less, so that nothing it let through before is shut out). That
+  was worked out on lines recorded from that HackRF (54 looks along six
+  bands), and then run on it with the page in a browser on a computer, the
+  stream relayed, at the gains the page had been used with: round the FM
+  band the scan stayed on six or seven stations where it had stayed on
+  four, the squelch open on each. What those lines also showed, and a scan
+  does not allow for: this HackRF's own carriers stand as signals (at
+  multiples of 10, 3.125 and 0.8 MHz; 125 MHz is 28 dB over the noise,
+  120 and 160 MHz 23 to 25, 444 MHz 18), and a strong signal just
+  outside what the radio takes in shows inside it, at the other end (one
+  0.24 MHz outside, 14 dB down: at 2.4 MHz the HackRF's filter is not
+  steep). A scan stops on both as it would on a station. Tried in the
+  router's own page with the dial left in AM among the broadcast stations,
+  that scan stopped several times on one station (100.25, 100.29, 100.30,
+  100.305 MHz): 8 kHz at a time, each lump of a station was a signal, and
+  the scan went on from half a step above the last. A signal is now a
+  stretch of the line, as wide as it is; the scan stops on it once, at its
+  middle, and goes on from where it ends. What that takes was found on
+  lines recorded from that HackRF (with a better aerial by then: twelve
+  stations 6 dB over the noise, and the weather station on 162.55 MHz): a
+  second of the spectrum, not a fifth of one, which is why the scan looks
+  twice. They showed one thing more. After the radio moves, the spectrum
+  still shows what was there before: for two or three lines, as the
+  samples on their way arrive; and again for a tenth of a second here and
+  there until 0.9 s after, because the HackRF's driver (SoapyHackRF), read
+  late as it is while the radio is being moved, hands out a buffer it
+  filled 0.8 s before as if it were new (34 moves looked at: the old
+  picture in the first line of every one, in none after the 19th). The
+  page now waits a second after a move before it averages; the bridge
+  could spare it that by never leaving the driver with part of a buffer,
+  and does not yet. Run on that HackRF with the page in a browser on a
+  computer, the stream relayed: from 100.295 MHz in AM, inside a station,
+  the first stop was the next station, 100.7; round the FM band in wide
+  FM, sixteen stops, each once, the squelch open on every one; from 162
+  MHz in narrow FM, the weather stations. Five or six of those sixteen
+  (87.7, 90.0, 91.5, 93.0, 94.5 and perhaps 93.7 MHz) are where the
+  recordings show no station but a hump of noise that the aerial picks
+  up from something near it, one every 0.72 MHz and by then 10 dB over
+  the rest: as wide as a station and as strong as a weak one, a scan
+  cannot tell them from one. That scan was then run in the router's own
+  page, in a browser signed in to it. In AM from under the station it had
+  stopped on four times: one stop on it (100.3 MHz), one on the next
+  (100.7), and so on up, 33 stops in two runs and no signal twice. Twice
+  round the FM band in wide FM: the same ten stations each time, the
+  squelch open on every one. In narrow FM, from the weather station on
+  162.55 MHz, it showed two faults. The scan stopped on that station
+  again as it left the band: it went on from the band's top, and that is
+  the station's own frequency. And two of the 21 stops above the band
+  were silent, the squelch shut: the dial's steps there are 25 kHz, wider
+  than the 12.5 kHz listened to, and the dial went to the nearest, 180.300
+  MHz for a television station's pilot on 180.310, where the channel
+  holds none of it (in the aircraft band, 8 kHz on steps of 25, three
+  stops of nine). The scan now goes on from above the signal it began on.
+  And the dial goes to a step only when the signal's middle is well inside
+  the channel there (within three eighths of the channel's width), or else
+  to a finer one. Of the signals in the lines recorded from that HackRF,
+  listened to the aircraft band's way, 51 of 178 had the squelch shut at
+  the dial, and now none; the weather band's way, 27 of 145, and now two,
+  each within a dB of opening it; and listened to as they were recorded
+  (wide FM, AM on steps of 5 kHz, narrow FM on steps of 2.5), no dial is
+  changed. Run on the HackRF again, from a computer: the pilot found on
+  180.3125 MHz and heard; seven stops in the aircraft band, all heard;
+  twelve round the FM band and the AM scan as before. (The first of the
+  two faults is mended by a test's showing, not the air's: by then a
+  second weather station, on 162.45 MHz, was strong enough to keep the
+  scan in the band, going from one to the other.) What that run in narrow
+  FM also showed is how little of what a scan stops on above the
+  broadcast band is a station, on this HackRF: 19 of those 21 stops were
+  the carriers at multiples of 0.8, 3.125 and 10 MHz, and the other two
+  the pilots of television stations. A scan from each of the page's band
+  buttons in turn, on that HackRF, showed one fault more: from the 433
+  MHz button, a stop on 437.500 MHz and then one on 437.505. It was taken
+  at first for one carrier between two of the dial's 5 kHz steps, which a
+  look can put on either (with each carrier in the recorded lines put
+  half-way between two steps, a scan over two looks at it had stopped on
+  it twice in 15 runs of 154), and mended as that: a signal whose middle
+  lies in what the scan began on or last stayed on is that signal again.
+  On the air the scan did as before. The lines the page had seen there,
+  kept and gone through, held two carriers, on 437.4979 and 437.5047 MHz,
+  each a signal, and both inside the 12.5 kHz listened to at the first
+  stop. What a scan has behind it is now the signal it stayed on and the
+  channel it listened to there, and what has its middle in either is not
+  stopped on: on the air, one stop there, and on to 438.4 MHz. The scan
+  then got its two buttons, one for each way along the dial, in place of
+  the one that went up, and was run on that HackRF down the dial: once
+  round the FM band in wide FM, eleven stations, each once, in the order
+  a scan up finds them turned about; turned round while on a station, on
+  to the next one the other way; in AM from inside a broadcast station,
+  the first stop the station under it; from the one signal in the 433 MHz
+  band, on under the band; and between the two weather stations. Before
   that, the receiver's two halves were run there with the page's engine
   driven from Node on a computer on the LAN: against the bridge's simulated
   radio (every simulated station heard as the tone it carries, no frame lost
