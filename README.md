@@ -666,6 +666,10 @@ pirate-portapack` shows it connecting.
   images include the driver for USB Wi-Fi adapters on Ralink's RT2800 chips
   (RT3070, RT5370, RT5372, such as Panda's PAU05 and PAU06). The adapter
   shares the USB port with the radios, so use the powered hub.
+- **Bluetooth:** both images include the kernel's Bluetooth support and
+  its driver for USB dongles (`kmod-bluetooth`, `kmod-btusb`). That is all
+  so far: the image has no Bluetooth programs, and the web interface has
+  no page for a dongle yet.
 - **The law:** what you may receive, decode and record differs by country.
 
 ## Tested so far, and what isn't
@@ -946,6 +950,8 @@ Not yet run:
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that
   has a password, the sign-in path has been run on the hardware.
+- Bluetooth: the driver is in both images, and has not been run with a
+  dongle yet.
 
 ## Layout
 
