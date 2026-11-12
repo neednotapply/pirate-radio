@@ -1,0 +1,10 @@
+{
+	"pirate-bluetooth": {
+		"description": "Grant access to a Bluetooth dongle on the USB port: what it is, and what it hears of the devices around",
+		"read": {
+			"ubus": {
+				"pirate.bluetooth": [ "status", "reports" ]
+			}
+		}
+	}
+}

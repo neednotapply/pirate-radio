@@ -22,8 +22,9 @@ trap 'rm -rf "$ov"' EXIT
 # the cleanup) can write to it. tests/fakemodem (a modem with a Dreamcast on
 # the line, for the dreampi tests) and tests/fakeflipper (a Flipper Zero, for
 # pirate-flipper's), tests/fakemeshcore (a MeshCore radio, for
-# pirate-meshcore's) and tests/fakeportapack (a PortaPack on Mayhem firmware,
-# for pirate-portapack's) are built with the SDK's compiler.
+# pirate-meshcore's), tests/fakeportapack (a PortaPack on Mayhem firmware,
+# for pirate-portapack's) and tests/fakebt (a Bluetooth adapter, for
+# pirate-bluetooth's) are built with the SDK's compiler.
 docker run --rm --user 0 -e OWNER="$(id -u):$(id -g)" \
 	-v "$pkgs:/pkgs:ro" -v "$ov:/ov" -v "$here/tests:/tests:ro" "$SDK_IMAGE" sh -c '
 	set -e
@@ -38,6 +39,7 @@ docker run --rm --user 0 -e OWNER="$(id -u):$(id -g)" \
 	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakeflipper /tests/fakeflipper.c
 	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakemeshcore /tests/fakemeshcore.c
 	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakeportapack /tests/fakeportapack.c
+	STAGING_DIR=/builder/staging_dir "$cc" -O2 -Wall -o /ov/usr/bin/fakebt /tests/fakebt.c
 	chown -R "$OWNER" /ov'
 
 f="$here/feed/utils/pirate-radio/files"
@@ -99,6 +101,12 @@ cp "$u/usr/share/rpcd/acl.d/pirate-flipper.json" "$ov/usr/share/rpcd/acl.d/"
 cp "$u/usr/share/rpcd/acl.d/pirate-meshcore.json" "$ov/usr/share/rpcd/acl.d/"
 # The PortaPack page's ACL (the pirate-portapack package comes built, above)
 cp "$u/usr/share/rpcd/acl.d/pirate-portapack.json" "$ov/usr/share/rpcd/acl.d/"
+# The Bluetooth page's ACL (the pirate-bluetooth package comes built,
+# above), and its script, for the check that the ACL lets through every
+# call it makes
+cp "$u/usr/share/rpcd/acl.d/pirate-bluetooth.json" "$ov/usr/share/rpcd/acl.d/"
+mkdir -p "$ov/www/bt"
+cp "$here/feed/utils/pirate-radio-ui/files/bt/scanner.js" "$ov/www/bt/scanner.js"
 chmod 755 "$ov/usr/sbin/pirate-dreampi" "$ov/usr/libexec/rpcd/pirate.dreampi"
 # USB drives plug and play (pirate-usb), its block hotplug hook and rpcd plugin
 mkdir -p "$ov/etc/hotplug.d/block"

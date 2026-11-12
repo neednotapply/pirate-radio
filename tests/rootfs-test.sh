@@ -2413,6 +2413,194 @@ if [ "$FAIL" != 0 ]; then
 fi
 kill "$MC_DAEMON" "$MC_UBUSD" 2> /dev/null
 
+echo "# Bluetooth (pirate-bluetooth; tests/fakebt plays the adapter)"
+BT="$T/bluetooth"
+BS="$BT/sys"
+mkdir -p "$BT" "$BS/class/bluetooth" "$BS/bus/usb/devices"
+check "bluetooth: ACL is valid JSON" sh -c 'jsonfilter -i /usr/share/rpcd/acl.d/pirate-bluetooth.json -e "@" > /dev/null'
+# Each call the page makes (they are in its own script), let through by
+# rpcd's ACL (one it leaves out is refused): status and reports
+check "bluetooth: the ACL lets through every call the page makes" sh -c '
+	a=$(jsonfilter -i /usr/share/rpcd/acl.d/pirate-bluetooth.json -e "@[\"pirate-bluetooth\"].read.ubus[\"pirate.bluetooth\"][*]")
+	n=0
+	for m in $(grep -o "call(\"pirate.bluetooth\", \"[a-z_]*\"" /www/bt/scanner.js | sed "s/.*\"\([a-z_]*\)\"\$/\1/" | sort -u); do
+		echo "$a" | grep -qx "$m" || { echo "not in the ACL: $m"; exit 1; }
+		n=$((n + 1))
+	done
+	[ "$n" = 2 ]'
+ubusd -s "$BT/ubus.sock" > "$BT/ubusd.log" 2>&1 &
+BT_UBUSD=$!
+: > "$BT/fake.log"
+bt() { "$FZ_UBUS" -s "$BT/ubus.sock" -t 30 call pirate.bluetooth "$@" 2> /dev/null; }
+bts() { bt status | jsonfilter -e "$1"; }
+# Wait (up to 30 s) for the state to be $1, without asking what it hears
+bt_is() {
+	i=0
+	while [ $i -lt 30 ]; do
+		[ "$(bts '@.state')" = "$1" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+# The same, asking what it hears, which is what makes it listen
+bt_state() {
+	i=0
+	while [ $i -lt 30 ]; do
+		[ "$(bt reports | jsonfilter -e '@.state')" = "$1" ] && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+# Wait (up to 30 s) for the error it reports to have $1 in it ("": for none)
+bt_err() {
+	i=0
+	while [ $i -lt 30 ]; do
+		e=$(bts '@.error')
+		if [ -z "$1" ]; then [ -z "$e" ] && return 0; else case "$e" in *"$1"*) return 0 ;; esac; fi
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+# Wait (up to 30 s) for a line in the stand-in adapter's log
+bt_log() {
+	i=0
+	while [ $i -lt 30 ]; do
+		grep -q "$1" "$BT/fake.log" && return 0
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
+# The stand-in adapter, with these options; back once its socket is there
+bt_fake() {
+	rm -f "$BT/hci"
+	fakebt -l "$BT/hci" -c "$BT/fifo" "$@" >> "$BT/fake.log" 2>&1 &
+	BT_FAKE=$!
+	i=0
+	while [ ! -e "$BT/hci" ] && [ $i -lt 20 ]; do sleep 1; i=$((i + 1)); done
+}
+pirate-bluetooth -d "$BT/hci" -s "$BS" -u "$BT/ubus.sock" -i 60000 > "$BT/daemon.log" 2>&1 &
+BT_DAEMON=$!
+check "bluetooth: no adapter: absent" bt_is absent
+check "bluetooth: absent: asked what it hears, it says so at once" [ "$(bt reports | jsonfilter -e '@.state')" = absent ]
+# A dongle on USB of which the kernel has made no adapter (it has no driver)
+BU="$BS/bus/usb/devices/1-1"
+mkdir -p "$BU/1-1:1.0"
+echo 0a12 > "$BU/idVendor"; echo 0001 > "$BU/idProduct"; echo 8891 > "$BU/bcdDevice"
+echo "CSR8510 A10" > "$BU/product"
+echo e0 > "$BU/bDeviceClass"; echo 01 > "$BU/bDeviceSubClass"; echo 01 > "$BU/bDeviceProtocol"
+check "bluetooth: a dongle the kernel has no driver for: said" bt_err "a Bluetooth dongle is plugged in (0a12:0001 CSR8510 A10), but the kernel has made no adapter of it"
+# The kernel's adapter, hci0, on that USB device; and a connection's entry
+# beside it, which is not an adapter
+mkdir -p "$BS/class/bluetooth/hci0" "$BS/class/bluetooth/hci0:256"
+ln -s "$BU/1-1:1.0" "$BS/class/bluetooth/hci0/device"
+bt_fake
+check "bluetooth: an adapter: idle" bt_is idle
+check "bluetooth: idle: what it is on USB" [ "$(bts '@.adapter') $(bts '@.usb') $(bts '@.product') $(bts '@.usb_version')" = "hci0 0a12:0001 CSR8510 A10 8891" ]
+check "bluetooth: idle: nothing wrong any more" bt_err ""
+check "bluetooth: idle: the adapter is left alone until somebody asks" sh -c "! grep -q '^open' '$BT/fake.log'"
+check "bluetooth: asked what it hears: it listens" bt_state listening
+check "bluetooth: listening: the adapter was asked what it is" sh -c "grep -q '^version$' '$BT/fake.log' && grep -q '^address$' '$BT/fake.log'"
+check "bluetooth: listening: a passive scan, every advertisement wanted" grep -q '^scan on passive$' "$BT/fake.log"
+check "bluetooth: listening: its address, its versions, its maker" [ "$(bts '@.address') $(bts '@.hci_version') $(bts '@.hci_revision') $(bts '@.lmp_version') $(bts '@.lmp_subversion') $(bts '@.maker')" = "00:1A:7D:DA:71:13 6 8891 6 8891 10" ]
+check "bluetooth: listening: with the commands every LE adapter has" [ "$(bts '@.extended')" = false ]
+# The stand-in's three devices advertise in turn, ten times a second
+sleep 2
+r=$(bt reports)
+s0=$(echo "$r" | jsonfilter -e '@.seq')
+d=$(echo "$r" | jsonfilter -e '@.data')
+check "bluetooth: reports: what was heard, and where to ask from next" sh -c "[ '${#d}' -gt 400 ] && [ '${s0:-0}' -gt 5 ]"
+check "bluetooth: reports: the daemon's clock" [ "$(echo "$r" | jsonfilter -e '@.now')" -gt 0 ]
+check "bluetooth: status: how many it has heard" [ "$(bts '@.heard')" -ge "${s0:-1}" ]
+s1=$(bt reports "{\"seq\":${s0:-0}}" | jsonfilter -e '@.seq')
+check "bluetooth: reports: asked from there, what has come since" [ "${s1:-0}" -gt "${s0:-0}" ]
+# The adapter goes from under it (its socket ends), and is there again
+kill "$BT_FAKE"
+check "bluetooth: the adapter gone from under it: no longer listening" bt_is idle
+: > "$BT/fake.log"
+bt_fake -n
+check "bluetooth: asked again: it listens again" bt_state listening
+# One advertisement, of three bytes, from AA:BB:CC:DD:EE:FF at -60 dBm: the
+# record is 2 bytes of length, 4 of time (which is not known here), the
+# event's code (0x3e) and its parameters, as the adapter sent them
+s=$(bt reports | jsonfilter -e '@.seq')
+echo "adv 020106" > "$BT/fifo"
+r=$(bt reports "{\"seq\":${s:-0}}")
+d=$(echo "$r" | jsonfilter -e '@.data')
+check "bluetooth: a record: the event as the adapter sent it" sh -c "case '$d' in FA??????PgIBAAD/7t3Mu6oDAgEGxA==) ;; *) exit 1 ;; esac"
+check "bluetooth: a record: one more to ask from" [ "$(echo "$r" | jsonfilter -e '@.seq')" = "$((s + 1))" ]
+# 5000 at once, of 37 bytes each as records: 3542 are held (128 KiB), 830 fit
+# an answer (30 KiB, 40948 characters of base64)
+s=$((s + 1))
+echo "many 5000" > "$BT/fifo"
+i=0
+while [ "$(bts '@.heard')" != 5001 ] && [ $i -lt 30 ]; do sleep 1; i=$((i + 1)); done
+r=$(bt reports "{\"seq\":$s}")
+d=$(echo "$r" | jsonfilter -e '@.data')
+s2=$(echo "$r" | jsonfilter -e '@.seq')
+check "bluetooth: more than is held: the oldest are let go, and how many is said" [ "$(echo "$r" | jsonfilter -e '@.lost')" = 1458 ]
+check "bluetooth: more than an answer holds: as many as fit, whole" [ "${#d}" = 40948 ]
+check "bluetooth: and where to ask for the rest" [ "$s2" = "$((s + 1458 + 830))" ]
+r=$(bt reports "{\"seq\":${s2:-0}}")
+check "bluetooth: asked from there: the next, none lost" [ "$(echo "$r" | jsonfilter -e '@.seq') $(echo "$r" | jsonfilter -e '@.lost')" = "$((s2 + 830)) " ]
+# Stopped while it listens: the adapter is left as it was found
+: > "$BT/fake.log"
+kill "$BT_DAEMON"
+check "bluetooth: stopped while listening: the scan is switched off first" bt_log '^scan off$'
+# (gone, before another takes its name on ubus)
+wait "$BT_DAEMON" 2> /dev/null
+# One that lets the adapter go 3 s after the last one asked
+pirate-bluetooth -d "$BT/hci" -s "$BS" -u "$BT/ubus.sock" -i 3000 > "$BT/daemon2.log" 2>&1 &
+BT_DAEMON=$!
+: > "$BT/fake.log"
+check "bluetooth: started again: listens when asked" bt_state listening
+sleep 5
+check "bluetooth: nobody asking: the scan is switched off, the adapter let go" sh -c "grep -q '^scan off$' '$BT/fake.log' && grep -q '^close$' '$BT/fake.log'"
+check "bluetooth: nobody asking: idle" [ "$(bts '@.state')" = idle ]
+# A Bluetooth 5 adapter, as the kernel leaves one: it refuses the scan
+# commands every LE adapter has, and takes the extended ones
+kill "$BT_FAKE"
+: > "$BT/fake.log"
+bt_fake -n -x
+check "bluetooth: a Bluetooth 5 adapter: it listens" bt_state listening
+check "bluetooth: extended: the older commands were tried first, and refused" grep -q '^refused 200b$' "$BT/fake.log"
+check "bluetooth: extended: a passive scan, every advertisement wanted" grep -q '^xscan on passive$' "$BT/fake.log"
+check "bluetooth: extended: said" [ "$(bts '@.extended') $(bts '@.hci_version')" = "true 9" ]
+s=$(bt reports | jsonfilter -e '@.seq')
+echo "adv 020106" > "$BT/fifo"
+d=$(bt reports "{\"seq\":${s:-0}}" | jsonfilter -e '@.data')
+check "bluetooth: extended: an extended advertising report, as the adapter sent it" sh -c "case '$d' in Ig??????Pg0BEwAA/+7dzLuqAQD/f8QAAAAAAAAAAAADAgEG) ;; *) exit 1 ;; esac"
+# One from before Bluetooth 4.0: it knows no Low Energy command
+kill "$BT_FAKE"
+check "bluetooth: (that adapter gone)" bt_is idle
+: > "$BT/fake.log"
+bt_fake -o
+bt reports > /dev/null
+check "bluetooth: an adapter from before Bluetooth 4.0: it cannot listen, and why" bt_err "older than Bluetooth 4.0"
+check "bluetooth: which is a failure" [ "$(bts '@.state')" = failed ]
+# One that answers nothing (a failure is not tried again for 5 s)
+kill "$BT_FAKE"
+: > "$BT/fake.log"
+bt_fake -q
+sleep 6
+bt reports > /dev/null
+check "bluetooth: an adapter that does not answer: said, after 3 s" bt_err "the adapter did not answer (HCI command 0x1001)"
+# Unplugged: first the kernel's adapter goes, then the dongle
+rm -rf "$BS/class/bluetooth/hci0"
+check "bluetooth: unplugged: absent" bt_is absent
+rm -rf "$BU"
+check "bluetooth: unplugged: nothing more to say" bt_err ""
+check "bluetooth: the daemon is still running" kill -0 "$BT_DAEMON"
+if [ "$FAIL" != 0 ]; then
+	tail -n 30 "$BT/daemon.log" "$BT/daemon2.log" 2> /dev/null | sed 's/^/  pirate-bluetooth: /'
+	tail -n 30 "$BT/fake.log" | sed 's/^/  fakebt: /'
+	tail -n 10 "$BT/ubusd.log" | sed 's/^/  ubusd: /'
+fi
+kill "$BT_DAEMON" "$BT_FAKE" "$BT_UBUSD" 2> /dev/null
+
 echo "# phone (an Android phone on the USB port; pirate-phone)"
 PH="$T/phone"
 mkdir -p "$PH/bin"

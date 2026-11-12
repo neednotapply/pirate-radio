@@ -44,6 +44,7 @@ jobs:
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-flipper/files/pirate-flipper.init
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-meshcore/files/pirate-meshcore.init
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-portapack/files/pirate-portapack.init
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-bluetooth/files/pirate-bluetooth.init
           cd feed/net/dreampi/files
           shellcheck -s sh -e SC1091,SC3043,SC2034,SC2154 call.sh dcnow.sh nat.sh lib.sh dreampi.init dreampi.hotplug dreampi.defaults
           cd "$GITHUB_WORKSPACE"
@@ -103,6 +104,11 @@ jobs:
       # the engine against a stand-in for the bridge. Node alone, no packages.
       - name: Engine (the browser's side)
         run: node tests/sdr/run.js
+
+      # The Bluetooth page's part in the browser: what it makes of what a
+      # dongle hears, which the router only hands on. Node alone as well.
+      - name: Bluetooth page (the browser's side)
+        run: node tests/bt/run.js
 
       # The router's side, built for this machine: the protocol end to end
       # against its simulated radio, and again under the address and

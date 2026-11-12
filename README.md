@@ -641,6 +641,45 @@ PortaPack in device mode is plugged in, and gpsd leaves its serial port alone.
 Nothing here transmits; flashing writes only what you choose. `logread -e
 pirate-portapack` shows it connecting.
 
+**A Bluetooth dongle:** plug one into the USB port and the **Bluetooth** tab
+shows the Bluetooth devices around, as a scanner app on a phone would: a
+line a device, with how strongly it is heard, its name where it says one,
+what kind of thing it is, its maker, its address, and when it was last
+heard.
+
+- **What they are:** phones, computers and watches; headphones and speakers;
+  beacons (iBeacon and Eddystone, with what they carry); sensors (a
+  RuuviTag's readings); keyboards and mice; and whatever else advertises.
+  The list can be searched, ordered, and kept to one kind.
+- **Trackers** are marked (an AirTag and the others on Apple's Find My
+  network, a Tile, a SmartTag, a Chipolo, those on Google's network), and
+  marked again when they say they are away from their owner.
+- **A line pressed** shows the rest: how often the device advertises, how
+  strongly it was heard over the last two minutes, everything its
+  advertisement says, and the advertisement as it was sent.
+
+It only listens. The adapter scans passively: it asks nothing of the
+devices it hears and connects to none. So a device that does not advertise
+is not seen, a name that a device gives only when asked is not shown, and
+nothing that is seen can tell. What a device is taken for is a reading of
+what it advertises, no more: a name is its own word, a maker is whoever's
+number is on its data. Phones, watches and trackers change their address
+every few minutes, and are a line for each address they had until one not
+heard for five minutes is let go. Nothing is kept or written: the list is
+the page's, and goes with it.
+
+The router does none of the reckoning. `pirate-bluetooth` (its own package)
+has the kernel's adapter (`hci0`, through an HCI socket; nothing of BlueZ)
+scan while a page looks, puts it down again ten seconds after the last one
+asked, and hands on what the adapter reports as it is, on ubus as
+`pirate.bluetooth`. The page (`bt/scanner.js`) makes devices of that, with
+the names of makers and services from Nordic Semiconductor's
+[bluetooth-numbers-database](https://github.com/NordicSemiconductor/bluetooth-numbers-database)
+(`bt/names.js`, made by `scripts/bt-names.py`). An adapter that takes only
+Bluetooth 5's extended scan commands is given those; a dongle the kernel
+has no driver for is said to be one. `logread -e pirate-bluetooth` shows it
+starting and stopping.
+
 **On the card** (`pirate-radio/<job>/<date>/`):
 
 | Files | Open with |
@@ -667,9 +706,10 @@ pirate-portapack` shows it connecting.
   (RT3070, RT5370, RT5372, such as Panda's PAU05 and PAU06). The adapter
   shares the USB port with the radios, so use the powered hub.
 - **Bluetooth:** both images include the kernel's Bluetooth support and
-  its driver for USB dongles (`kmod-bluetooth`, `kmod-btusb`). That is all
-  so far: the image has no Bluetooth programs, and the web interface has
-  no page for a dongle yet.
+  its driver for USB dongles (`kmod-bluetooth`, `kmod-btusb`), and
+  `pirate-bluetooth` for the Bluetooth page. Nothing of BlueZ is in the
+  image: there is no `bluetoothctl` or `hcitool`. The dongle shares the
+  USB port with the radios, so use the powered hub.
 - **The law:** what you may receive, decode and record differs by country.
 
 ## Tested so far, and what isn't
@@ -740,11 +780,21 @@ Tested in this repository's tests and builds:
   a frame coming, changing when the menu moves and unchanged frames held back;
   reboot and flash input checks; switching to HackRF mode leaving the console;
   and gpsd keeping off its port),
+  a Bluetooth dongle (pirate-bluetooth against `tests/fakebt`, an adapter
+  on a Unix socket that speaks HCI as the kernel's does: none, and a dongle
+  the kernel has no driver for said to be one; an adapter left alone until
+  a page asks, then a passive scan that leaves no advertisement out; its
+  address and versions; what it hears handed on as it came, a record an
+  event, to be asked for from where the last answer ended; more than is
+  held, and how many were let go; the scan switched off and the adapter
+  let go when nobody asks, and when the daemon stops; an adapter that takes
+  only the extended scan commands, one from before Bluetooth 4.0, one that
+  answers nothing, one that goes away while it listens; unplugged),
   against mock radios and tools on that same userland, and the rename from
   slate-sdr (settings, card mount, card folder) and pirateradio.local, and
   the web UI's receiver (the bridge as built for the router, answering a
   handshake with its simulated radio; its job among the others; the radio
-  taken back from a page that listens; old settings given the job): 863
+  taken back from a page that listens; old settings given the job): 905
   checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
@@ -762,6 +812,17 @@ Tested in this repository's tests and builds:
   and the bridge's source for the real radios with a stand-in for the
   SoapySDR library behind it, whose driver spoils a stream that is stopped
   and started again, as the HackRF's does (8 tests, in the same run).
+- The Bluetooth page's own reckoning has tests that need no router either
+  (`node tests/bt/run.js`, 20 tests, in the same job): the advertising
+  reports in what the router hands on, in the form every LE adapter has
+  and in Bluetooth 5's; an advertisement's structures and what they say
+  of a device, made a byte at a time after the Bluetooth specification
+  and the makers' published formats (its name; a beacon's contents; an
+  AirTag with its owner and without; whose a tracker is; headphones by
+  the model they say; a RuuviTag's readings, by Ruuvi's own example);
+  the devices heard, one for an address, how strongly and how often; and
+  the made-up neighbourhood of the UI's demo mode, which goes through
+  the same reckoning as a real one.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -950,28 +1011,34 @@ Not yet run:
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that
   has a password, the sign-in path has been run on the hardware.
-- Bluetooth: the driver is in both images, and has not been run with a
-  dongle yet.
+- The Bluetooth page with a dongle. Its daemon is tested only against
+  `tests/fakebt` and its page against made-up advertisements: the kernel's
+  driver, its HCI socket and what a real dongle hears have not been run,
+  on the device or anywhere. The dongle that waits for it names itself a
+  CSR8510 A10 (`0a12:0001`); many under that name are other chips, which
+  the kernel's driver tells apart only when it sets one up.
 
 ## Layout
 
 | Path | |
 |---|---|
-| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `rtl433-soapy`, `readsb-soapy`, `ais-catcher`, `pirate-websdr`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack` |
+| `feed/` | OpenWrt package feed: `fftw3f`, `hackrf`, `soapysdr`, `soapy-hackrf`, `soapy-rtlsdr`, `soapy-remote`, `rtl433-soapy`, `readsb-soapy`, `ais-catcher`, `pirate-websdr`, `pirate-radio`, `pirate-radio-ui`, `dreampi`, `pirate-flipper`, `pirate-meshcore`, `pirate-portapack`, `pirate-bluetooth` |
 | `feed/utils/pirate-radio/files/` | the service: job runner, init script, CLI, status page, default config |
 | `feed/net/dreampi/` | DreamPi: the modem daemon and DCNet client (`src/`), the call script, NAT rules, Dreamcast Now, init script and hotplug hook (`files/`) |
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
 | `feed/utils/pirate-meshcore/` | the Messenger tab's daemon (`src/pirate-meshcore.c`: a MeshCore radio's companion protocol, on ubus as `pirate.meshcore`) and its init script |
 | `feed/utils/pirate-portapack/` | the PortaPack tab's daemon (`src/pirate-portapack.c`: a PortaPack/Mayhem serial command shell, on ubus as `pirate.portapack`) and its init script |
+| `feed/utils/pirate-bluetooth/` | the Bluetooth tab's daemon (`src/pirate-bluetooth.c`: the kernel's Bluetooth adapter set to listen, and what it reports handed on, on ubus as `pirate.bluetooth`) and its init script |
 | `feed/utils/pirate-websdr/` | the Listen page's bridge on the router (`src/`: a radio's samples into a WebSocket, through SoapySDR, and the tuning back), and `DESIGN.md`: how the bridge, the engine and the page fit together, and what they say to each other |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
 | `feed/utils/pirate-radio-ui/files/sdr/` | the Listen page's receiver: the page's part (`receiver.js`) and the signal processing, which runs in a worker (`worker.js`, `dsp.js`; `siggen.js` is the simulated band of the demo mode) |
+| `feed/utils/pirate-radio-ui/files/bt/` | the Bluetooth page's scanner (`scanner.js`: what the dongle hears made into devices) and the names of makers and services it shows (`names.js`, made by `scripts/bt-names.py`) |
 | `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics and its ports (`pirate-router`), access (`pirate-access`: SSH, sign-ins, the terminal), firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
 | `config/full.config` | full-build options (spectral scan, ath10k) |
 | `build.sh`, `scripts/` | the Docker build (SDK, then ImageBuilder) |
 | `build-full.sh` | the full source build |
-| `tests/` | runtime tests on OpenWrt's MIPS userland under QEMU; `tests/sdr/` and `tests/websdr/`: the Listen page's engine and bridge, which run on any machine |
+| `tests/` | runtime tests on OpenWrt's MIPS userland under QEMU; `tests/sdr/` and `tests/websdr/`: the Listen page's engine and bridge, which run on any machine; `tests/bt/`: the Bluetooth page's reckoning, which does too |
 
 rtl-sdr, rtl_433, dump1090 and rtl-ais come from OpenWrt's own package feed and
 drive the RTL-SDR paths. The HackRF decoder paths add separate SoapySDR-enabled

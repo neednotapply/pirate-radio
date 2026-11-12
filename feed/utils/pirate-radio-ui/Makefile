@@ -59,14 +59,19 @@ define Package/pirate-radio-ui/install
 	# of pirate-radio) hands it the radio's samples.
 	$(INSTALL_DIR) $(1)/www/sdr
 	$(INSTALL_DATA) ./files/sdr/*.js $(1)/www/sdr/
+	# The scanner on the Bluetooth page (scanner.js) and the names of the
+	# makers and services it shows (names.js); loaded when the page is
+	# opened. pirate-bluetooth hands it what the dongle hears.
+	$(INSTALL_DIR) $(1)/www/bt
+	$(INSTALL_DATA) ./files/bt/*.js $(1)/www/bt/
 	# MCO Advanced's MCOimg decoder (MIT), loaded when the Messenger shows an image
 	$(INSTALL_DIR) $(1)/www/mcoimg
 	$(INSTALL_DATA) ./files/mcoimg/mcoimg-codec.global.js ./files/mcoimg/mcoimg-v3-codec.global.js \
 		./files/mcoimg/mcoimg-browser.global.js ./files/mcoimg/LICENSE $(1)/www/mcoimg/
 	# The version index.html loads app.js and style.css under (and app.js the
-	# receiver's scripts), so browsers take the new ones after an update
-	# (uhttpd sends no cache headers)
-	cat ./files/app.js ./files/style.css ./files/sdr/*.js | md5sum | cut -c1-12 > $(1)/www/ui-version
+	# receiver's and the scanner's scripts), so browsers take the new ones
+	# after an update (uhttpd sends no cache headers)
+	cat ./files/app.js ./files/style.css ./files/sdr/*.js ./files/bt/*.js | md5sum | cut -c1-12 > $(1)/www/ui-version
 	$(INSTALL_DIR) $(1)/www/cgi-bin
 	$(INSTALL_BIN) ./files/pirate-upload $(1)/www/cgi-bin/pirate-upload
 	$(INSTALL_DIR) $(1)/etc/uci-defaults
@@ -133,6 +138,8 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-meshcore.json $(1)/usr/share/rpcd/acl.d/pirate-meshcore.json
 	# PortaPack page (the pirate-portapack package's daemon does the work)
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-portapack.json $(1)/usr/share/rpcd/acl.d/pirate-portapack.json
+	# Bluetooth page (the pirate-bluetooth package's daemon does the work)
+	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-bluetooth.json $(1)/usr/share/rpcd/acl.d/pirate-bluetooth.json
 	# Firmware flasher
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-firmware $(1)/usr/sbin/pirate-firmware
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.firmware $(1)/usr/libexec/rpcd/pirate.firmware

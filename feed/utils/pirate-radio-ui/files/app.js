@@ -7416,6 +7416,49 @@
 
 	/* ---------- fallback for an unknown route ---------- */
 
+	/* ---------- Bluetooth: what a dongle on the USB port hears ----------
+	   The devices around, as they advertise. The list is the scanner's own
+	   doing (bt/scanner.js, with the names in bt/names.js): pirate-bluetooth
+	   on the router has the adapter listen and hands on what it reports, and
+	   the browser makes devices of that. */
+
+	// The scanner's scripts, loaded the first time the page is opened
+	var btLoad = null;
+	function btReady() {
+		if (window.PirateBT) return Promise.resolve();
+		if (!btLoad) {
+			btLoad = ["bt/names.js", "bt/scanner.js"].reduce(function (before, src) {
+				return before.then(function () {
+					return new Promise(function (ok, bad) {
+						var s = document.createElement("script");
+						s.src = src + (MC_UIV ? "?v=" + MC_UIV : "");
+						s.onload = function () { ok(); };
+						s.onerror = function () { bad(new Error("The Bluetooth page's script wouldn't load.")); };
+						document.head.appendChild(s);
+					});
+				});
+			}, Promise.resolve());
+			btLoad.catch(function () { btLoad = null; });
+		}
+		return btLoad;
+	}
+
+	function renderBluetooth() {
+		clear(VIEW);
+		VIEW.classList.add("view-wide");
+		VIEW.appendChild(viewHead("Bluetooth", "what a Bluetooth dongle on the USB port hears: the devices around, as they advertise"));
+		var p = panel(), wrap = el("div", {}, loadingEl()), widget = null, gone = false;
+		p.appendChild(wrap);
+		VIEW.appendChild(p);
+		// Left, the page stops asking, and the router lets the adapter go
+		LEAVE = function () { gone = true; if (widget) { widget.destroy(); widget = null; } };
+		btReady().then(function () {
+			if (gone) return;
+			clear(wrap);
+			widget = window.PirateBT.mount(wrap, { call: call, demo: DEMO, unauthorized: onError });
+		}).catch(function (e) { if (!gone) clear(wrap).appendChild(warnEl(e)); });
+	}
+
 	function renderPlaceholder(name) {
 		clear(VIEW);
 		VIEW.appendChild(viewHead(String(name)));
@@ -7429,7 +7472,7 @@
 		["Radio", [["receivers", "Receivers"], ["listen", "Listen"], ["sensors", "Sensors"]]],
 		["Wi-Fi", [["survey", "Survey"], ["threats", "Threats"], ["handshake", "Handshakes"]]],
 		["Network", [["uplink", "Uplink"], ["clients", "Clients"], ["hosts", "Hosts"], ["capture", "Capture"]]],
-		["USB devices", [["drives", "Drives"], ["phone", "Phone"], ["flipper", "Flipper"], ["portapack", "PortaPack"], ["dreampi", "DreamPi"]]],
+		["USB devices", [["drives", "Drives"], ["phone", "Phone"], ["flipper", "Flipper"], ["portapack", "PortaPack"], ["bluetooth", "Bluetooth"], ["dreampi", "DreamPi"]]],
 		["System", [["status", "Status"], ["access", "Access"], ["terminal", "Terminal"], ["firmware", "Firmware"]]]
 	];
 	// Pages that were renamed, for old links
@@ -7520,6 +7563,7 @@
 		if (id === "phone") return renderPhone();
 		if (id === "flipper") return renderFlipper();
 		if (id === "portapack") return renderPortapack();
+		if (id === "bluetooth") return renderBluetooth();
 		if (id === "capture") return renderCapture();
 		if (id === "handshake") return renderHandshake();
 		if (id === "firmware") return renderFirmware();
