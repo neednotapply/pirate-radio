@@ -20,6 +20,26 @@ if [ ! -d "$src/.git" ]; then
 fi
 cd "$src"
 
+# Our changes to OpenWrt's own source (config/full-patches), put on once: a
+# tree that has one already is left as it is.
+for p in "$here"/config/full-patches/*.patch; do
+	[ -f "$p" ] || continue
+	if git apply --reverse --check "$p" 2>/dev/null; then
+		echo "already applied: ${p##*/}"
+	elif git apply "$p"; then
+		echo "applied: ${p##*/}"
+	else
+		echo "${p##*/} does not apply to OpenWrt $OPENWRT_VERSION" >&2
+		exit 1
+	fi
+done
+# The image is to switch its USB port's power (pirate-router
+# usb_power_cycle): stop rather than build without the line that does.
+if ! grep -q 'gpio-export,name = "usb_power"' target/linux/ath79/dts/qca9563_glinet_gl-ar750s.dtsi; then
+	echo "the GL-AR750S's device tree does not export usb_power" >&2
+	exit 1
+fi
+
 # The release's feeds, from OpenWrt's GitHub mirrors, plus ours.
 sed -E \
 	-e 's#https://git.openwrt.org/feed/packages.git#https://github.com/openwrt/packages.git#' \

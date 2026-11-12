@@ -1,0 +1,46 @@
+The GL-AR750S's USB port: its power switchable.
+
+OpenWrt's device tree has the kernel hold the line that powers the USB port
+(GPIO 7) on for good, as a hog: nothing can then switch it, and a device on
+the port that has stopped answering can only be pulled out and plugged in
+again by hand. Here the line is exported by name instead, on from the start,
+as OpenWrt does for the GL-AR300M: /sys/class/gpio/usb_power/value, which
+pirate-router writes to switch the port off and on.
+
+Applied by build-full.sh to OpenWrt's source before it is built.
+
+--- a/target/linux/ath79/dts/qca9563_glinet_gl-ar750s.dtsi
++++ b/target/linux/ath79/dts/qca9563_glinet_gl-ar750s.dtsi
+@@ -67,6 +67,16 @@
+ 		sda-gpios = <&gpio  5 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)>;
+ 		scl-gpios = <&gpio 21 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)>;
+ 	};
++
++	gpio-export {
++		compatible = "gpio-export";
++
++		gpio_usb_power {
++			gpio-export,name = "usb_power";
++			gpio-export,output = <1>;
++			gpios = <&gpio 7 GPIO_ACTIVE_HIGH>;
++		};
++	};
+ };
+ 
+ &spi {
+@@ -147,15 +157,6 @@
+ 	phy-handle = <&phy0>;
+ 	nvmem-cells = <&macaddr_art_0 0>;
+ 	nvmem-cell-names = "mac-address";
+-};
+-
+-&gpio {
+-	usb_vbus {
+-		gpio-hog;
+-		gpios = <7 GPIO_ACTIVE_HIGH>;
+-		output-high;
+-		line-name = "usb-vbus";
+-	};
+ };
+ 
+ &mdio0 {

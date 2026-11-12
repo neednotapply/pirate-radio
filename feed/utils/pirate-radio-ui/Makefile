@@ -102,6 +102,9 @@ define Package/pirate-radio-ui/install
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-router $(1)/usr/sbin/pirate-router
 	$(INSTALL_BIN) ./root/usr/libexec/rpcd/pirate.router $(1)/usr/libexec/rpcd/pirate.router
 	$(INSTALL_DATA) ./root/usr/share/rpcd/acl.d/pirate-router.json $(1)/usr/share/rpcd/acl.d/pirate-router.json
+	# The USB port at boot: switched off and on if what is plugged in has not
+	# answered (where the firmware can switch its power: the full build)
+	$(INSTALL_BIN) ./root/etc/init.d/pirate-usbport $(1)/etc/init.d/pirate-usbport
 	# Access: SSH's settings, keys and sessions, recent sign-ins, and the
 	# terminal in the browser (ttyd, set up on first boot)
 	$(INSTALL_BIN) ./root/usr/sbin/pirate-access $(1)/usr/sbin/pirate-access

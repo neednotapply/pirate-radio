@@ -72,6 +72,7 @@ Two builds, from the same packages:
 | Kernel | OpenWrt 25.12.6 release kernel | rebuilt with `CONFIG_RELAY` |
 | Wi-Fi spectral (`wifi` job) | no | yes |
 | 5 GHz driver | ath10k-ct (OpenWrt default) | upstream ath10k + Qualcomm firmware |
+| USB port's power | always on | switched off and on from the Status page, and by itself at boot |
 
 ```sh
 ./build.sh                     # needs Docker
@@ -103,7 +104,9 @@ Which to flash: the quick image keeps OpenWrt's release kernel, so kernel
 modules from OpenWrt's repository (`apk add kmod-…`) install on it. The full
 image has its own kernel, so modules for it have to be added to the build.
 Its 5 GHz radio also runs upstream ath10k instead of OpenWrt's default
-ath10k-ct. The radios, decoders and logging are the same in both.
+ath10k-ct, and it can switch its USB port's power (its device tree is
+patched to: `config/full-patches`). The radios, decoders and logging are
+the same in both.
 
 ## Install
 
@@ -680,6 +683,29 @@ Bluetooth 5's extended scan commands is given those; a dongle the kernel
 has no driver for is said to be one. `logread -e pirate-bluetooth` shows it
 starting and stopping.
 
+**The USB port's power:** a device on the USB port that has stopped
+answering wants pulling out and plugging in again. The full image does
+that without a hand on it: **Status → USB port → Switch off and on** cuts
+the port's power for three seconds (over SSH, `pirate-router
+usb_power_cycle`). Drives on the port are ejected first, and it is not
+done while one of them is in use; what else is plugged in goes and comes
+back as if replugged. What a hub with its own power feeds keeps that
+power.
+
+At boot the router does the same by itself, early on and before its jobs
+start, if what is plugged in has not answered: a device that is in while
+the router starts has its power before the port is ready for it, and some
+do not get over the wait (a Bluetooth dongle here answered nothing after a
+reboot, whatever was tried from software). The port is switched off and
+on, twice at most, and only when nothing on it has answered, so nothing
+that works is interrupted; `logread -e pirate-router` says when it was.
+The Status page says when the last thing plugged in did not answer.
+
+The quick image has no such switch: OpenWrt's kernel holds the line that
+powers the port on for good. The full build's device tree hands the line
+over instead, by name (`/sys/class/gpio/usb_power`), as OpenWrt's does for
+the GL-AR300M.
+
 **On the card** (`pirate-radio/<job>/<date>/`):
 
 | Files | Open with |
@@ -727,7 +753,11 @@ Tested in this repository's tests and builds:
   plugins, input validation and JSON shapes, including the set-password, Wi-Fi
   join/scan/status and firmware verify/apply/upload methods — the flasher runs
   against a mock sysupgrade, so no real flash is ever attempted), the router's
-  jacks, radios and slots on a faked GL-AR750S, the password change and its
+  jacks, radios and slots on a faked GL-AR750S, its USB port's power (with
+  the switch a full build has and without it; a device that answered, one
+  that did not, and one still being set up; off and on, with the drives
+  ejected first, not while one is in use; at boot, only when what is
+  plugged in has not answered, then twice at most), the password change and its
   proof (old, foreign and forged sessions refused), Access (pirate-access:
   SSH's settings and keys, with fingerprints as ssh-keygen and dropbearkey
   print them, the lockout guards, sessions and their ending, sign-ins from the
@@ -794,7 +824,7 @@ Tested in this repository's tests and builds:
   slate-sdr (settings, card mount, card folder) and pirateradio.local, and
   the web UI's receiver (the bridge as built for the router, answering a
   handshake with its simulated radio; its job among the others; the radio
-  taken back from a page that listens; old settings given the job): 905
+  taken back from a page that listens; old settings given the job): 931
   checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
@@ -1016,7 +1046,17 @@ Not yet run:
   driver, its HCI socket and what a real dongle hears have not been run,
   on the device or anywhere. The dongle that waits for it names itself a
   CSR8510 A10 (`0a12:0001`); many under that name are other chips, which
-  the kernel's driver tells apart only when it sets one up.
+  the kernel's driver tells apart only when it sets one up. The driver is
+  on the router, and has not had the dongle to set up: after the reboot
+  that brought the driver, the dongle answered nothing (`device descriptor
+  read/64, error -71`), to the kernel at boot or when the port was tried
+  again from software.
+- The USB port's power, on the device. The patched device tree has not
+  been booted there, so the switch has not been used, at boot or by hand;
+  and whether losing its power brings that dongle back is a reading of
+  what was seen, not something tried. That the microSD card's slot keeps
+  its power when the port loses it is expected (its reader is a chip on
+  the board, on the other USB controller), and not seen yet either.
 
 ## Layout
 
@@ -1033,9 +1073,10 @@ Not yet run:
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
 | `feed/utils/pirate-radio-ui/files/sdr/` | the Listen page's receiver: the page's part (`receiver.js`) and the signal processing, which runs in a worker (`worker.js`, `dsp.js`; `siggen.js` is the simulated band of the demo mode) |
 | `feed/utils/pirate-radio-ui/files/bt/` | the Bluetooth page's scanner (`scanner.js`: what the dongle hears made into devices) and the names of makers and services it shows (`names.js`, made by `scripts/bt-names.py`) |
-| `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics and its ports (`pirate-router`), access (`pirate-access`: SSH, sign-ins, the terminal), firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
+| `feed/utils/pirate-radio-ui/root/` | the UI's rpcd/ubus backends: router basics, its ports and the USB port's power (`pirate-router`, with the `pirate-usbport` init script for boot), access (`pirate-access`: SSH, sign-ins, the terminal), firmware, capture, handshake, DreamPi, USB drives (`pirate-usb`, with its init script and block hotplug hook), and the SDR (`pirate.sdr`) and recon (`pirate-recon` / `pirate-survey` / `pirate-threats` / `pirate-dashboard`) tools |
 | `config/packages.txt` | what goes into the image on top of OpenWrt's defaults |
 | `config/full.config` | full-build options (spectral scan, ath10k) |
+| `config/full-patches/` | the full build's changes to OpenWrt's own source, put on by `build-full.sh` (the GL-AR750S's device tree: the USB port's power switchable) |
 | `build.sh`, `scripts/` | the Docker build (SDK, then ImageBuilder) |
 | `build-full.sh` | the full source build |
 | `tests/` | runtime tests on OpenWrt's MIPS userland under QEMU; `tests/sdr/` and `tests/websdr/`: the Listen page's engine and bridge, which run on any machine; `tests/bt/`: the Bluetooth page's reckoning, which does too |

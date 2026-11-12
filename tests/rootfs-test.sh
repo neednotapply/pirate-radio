@@ -786,6 +786,108 @@ check "router: ports: a card in the microSD slot" [ "$(pj '@.card.present') $(pj
 echo 0 > "$HS/block/sdb/size"
 check "router: ports: an empty slot" [ "$(PATH="$HM:$PATH" PIRATE_SWCONFIG="$HM/swconfig" PIRATE_SYSFS="$HS" pirate-router ports | jsonfilter -e '@.card.present')" = false ]
 check "router: rpcd offers ports" sh -c '"'"$RR"'" list | jsonfilter -e "@.ports" >/dev/null'
+# The USB port's power: as a full source build has it (the line that powers
+# the port exported by name, usb_power) and as OpenWrt's own kernel does
+# (nothing to write), with the port as the kernel has it, faked. pirate-usb
+# and logger mocked; the waits are a mock's too, which takes no time, notes
+# how long was asked for and whether the port had its power, and lets a
+# test have something happen meanwhile.
+UP="$HS/bus/usb/devices/usb1/1-0:1.0/usb1-port1"; UG="$HS/class/gpio/usb_power"
+mkdir -p "$UP"
+export USB_T="$T/usbport" USB_GPIO="$UG/value"
+mkdir -p "$USB_T"
+cat > "$HM/pirate-usb" <<-'EOF'
+	#!/bin/sh
+	case "$1" in
+	status) echo '{ "drives": [ { "name": "KINGSTON", "card": false }, { "name": "microSD", "card": true }, { "name": "My_Disk", "card": false } ] }' ;;
+	eject)
+		echo "eject $2" >> "$USB_T/calls"
+		if [ -e "$USB_T/busy" ]; then
+			echo "{ \"error\": \"$2 is in use; close the files open on it and try again\" }"
+		else
+			echo '{ "ok": true }'
+		fi
+		;;
+	esac
+EOF
+cat > "$HM/logger" <<-'EOF'
+	#!/bin/sh
+	shift 2
+	echo "$*" >> "$USB_T/log"
+EOF
+cat > "$HM/usb-sleep" <<-'EOF'
+	#!/bin/sh
+	echo "$1 $(cat "$USB_GPIO" 2>/dev/null)" >> "$USB_T/slept"
+	[ -f "$USB_T/meanwhile" ] && . "$USB_T/meanwhile"
+	exit 0
+EOF
+chmod 755 "$HM/pirate-usb" "$HM/logger" "$HM/usb-sleep"
+rp() { PATH="$HM:$PATH" PIRATE_SWCONFIG="$HM/swconfig" PIRATE_SYSFS="$HS" PIRATE_USB="$HM/pirate-usb" PIRATE_SLEEP="$HM/usb-sleep" "$@"; }
+up() { rp pirate-router ports | jsonfilter -e "@.usb_port.$1"; }
+usb_fresh() { rm -f "$USB_T/calls" "$USB_T/log" "$USB_T/slept" "$USB_T/meanwhile" "$USB_T/busy" "$USB_T/out"; }
+# usb_there: a device on the port that answered; usb_gone: pulled out;
+# usb_mute: one that did not answer (the kernel gave up on it)
+usb_there() { echo configured > "$UP/state"; ln -s "$HS/bus/usb/devices/1-1" "$UP/device"; }
+usb_gone() { rm -rf "$UP/device"; echo "not attached" > "$UP/state"; }
+usb_mute() { rm -rf "$UP/device"; echo default > "$UP/state"; }
+check "router: usb port: nothing to switch on OpenWrt's own kernel" [ "$(up switch) $(up unanswered) [$(up power)]" = "false false []" ]
+usb_there
+check "router: usb port: a device that answered" [ "$(up unanswered)" = false ]
+usb_gone
+check "router: usb port: pulled out" [ "$(up unanswered)" = false ]
+usb_mute; usb_fresh
+check "router: usb port: one that did not answer" [ "$(up unanswered)" = true ]
+check "router: usb port: looked at again a second later" [ "$(cat "$USB_T/slept")" = "1 " ]
+# One that is being set up as the page asks has answered by the second look
+usb_fresh
+printf 'echo configured > "%s/state"\nln -s "%s" "%s/device"\n' "$UP" "$HS/bus/usb/devices/1-1" "$UP" > "$USB_T/meanwhile"
+check "router: usb port: one being set up is not taken for one that did not answer" [ "$(up unanswered)" = false ]
+usb_mute; usb_fresh
+check "router: usb port: off and on: not where there is no switch" [ "$(rp pirate-router usb_power_cycle | jsonfilter -e '@.error')" = "this firmware cannot switch the USB port's power" ]
+mkdir -p "$UG"; echo 1 > "$UG/value"
+check "router: usb port: a full build's switch, on" [ "$(up switch) $(up power)" = "true true" ]
+echo 0 > "$UG/value"
+check "router: usb port: its power off" [ "$(up switch) $(up power)" = "true false" ]
+echo 1 > "$UG/value"; usb_fresh
+check "router: usb port: off and on" [ "$(rp pirate-router usb_power_cycle | jsonfilter -e '@.ok')" = true ]
+check "router: usb port: off and on: the drives on it ejected first, not the card" [ "$(tr '\n' ' ' < "$USB_T/calls")" = "eject KINGSTON eject My_Disk " ]
+check "router: usb port: off and on: three seconds without power" [ "$(cat "$USB_T/slept")" = "3 0" ]
+check "router: usb port: off and on: on again, and logged" sh -c "[ \"\$(cat '$UG/value')\" = 1 ] && grep -qx 'USB port: switched off and on' '$USB_T/log'"
+usb_fresh; : > "$USB_T/busy"
+rp pirate-router usb_power_cycle > "$USB_T/out"
+check "router: usb port: a drive in use: said, and the port left on" sh -c "[ \"\$(jsonfilter -i '$USB_T/out' -e '@.error')\" = 'KINGSTON is in use; close the files open on it and try again' ] && [ ! -e '$USB_T/slept' ] && [ \"\$(cat '$UG/value')\" = 1 ]"
+usb_fresh
+check "router: usb port: a line that cannot be written: said" [ "$(PIRATE_USB_POWER="$USB_T" rp pirate-router usb_power_cycle 2>/dev/null | jsonfilter -e '@.error')" = "the USB port's power could not be switched" ]
+# At boot (pirate-router usb_recover, from the pirate-usbport init script)
+usb_fresh
+PIRATE_USB_POWER="$USB_T/none" rp pirate-router usb_recover
+check "router: usb port: at boot: left alone where there is no switch" sh -c "[ ! -e '$USB_T/slept' ] && [ ! -e '$USB_T/log' ]"
+usb_there; usb_fresh
+rp pirate-router usb_recover
+check "router: usb port: at boot: a device that answered is left alone" sh -c "[ ! -e '$USB_T/slept' ] && [ ! -e '$USB_T/log' ] && [ \"\$(cat '$UG/value')\" = 1 ]"
+usb_gone; usb_fresh
+rp pirate-router usb_recover
+check "router: usb port: at boot: an empty port is left alone" sh -c "[ ! -e '$USB_T/slept' ] && [ ! -e '$USB_T/log' ]"
+usb_mute; usb_fresh
+rp pirate-router usb_recover
+check "router: usb port: at boot: one silent for five seconds is switched off and on" [ "$(sed -n '1,7p' "$USB_T/slept" | tr '\n' ',')" = "1 1,1 1,1 1,1 1,1 1,3 0,10 1," ]
+check "router: usb port: at boot: twice at most" [ "$(grep -c '^3 0$' "$USB_T/slept") $(wc -l < "$USB_T/slept" | tr -d ' ')" = "2 15" ]
+check "router: usb port: at boot: one that still does not answer: said, and the port on" sh -c "[ \"\$(grep -c 'has not answered: switching the port off and on' '$USB_T/log')\" = 2 ] && [ \"\$(tail -n 1 '$USB_T/log')\" = 'USB port: what is plugged in still does not answer' ] && [ \"\$(cat '$UG/value')\" = 1 ]"
+# It comes back while the port is off and on the first time
+usb_fresh
+printf '[ "$(cat "$USB_GPIO")" = 0 ] && { echo configured > "%s/state"; ln -s "%s" "%s/device"; }\n' "$UP" "$HS/bus/usb/devices/1-1" "$UP" > "$USB_T/meanwhile"
+rp pirate-router usb_recover
+check "router: usb port: at boot: one that answers after the first time is left alone then" sh -c "[ \"\$(grep -c '^3 0\$' '$USB_T/slept')\" = 1 ] && [ \"\$(tail -n 1 '$USB_T/log')\" = 'USB port: it answers now' ]"
+check "router: usb port: at boot: the init script runs the check" sh -c 'sh -n /etc/init.d/pirate-usbport && grep -q "command /usr/sbin/pirate-router usb_recover" /etc/init.d/pirate-usbport'
+usb_mute; usb_fresh
+check "router: rpcd offers usb_power_cycle" sh -c '"'"$RR"'" list | jsonfilter -e "@.usb_power_cycle" >/dev/null'
+check "router: rpcd: usb_power_cycle switches the port off and on" [ "$(rp "$RR" call usb_power_cycle < /dev/null | jsonfilter -e '@.ok') $(cat "$USB_T/slept")" = "true 3 0" ]
+# Each call the page makes, let through by rpcd's ACL (one it leaves out is refused, on the router only)
+check "router: the ACL lets through every call the page makes" sh -c '
+	a=$(jsonfilter -i /usr/share/rpcd/acl.d/pirate-router.json -e "@[\"pirate-router\"].read.ubus[\"pirate.router\"][*]" -e "@[\"pirate-router\"].write.ubus[\"pirate.router\"][*]")
+	for m in $(grep -o "call(\"pirate.router\", \"[a-z_]*\"" /www/app.js | sed "s/.*\"\([a-z_]*\)\"\$/\1/" | sort -u); do
+		echo "$a" | grep -qx "$m" || { echo "not in the ACL: $m"; exit 1; }
+	done'
 # The root password: changed only with the current one proved (a sign-in's
 # session, fresh), unless there is none yet. ubus and passwd mocked.
 PM="$T/pwmock"; mkdir -p "$PM"

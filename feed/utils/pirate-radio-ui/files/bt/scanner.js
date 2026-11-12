@@ -1180,7 +1180,8 @@
 			}
 			if (state === "absent" && !all.length && !note.firstChild) {
 				note.appendChild(el("div", { class: "placeholder" }, el("b", { text: "No Bluetooth adapter" }),
-					el("div", { text: "Plug a Bluetooth dongle into the router's USB port (through a hub if something else is plugged in too). It shows up here within a few seconds." })));
+					el("div", { text: "Plug a Bluetooth dongle into the router's USB port (through a hub if something else is plugged in too). It shows up here within a few seconds." }),
+					el("div", { text: "One that is plugged in and still not here may not have answered the router: the Status page says whether it did, and can switch the USB port off and on." })));
 			}
 		}
 

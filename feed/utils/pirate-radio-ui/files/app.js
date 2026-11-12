@@ -942,7 +942,11 @@
 				] }
 			],
 			usb: [ { id: "0483:5740", name: "Flipper Devices Inc. Pirate" } ],
+			usb_port: { switch: true, power: true, unanswered: false },
 			card: { present: true, device: "sda" }
+		},
+		"pirate.router:usb_power_cycle": function () {
+			return new Promise(function (ok) { setTimeout(function () { ok({ ok: true }); }, 1500); });
 		},
 		"pirate.access:ssh_status": function () { return demoAccess(); },
 		"pirate.access:ssh_set": function (p) {
@@ -2356,13 +2360,43 @@
 			})));
 			portsWrap.appendChild(el("h4", { class: "sub-h2", text: "USB and microSD" }));
 			var usb = (p.usb || []).map(function (u) { return (u.name || "a device") + " (" + u.id + ")"; });
+			// The port itself: whether the last thing plugged in did not answer,
+			// and, where the firmware can switch its power, the switch
+			var port = p.usb_port || {};
+			var usbCell = el("div", {}, el("div", { text: usb.length ? usb.join(", ") :
+				port.unanswered ? "the last thing plugged in did not answer the router" : "nothing plugged in" }));
+			if (port.switch) {
+				var usbSaid = el("span", { class: "status", text: port.power === false ? "its power is off" : "" });
+				var usbBtn = btn("Switch off and on", { cls: "small", onclick: function () { usbCycle(usbBtn, usbSaid); } });
+				usbCell.appendChild(el("div", { class: "toolbar" }, usbBtn, usbSaid));
+			}
 			portsWrap.appendChild(kvEl([
-				["USB port", usb.length ? usb.join(", ") : "nothing plugged in"],
+				["USB port", usbCell],
 				["microSD slot", p.card && p.card.present ? "a card (" + p.card.device + ")" : "empty"]
 			]));
 			portsWrap.appendChild(el("p", { class: "descr", text:
-				"A hub on the USB port shows what is plugged into it. The Drives, Flipper and DreamPi pages cover what they find there; the microSD card holds Pirate Radio's recordings." }));
+				"A hub on the USB port shows what is plugged into it. The Drives, Flipper and DreamPi pages cover what they find there; the microSD card holds Pirate Radio's recordings." +
+				(port.switch ? " Switching the port off and on cuts the power of what is plugged into it for three seconds, as pulling it out and plugging it in again would: for a device that has stopped answering. What a hub with its own power feeds keeps that power." :
+				port.unanswered ? " Pull it out and plug it in again: this firmware cannot switch the port's power." : "") }));
 		});
+
+		// The USB port's power off, and on again: what is plugged in starts
+		// afresh, and the page looks again at what is there
+		function usbCycle(b, line) {
+			if (!window.confirm("Switch the USB port off and on? What is plugged into it loses its power for three seconds, as if pulled out and plugged in again. Drives on it are ejected first.")) return;
+			b.disabled = true;
+			line.className = "status"; line.textContent = "switching it off and on…";
+			call("pirate.router", "usb_power_cycle").then(function (r) {
+				if (r.error) { b.disabled = false; line.className = "status err"; line.textContent = r.error; return; }
+				line.className = "status ok-text"; line.textContent = "switched off and on: looking at what is there…";
+				// What is plugged in takes a few seconds to be set up again
+				setTimeout(function () { hwLoad = null; if (current === "status") renderStatus(); }, 5000);
+			}).catch(function (e) {
+				b.disabled = false;
+				if (String(e.message || e) === "unauthorized") return onError(e);
+				line.className = "status err"; line.textContent = String(e.message || e);
+			});
+		}
 	}
 
 	/* ---------- Uplink: the network the router joins for its internet ---------- */

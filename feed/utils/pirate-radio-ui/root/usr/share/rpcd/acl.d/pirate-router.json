@@ -1,6 +1,6 @@
 {
 	"pirate-router": {
-		"description": "Grant access to router basics: system status, ports, clients, adblock, the root password, the Wi-Fi uplink",
+		"description": "Grant access to router basics: system status, ports, clients, adblock, the root password, the Wi-Fi uplink, the USB port's power",
 		"read": {
 			"ubus": {
 				"pirate.router": [ "status", "ports", "clients", "wifi_status", "wifi_scan" ]
@@ -8,7 +8,7 @@
 		},
 		"write": {
 			"ubus": {
-				"pirate.router": [ "adblock", "set_password", "wifi_join" ]
+				"pirate.router": [ "adblock", "set_password", "wifi_join", "usb_power_cycle" ]
 			}
 		}
 	}

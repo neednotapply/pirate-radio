@@ -30,7 +30,7 @@ jobs:
           shellcheck -s sh -e SC1091,SC3043 feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.sdr
           shellcheck -s sh -e SC1091,SC3043 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-recon feed/utils/pirate-radio-ui/root/usr/sbin/pirate-survey feed/utils/pirate-radio-ui/root/usr/sbin/pirate-threats feed/utils/pirate-radio-ui/root/usr/sbin/pirate-dashboard feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.recon feed/utils/pirate-radio-ui/root/etc/uci-defaults/95-pirate-recon-gpsd
           shellcheck -s sh feed/utils/pirate-radio-ui/files/95-pirate-radio-ui feed/utils/pirate-radio-ui/root/etc/hotplug.d/iface/30-pirate-local
-          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-router feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.router
+          shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-router feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.router feed/utils/pirate-radio-ui/root/etc/init.d/pirate-usbport
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-access feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.access feed/utils/pirate-radio-ui/root/etc/uci-defaults/96-pirate-terminal
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-capture feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.capture
           shellcheck -s sh -e SC1091,SC3043,SC2034 feed/utils/pirate-radio-ui/root/usr/sbin/pirate-handshake feed/utils/pirate-radio-ui/root/usr/libexec/rpcd/pirate.handshake

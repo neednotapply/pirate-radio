@@ -1,15 +1,18 @@
 #!/bin/sh
 # pirate-router: router basics for the Pirate Radio web UI — system + uplink status,
 # its ports and radios, connected clients (from the DHCP leases), and the
-# adblock toggle. Read-only except `adblock on|off`, set_password and
-# wifi_join. Prints one JSON object per subcommand, the reply the
-# pirate.router rpcd plugin returns.
+# adblock toggle. Read-only except `adblock on|off`, set_password,
+# wifi_join and the USB port's power. Prints one JSON object per
+# subcommand, the reply the pirate.router rpcd plugin returns.
 #
 #   pirate-router status
 #   pirate-router ports
 #   pirate-router clients
 #   pirate-router adblock [on|off]
 #   pirate-router set_password      (new password, proof session, caller's on stdin)
+#   pirate-router usb_power_cycle   (the USB port's power off, and on again)
+#   pirate-router usb_recover       (the same at boot, if what is plugged in has not
+#                                   answered; prints nothing)
 
 . /usr/share/libubox/jshn.sh
 
@@ -20,6 +23,21 @@ SWCONFIG=${PIRATE_SWCONFIG:-swconfig}
 SYSFS=${PIRATE_SYSFS:-/sys}
 SHADOW=${PIRATE_SHADOW:-/etc/shadow}
 UBUS=${PIRATE_UBUS:-ubus}
+# The USB port's power, where this firmware can switch it: a full source
+# build has the line that powers the port exported by name (usb_power; its
+# device tree is patched to, config/full-patches). On OpenWrt's own kernel
+# the line is held on and there is nothing here to write. And the port, as
+# the kernel has it: the only one of the first USB bus.
+USB_POWER=${PIRATE_USB_POWER:-$SYSFS/class/gpio/usb_power/value}
+USB_PORT=$SYSFS/bus/usb/devices/usb1/1-0:1.0/usb1-port1
+USB_TOOL=${PIRATE_USB:-/usr/sbin/pirate-usb}
+SLEEP=${PIRATE_SLEEP:-sleep}
+
+err() {
+	json_init
+	json_add_string error "$1"
+	json_dump
+}
 
 cmd_status() {
 	local host model fw up load mt mf ma fst fsf online lan
@@ -57,6 +75,51 @@ cmd_status() {
 	json_add_boolean online "$online"
 	json_add_string lan_ip "${lan:-}"
 	json_dump
+}
+
+# usb_switch: this firmware can switch the USB port's power
+usb_switch() { [ -w "$USB_POWER" ]; }
+
+# usb_silent: the last thing plugged into the USB port did not answer. The
+# kernel asked what it was and got nothing it could use, and gave up: the
+# port is then left neither at rest ("not attached") nor with a device, and
+# stays so until something that answers is plugged in. (A device that does
+# answer passes through this for a moment as it is set up.)
+usb_silent() {
+	local st
+	[ -e "$USB_PORT/device" ] && return 1
+	st=$(cat "$USB_PORT/state" 2>/dev/null)
+	case "$st" in '' | 'not attached') return 1 ;; esac
+	return 0
+}
+
+# usb_unanswered [seconds]: and has not for that long (1: longer than a
+# device takes to be set up)
+usb_unanswered() {
+	local n="${1:-1}"
+	while usb_silent; do
+		[ "$n" -gt 0 ] || return 0
+		"$SLEEP" 1
+		n=$((n - 1))
+	done
+	return 1
+}
+
+# usb_cycle: the port's power off, and on again after three seconds: what
+# is plugged in starts afresh, as if pulled out and plugged in again. On
+# again whatever ends this before then. What waits to be written to a disk
+# is written first.
+usb_cycle() {
+	sync
+	trap 'echo 1 > "$USB_POWER"' EXIT
+	trap 'exit 1' INT TERM
+	if ! echo 0 > "$USB_POWER"; then
+		trap - EXIT INT TERM
+		return 1
+	fi
+	"$SLEEP" 3
+	echo 1 > "$USB_POWER"
+	trap - EXIT INT TERM
 }
 
 # The Slate's ports and radios, by what they are on a GL.iNet GL-AR750S: its
@@ -159,6 +222,17 @@ cmd_ports() {
 		json_close_object
 	done
 	json_close_array
+	# The port itself: whether its power can be switched here (and is on),
+	# and whether the last thing plugged into it did not answer
+	json_add_object usb_port
+	if usb_switch; then
+		json_add_boolean switch 1
+		if [ "$(cat "$USB_POWER" 2>/dev/null)" = 0 ]; then json_add_boolean power 0; else json_add_boolean power 1; fi
+	else
+		json_add_boolean switch 0
+	fi
+	if usb_unanswered; then json_add_boolean unanswered 1; else json_add_boolean unanswered 0; fi
+	json_close_object
 	json_add_object card
 	dev=
 	for b in "$SYSFS"/block/sd*; do
@@ -174,6 +248,62 @@ cmd_ports() {
 	fi
 	json_close_object
 	json_dump
+}
+
+# The USB port switched off and on, for a device on it that has stopped
+# answering. The drives on it are let go of first, as before they are
+# pulled out (not the microSD card: its slot is not on this port); what
+# else is plugged in goes and comes back as if pulled out and plugged in.
+cmd_usb_power_cycle() {
+	local keys k name card names='' e
+
+	usb_switch || { err "this firmware cannot switch the USB port's power"; return; }
+	if json_load "$("$USB_TOOL" status 2>/dev/null)" 2>/dev/null && json_select drives 2>/dev/null; then
+		json_get_keys keys
+		for k in $keys; do
+			json_select "$k"
+			json_get_var name name
+			json_get_var card card
+			json_select ..
+			[ "$card" = 1 ] || names="$names $name"
+		done
+	fi
+	json_cleanup
+	for name in $names; do
+		e=$("$USB_TOOL" eject "$name" 2>/dev/null | jsonfilter -e '@.error' 2>/dev/null)
+		[ -z "$e" ] || { err "$e"; return; }
+	done
+	usb_cycle || { err "the USB port's power could not be switched"; return; }
+	logger -t pirate-router "USB port: switched off and on"
+	json_init
+	json_add_boolean ok 1
+	json_dump
+}
+
+# At boot (the pirate-usbport init script): if what is plugged into the USB
+# port has not answered, the port is switched off and on, twice at most.
+# Some devices do not get over the wait for the port to come up with their
+# power already on (a Bluetooth dongle did not), and only losing it brings
+# them back. Nothing that answered is on the port then, so nothing is
+# interrupted.
+cmd_usb_recover() {
+	local n=0
+
+	usb_switch || return 0
+	while [ "$n" -lt 2 ] && usb_unanswered 5; do
+		n=$((n + 1))
+		logger -t pirate-router "USB port: what is plugged in has not answered: switching the port off and on"
+		usb_cycle || break
+		# Time for the kernel to set up what comes back
+		"$SLEEP" 10
+	done
+	[ "$n" -gt 0 ] || return 0
+	if usb_unanswered; then
+		logger -t pirate-router "USB port: what is plugged in still does not answer"
+	else
+		logger -t pirate-router "USB port: it answers now"
+	fi
+	return 0
 }
 
 cmd_clients() {
@@ -379,5 +509,7 @@ set_password) cmd_set_password ;;
 wifi_status)  cmd_wifi_status ;;
 wifi_scan)    cmd_wifi_scan ;;
 wifi_join)    cmd_wifi_join "$2" "$3" ;;
-*) echo '{ "error": "usage: pirate-router status|ports|clients|adblock|set_password|wifi_status|wifi_scan|wifi_join" }' ;;
+usb_power_cycle) cmd_usb_power_cycle ;;
+usb_recover)  cmd_usb_recover ;;
+*) echo '{ "error": "usage: pirate-router status|ports|clients|adblock|set_password|wifi_status|wifi_scan|wifi_join|usb_power_cycle|usb_recover" }' ;;
 esac

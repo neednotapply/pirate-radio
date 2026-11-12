@@ -78,6 +78,7 @@ cp "$u/etc/uci-defaults/95-pirate-recon-gpsd" "$ov/etc/uci-defaults/"
 mkdir -p "$ov/etc/init.d" "$ov/etc/hotplug.d/tty"
 cp "$u/usr/sbin/pirate-gps" "$ov/usr/sbin/"
 cp "$u/etc/init.d/pirate-gps" "$ov/etc/init.d/"
+cp "$u/etc/init.d/pirate-usbport" "$ov/etc/init.d/"
 cp "$u/etc/hotplug.d/tty/20-pirate-gps" "$ov/etc/hotplug.d/tty/"
 chmod 755 "$ov/usr/sbin/pirate-gps" "$ov/etc/init.d/pirate-gps"
 # The DreamPi page's backend (the dreampi package itself comes built, above)
