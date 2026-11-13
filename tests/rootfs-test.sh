@@ -2576,6 +2576,17 @@ bt_log() {
 	done
 	return 1
 }
+# The same, asking what is heard meanwhile: which is what keeps it at it
+bt_asked() {
+	i=0
+	while [ $i -lt 30 ]; do
+		grep -q "$1" "$BT/fake.log" && return 0
+		bt reports > /dev/null
+		sleep 1
+		i=$((i + 1))
+	done
+	return 1
+}
 # The stand-in adapter, with these options; back once its socket is there
 bt_fake() {
 	rm -f "$BT/hci"
@@ -2677,15 +2688,48 @@ s=$(bt reports | jsonfilter -e '@.seq')
 echo "adv 020106" > "$BT/fifo"
 d=$(bt reports "{\"seq\":${s:-0}}" | jsonfilter -e '@.data')
 check "bluetooth: extended: an extended advertising report, as the adapter sent it" sh -c "case '$d' in Ig??????Pg0BEwAA/+7dzLuqAQD/f8QAAAAAAAAAAAADAgEG) ;; *) exit 1 ;; esac"
-# One from before Bluetooth 4.0: it knows no Low Energy command
+# One from before Bluetooth 4.0: it knows no Low Energy command, and what
+# is about is found the older way, by asking. The stand-in's inquiries are
+# over in 300 ms and find three devices each: a TV (in the plain form of
+# result), a phone (in the form with how strong) and headphones (in the
+# form with what a device says of itself: here their name). Asked its
+# name the TV tells it; the phone answers no page
 kill "$BT_FAKE"
 check "bluetooth: (that adapter gone)" bt_is idle
 : > "$BT/fake.log"
 bt_fake -o
-bt reports > /dev/null
-check "bluetooth: an adapter from before Bluetooth 4.0: it cannot listen, and why" bt_err "older than Bluetooth 4.0"
-check "bluetooth: which is a failure" [ "$(bts '@.state')" = failed ]
-# One that answers nothing (a failure is not tried again for 5 s)
+check "bluetooth: an adapter from before Bluetooth 4.0: it searches" bt_state listening
+check "bluetooth: the older way: said, with the adapter's version" [ "$(bts '@.classic') $(bts '@.hci_version') [$(bts '@.extended')]" = "true 4 []" ]
+check "bluetooth: the older way: an inquiry of 8 x 1.28 s, and no Low Energy command" sh -c "grep -q '^inquiry 8$' '$BT/fake.log' && ! grep -q '^unknown' '$BT/fake.log'"
+# Three searches on, each asked about meanwhile
+i=0
+while [ "$(grep -c '^inquiry over$' "$BT/fake.log")" -lt 3 ] && [ $i -lt 40 ]; do
+	bt reports > /dev/null
+	sleep 1
+	i=$((i + 1))
+done
+r=$(bt reports)
+st=$(bt status)
+check "bluetooth: the older way: one search after another" [ "$(grep -c '^inquiry over$' "$BT/fake.log")" -ge 3 ]
+check "bluetooth: the older way: how many searches have ended, said" [ "$(echo "$st" | jsonfilter -e '@.searches')" -ge 3 ]
+check "bluetooth: the older way: the TV is asked its name, with how it listens for a page and its clock's offset" grep -q '^name 11:22:33:44:55:66 psrm 1 clock 9234$' "$BT/fake.log"
+check "bluetooth: the older way: asked once of one that tells, twice of one that answers no page, never of one that said it" [ "$(grep -c '^name 11:22:33:44:55:66 ' "$BT/fake.log") $(grep -c '^name 21:43:65:87:A9:CB ' "$BT/fake.log") $(grep -c '^name 0F:1E:2D:3C:4B:5A ' "$BT/fake.log")" = "1 2 0" ]
+# What the page is handed: the first search's two short results as they
+# came (the third is long), then its end, the TV's name cut where it ends,
+# and the phone's that never came; then the next search's first byte. The
+# pattern is made from tests/fakebt.c: the times in it are not known here
+d=$(echo "$r" | jsonfilter -e '@.data')
+check "bluetooth: the older way: what was found and told is handed on as it came, a record an event" sh -c "case '$d' in FA??????AgFmVUQzIhEBAAA8BAg0EhQA??????IBy6mHZUMhAQAMAlq8*Bg??????AQAaA??????HAGZVRDMiEUxpdmluZyBSb29tIFRWDA??????BwTLqYdlQyEU*) ;; *) exit 1 ;; esac"
+# Nobody asking, with an inquiry out (the stand-in told to take a minute
+# over them): it is called off, and the adapter let go
+echo slow > "$BT/fifo"
+bt_asked '^slow$'
+: > "$BT/fake.log"
+bt_asked '^inquiry 8$'
+sleep 5
+check "bluetooth: the older way: nobody asking: the inquiry is called off, the adapter let go" sh -c "grep -q '^inquiry cancel$' '$BT/fake.log' && grep -q '^close$' '$BT/fake.log'"
+check "bluetooth: the older way: nobody asking: idle" [ "$(bts '@.state')" = idle ]
+# One that answers nothing
 kill "$BT_FAKE"
 : > "$BT/fake.log"
 bt_fake -q

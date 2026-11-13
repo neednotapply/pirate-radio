@@ -2,8 +2,10 @@
    records pirate-bluetooth hands on. The advertising reports in an HCI
    event; an advertisement's structures and what they say of a device (its
    name, its maker, what kind of thing it is, whether it is a tracker and
-   away from its owner); the devices heard, one for an address; and the
-   made-up neighbourhood of the demo, which goes the same way as a real one.
+   away from its owner); the devices heard, one for an address; what an
+   adapter from before Low Energy finds by asking (its inquiries' results,
+   and the names it asks for); and the made-up neighbourhood of the demo,
+   which goes the same way as a real one.
 
    The advertisements here are made as devices send them, a byte at a time,
    after the Bluetooth specification and the makers' own published formats.
@@ -41,11 +43,38 @@ function extended(o) {
 	return join([0x0d, 1, o.what & 255, o.what >> 8, o.type == null ? 1 : o.type], addr(o.addr || "C0:11:22:33:44:55"),
 		[1, 0, 0xff, (o.tx == null ? 127 : o.tx) & 255, (o.rssi == null ? -60 : o.rssi) & 255, 0, 0, 0], [0, 0, 0, 0, 0, 0], [data.length], data);
 }
-// A record as pirate-bluetooth makes them: the length of the rest, when, the event, its parameters
-function record(t, params) {
+// A record as pirate-bluetooth makes them: the length of the rest, when, the event (LE Meta, if none is given), its parameters
+function record(t, params, evt) {
 	const n = 5 + params.length;
-	return join([n & 255, n >> 8, t & 255, t >>> 8 & 255, t >>> 16 & 255, t >>> 24 & 255, 0x3e], params);
+	return join([n & 255, n >> 8, t & 255, t >>> 8 & 255, t >>> 16 & 255, t >>> 24 & 255, evt || 0x3e], params);
 }
+// The parameters of an Inquiry Result event, of the devices given: the plain one (event 0x02), the one with how
+// strong (0x22; long: with the byte more an early adapter's has), or the one with what a device says of itself
+// (0x2f: own, in 240 bytes)
+function inquiry(evt, devices, long) {
+	const out = [devices.length];
+	devices.forEach(function (d) {
+		Array.prototype.push.apply(out, addr(d.addr));
+		out.push(1, 0);
+		if (evt === 0x02 || long) out.push(0);
+		out.push(d.cod & 255, d.cod >> 8 & 255, d.cod >> 16 & 255, d.clock & 255, d.clock >> 8);
+		if (evt !== 0x02) out.push(d.rssi & 255);
+		if (evt === 0x2f) {
+			const own = new Uint8Array(240);
+			own.set(hex(d.own || ""));
+			Array.prototype.push.apply(out, Array.from(own));
+		}
+	});
+	return new Uint8Array(out);
+}
+// A Remote Name Request Complete event's parameters as pirate-bluetooth hands them on: the name cut at its end
+function named(status, a, name) {
+	return join([status], addr(a), Array.from(Buffer.from(name || "", "utf8")));
+}
+// Three devices an inquiry finds, as tests/fakebt.c has them: a TV, a phone, headphones that say their name
+const TV = { addr: "11:22:33:44:55:66", cod: 0x08043c, clock: 0x1234, rssi: -40 };
+const PHONE = { addr: "21:43:65:87:A9:CB", cod: 0x5a020c, clock: 0x0abc, rssi: -58 };
+const BUDS = { addr: "0F:1E:2D:3C:4B:5A", cod: 0x240404, clock: 0x7fff, rssi: -70, own: "0c09506f636b65742042756473" };
 // What a device that sends these structures is taken for
 function seen() {
 	return pure.describe(pure.partsOf(hex(Array.prototype.join.call(arguments, ""))));
@@ -322,6 +351,79 @@ test("devices: gone quiet, then forgotten; the order and the search", function (
 	equal(devs.total, 4, "but counted");
 });
 
+test("what an inquiry found: who, what kind, how strong, in each of its forms", function () {
+	// The plain form: two in one event, and no strength
+	let r = pure.classicIn(0x02, inquiry(0x02, [TV, PHONE]));
+	equal(r.length, 2, "two answers in one event");
+	equal(r[0].addr + " " + r[0].rssi + " " + r[0].classic + " " + r[0].response + " " + pure.hex(r[0].data), "11:22:33:44:55:66 null true false 040d3c0408",
+		"the first: its address, no strength, and its class as the structure an advertisement would have it in");
+	equal(r[1].addr + " " + pure.hex(r[1].data), "21:43:65:87:A9:CB 040d0c025a", "the second");
+	// With how strong, two again
+	r = pure.classicIn(0x22, inquiry(0x22, [PHONE, TV]));
+	equal(r.map(function (x) { return x.addr + " " + x.rssi + " " + pure.hex(x.data); }).join("; "),
+		"21:43:65:87:A9:CB -58 040d0c025a; 11:22:33:44:55:66 -40 040d3c0408", "each with its strength");
+	r = pure.classicIn(0x22, inquiry(0x22, [PHONE, TV], true));
+	equal(r.map(function (x) { return x.addr + " " + x.rssi + " " + pure.hex(x.data); }).join("; "),
+		"21:43:65:87:A9:CB -58 040d0c025a; 11:22:33:44:55:66 -40 040d3c0408", "an early adapter's, a byte longer each");
+	equal(pure.classicIn(0x22, inquiry(0x22, [{ addr: PHONE.addr, cod: PHONE.cod, clock: 0, rssi: 127 }]))[0].rssi, null, "a strength the adapter does not know");
+	// With what the device says of itself: its name and a service, in 240 bytes
+	r = pure.classicIn(0x2f, inquiry(0x2f, [{ addr: BUDS.addr, cod: BUDS.cod, clock: BUDS.clock, rssi: BUDS.rssi, own: BUDS.own + "03030b11" }]));
+	equal(r.length + " " + r[0].addr + " " + r[0].rssi + " " + pure.hex(r[0].data), "1 0F:1E:2D:3C:4B:5A -70 040d0404240c09506f636b6574204275647303030b11",
+		"its class, then what it says, and none of what fills the rest");
+	const s = pure.describe(pure.partsOf(r[0].data));
+	equal(s.name + " / " + s.kind + " / " + s.what, "Pocket Buds / audio / an audio or video device", "read as an advertisement's structures are");
+	// What is not one of these, or is cut short
+	equal(pure.classicIn(0x3e, inquiry(0x02, [TV])).length + pure.classicIn(0x02, new Uint8Array([1, 2, 3])).length +
+		pure.classicIn(0x22, new Uint8Array(0)).length + pure.classicIn(0x02, inquiry(0x02, [TV]).subarray(0, 14)).length, 0,
+		"nothing of another event, or of one too short");
+});
+
+test("a name a device gave when it was asked; none from one that did not answer", function () {
+	const r = pure.classicIn(0x07, named(0, TV.addr, "Living Room TV"));
+	equal(r.length + " " + r[0].addr + " " + r[0].response + " " + r[0].rssi + " " + r[0].classic, "1 11:22:33:44:55:66 true null true", "whose it is, and that it was no answer to an inquiry");
+	equal(pure.describe(pure.partsOf(r[0].data)).name, "Living Room TV", "the name, as an advertisement's structure would have it");
+	equal(pure.classicIn(0x07, named(4, PHONE.addr, "")).length, 0, "one that answered no page");
+	equal(pure.classicIn(0x07, named(0, PHONE.addr, "")).length, 0, "one with no name to give");
+	equal(pure.classicIn(0x07, named(4, PHONE.addr, "left over")).length, 0, "what comes with a failure is not a name");
+	// As the adapter sends it: 248 bytes, the name ended by a zero
+	const whole = new Uint8Array(255);
+	whole.set(named(0, TV.addr, "TV"));
+	equal(pure.describe(pure.partsOf(pure.classicIn(0x07, whole)[0].data)).name, "TV", "cut at its end, where the router did not");
+	const long = pure.classicIn(0x07, named(0, TV.addr, new Array(249).join("x")))[0].data;
+	equal(long.length + " " + long[0] + " " + pure.adParts(long).length, "250 249 1", "a name as long as one can be is one structure still");
+});
+
+test("devices found by asking: each a line of its own, by its class and then its name", function () {
+	const devs = new pure.Devices(), by = {};
+	let t = 1000000, i;
+	function found(evt, list) { pure.classicIn(evt, inquiry(evt, list)).forEach(function (r) { devs.heard(r, t); }); }
+	found(0x02, [TV]);
+	found(0x22, [PHONE]);
+	found(0x2f, [BUDS]);
+	devs.list().forEach(function (d) { by[d.addr] = d; });
+	equal(devs.list().length + " " + devs.total, "3 3", "three found");
+	equal(by[TV.addr].id + " " + by[TV.addr].addrKind + " " + by[TV.addr].classic, "c11:22:33:44:55:66 classic true", "one found by asking, by its address");
+	equal(pure.titleOf(by[TV.addr]) + " / " + by[TV.addr].seen.kind + " / " + by[TV.addr].rssi, "Audio or video device / home / null", "the TV: by its class, no strength");
+	equal(pure.titleOf(by[PHONE.addr]) + " / " + by[PHONE.addr].seen.kind + " / " + by[PHONE.addr].rssi, "Phone / personal / -58", "the phone");
+	equal(pure.titleOf(by[BUDS.addr]) + " / " + by[BUDS.addr].seen.kind + " / " + by[BUDS.addr].rssi, "Pocket Buds / audio / -70", "the headphones, which say their name");
+	// Asked, the TV gives its name
+	t += 500;
+	pure.classicIn(0x07, named(0, TV.addr, "Living Room TV")).forEach(function (r) { devs.heard(r, t); });
+	equal(pure.titleOf(by[TV.addr]) + " / " + by[TV.addr].seen.kind + " / " + by[TV.addr].seen.what, "Living Room TV / home / an audio or video device",
+		"the name it gave, and still what its class says it is");
+	// Found again at each search: nothing is made of how often
+	for (i = 0; i < 5; i++) {
+		t += 13000;
+		found(0x02, [TV]);
+	}
+	equal(by[TV.addr].n + " " + by[TV.addr].every + " " + (t - by[TV.addr].last), "7 null 0", "found seven times in all, last just now; no pace of advertising");
+	equal(pure.titleOf(by[TV.addr]), "Living Room TV", "and it keeps its name");
+	// What advertises from the same address is another line
+	const le = devs.heard(pure.reportsIn(advert({ addr: TV.addr, type: 0, data: "020106" }))[0], t);
+	equal(devs.list().length + " " + le.id + " " + le.classic, "4 p11:22:33:44:55:66 false", "the same address heard advertising is a line of its own");
+	ok(pure.matches(by[TV.addr], "classic") && !pure.matches(le, "classic"), "and \"classic\" finds those found by asking");
+});
+
 test("the demo's neighbourhood goes the same way as a real one", async function () {
 	let now = 1700000000000;
 	const be = pure.demoAdapter({ now: function () { return now; }, seed: 7 }), devs = new pure.Devices();
@@ -378,6 +480,17 @@ test("what the tests' stand-in adapter (tests/fakebt) sends is read as it should
 	const rec = pure.records(record(123456, join([0x02, 1, 0, 0], addr("00:11:22:33:44:55"), [19], hex("020106 03031a18 0b0950697261746554656d70"), [0xd0])))[0];
 	const rep = pure.reportsIn(rec.p)[0];
 	equal(rec.t + " " + rep.addr + " " + rep.rssi + " " + pure.addrKind(rep.addrType, rep.addr), "123456 00:11:22:33:44:55 -48 public", "who and how strong");
+	// As an adapter from before Low Energy (-o), what its inquiries find and the name it is told, record by record
+	const devs = new pure.Devices();
+	const data = join(record(1000, inquiry(0x02, [TV]), 0x02), record(1001, inquiry(0x22, [PHONE]), 0x22), record(1002, inquiry(0x2f, [BUDS]), 0x2f),
+		record(1300, [0], 0x01), record(1400, named(0, TV.addr, "Living Room TV"), 0x07), record(1500, named(4, PHONE.addr, ""), 0x07));
+	let over = 0;
+	pure.records(data).forEach(function (x) {
+		if (x.evt === 0x01) { over++; return; }
+		pure.classicIn(x.evt, x.p).forEach(function (r) { devs.heard(r, x.t); });
+	});
+	equal(over + ": " + devs.list().map(function (d) { return pure.titleOf(d) + " (" + d.seen.kind + ")"; }).sort().join(", "),
+		"1: Living Room TV (home), Phone (personal), Pocket Buds (audio)", "one search, three found, two with names");
 });
 
 if (require.main === module) run("scanner.js: the Bluetooth page's own reckoning").then(function (failed) { process.exit(failed ? 1 : 0); });

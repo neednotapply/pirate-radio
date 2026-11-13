@@ -202,6 +202,54 @@
 		return out;
 	}
 
+	// What an adapter from before Low Energy found by asking (an inquiry),
+	// as reports like those above. An Inquiry Result event's parameters are
+	// how many devices, then for each its address, how it listens for a
+	// page, its class and how far its clock is off (event 0x02); with how
+	// strong it was as well (0x22; an early adapter's has a byte more); and
+	// with what the device says of itself, structures as an advertisement
+	// has them (0x2f). The class goes in with those structures, as the one
+	// it has among them (type 0x0d). And a name that a device gave when it
+	// was asked (0x07: status, address, name), as its name's structure
+	function classicIn(evt, p) {
+		var out = [], n, each, o, i, codAt, r, own, end, data;
+		function rep(addr, rssi, d, response) {
+			return { classic: true, pdu: null, connectable: true, scannable: false, directed: false, response: response,
+				addrType: 0, addr: addr, rssi: rssi, tx: null, data: d, extended: false, cut: false };
+		}
+		if (evt === 0x07) {
+			if (p.length <= 7 || p[0]) return out;
+			for (end = 7; end < p.length && p[end];) end++;
+			if (end === 7) return out;
+			data = new Uint8Array(2 + end - 7);
+			data[0] = 1 + end - 7;
+			data[1] = 0x09;
+			data.set(p.subarray(7, end), 2);
+			out.push(rep(addrText(p, 1), null, data, true));
+			return out;
+		}
+		if ((evt !== 0x02 && evt !== 0x22 && evt !== 0x2f) || p.length < 15 || !p[0]) return out;
+		n = p[0];
+		each = Math.floor((p.length - 1) / n);
+		if (each < 14) return out;
+		// (the class is after the address, how it listens for a page, and what is
+		// kept: two bytes in the plain form and the early adapters', one otherwise)
+		codAt = evt === 0x02 || each === 15 ? 9 : 8;
+		for (i = 0, o = 1; i < n && o + each <= p.length; i++, o += each) {
+			r = evt === 0x02 ? 127 : s8(p[o + codAt + 5]);
+			// (what it says of itself ends where a structure of no length begins)
+			own = evt === 0x2f ? p.subarray(o + 14, o + each) : p.subarray(0, 0);
+			for (end = 0; end + 1 < own.length && own[end] && end + 1 + own[end] <= own.length;) end += 1 + own[end];
+			data = new Uint8Array(5 + end);
+			data[0] = 4;
+			data[1] = 0x0d;
+			data.set(p.subarray(o + codAt, o + codAt + 3), 2);
+			data.set(own.subarray(0, end), 5);
+			out.push(rep(addrText(p, o), r === 127 ? null : r, data, false));
+		}
+		return out;
+	}
+
 	// Whose an address is. A public one is the device's for good, out of its
 	// maker's block. A random one is made up: static (the device's for good
 	// all the same, or until it is restarted), or private, changed every few
@@ -632,14 +680,17 @@
 		this.adverts = 0;
 	}
 
-	// An advertising report (as reportsIn gives them), heard at `at` (ms)
+	// An advertising report (as reportsIn gives them), or what an inquiry
+	// found (as classicIn does), heard at `at` (ms). A device found by
+	// asking is one of its own, whatever advertises from the same address
 	Devices.prototype.heard = function (r, at) {
 		var id, d, gap, sec, h, g, changed = false;
 		if (!r.addr || r.addrType === 0xff) return null;
-		id = (r.addrType & 1 ? "r" : "p") + r.addr;
+		id = (r.classic ? "c" : r.addrType & 1 ? "r" : "p") + r.addr;
 		d = this.all[id];
 		if (!d) {
-			d = this.all[id] = { id: id, addr: r.addr, addrType: r.addrType, addrKind: addrKind(r.addrType, r.addr),
+			d = this.all[id] = { id: id, addr: r.addr, addrType: r.addrType, classic: !!r.classic,
+				addrKind: r.classic ? "classic" : addrKind(r.addrType, r.addr),
 				first: at, last: at, n: 0, rssi: null, level: null, lo: null, hi: null, gaps: [], every: null,
 				pdu: null, connectable: false, extended: false, parts: {}, order: [], sent: null, seen: null, hist: [], rev: 0 };
 			this.total++;
@@ -647,7 +698,8 @@
 			// How often it advertises: the gaps between what was heard of it, of
 			// which the short ones tell (a long one is an advertisement missed)
 			gap = at - d.last;
-			if (gap >= 15 && gap <= 15000) {
+			// (not of one found by asking: it answers when it is asked)
+			if (!d.classic && gap >= 15 && gap <= 15000) {
 				d.gaps.push(gap);
 				if (d.gaps.length > 16) d.gaps.shift();
 				g = d.gaps.slice().sort(function (a, b) { return a - b; });
@@ -745,7 +797,7 @@
 		q = q.trim().toLowerCase();
 		if (!q) return true;
 		return (s.name + "\n" + s.what + "\n" + s.maker + "\n" + d.addr + "\n" + KIND_NAME[s.kind] + "\n" +
-			s.tags.map(function (t) { return t[0]; }).join("\n")).toLowerCase().indexOf(q) >= 0;
+			s.tags.map(function (t) { return t[0]; }).join("\n") + (d.classic ? "\nclassic" : "")).toLowerCase().indexOf(q) >= 0;
 	}
 
 	/* ---------- a made-up neighbourhood, for the demo ---------- */
@@ -915,8 +967,21 @@
 		"static": ["its own, random", "Random, and its own all the same: it keeps it, at least until it is restarted."],
 		"resolvable": ["changes", "Private: it takes a new one every few minutes. What it is paired with can tell it is the same device; nothing else can, so it may be on several lines here."],
 		"unresolvable": ["changes", "Random, and changed as it likes: nothing can tell it is the same device from one to the next."],
-		"random": ["random", "Random."]
+		"random": ["random", "Random."],
+		"classic": ["its own", "Its own for good, out of its maker's block of addresses: classic Bluetooth has no other kind."]
 	};
+
+	// What the page says of itself, under the list: with an adapter that
+	// listens, and with one from before Low Energy, which asks
+	var FOOT_LISTENS = "It only listens. Nothing here asks a device anything or connects to it, so a device that " +
+		"does not advertise is not seen, and one that is seen cannot tell. Phones, watches and trackers change their addresses " +
+		"every few minutes: one of them may be several lines here, until the old ones are let go (five minutes unheard).";
+	var FOOT_ASKS = "This dongle is from before Low Energy, which is what most things advertise with now, so it has nothing " +
+		"to listen to. It searches the older way: ten seconds at a time it sends an inquiry, which the devices that are set " +
+		"to be found answer with their address and what kind of thing they are, and then it asks each of them its name. That " +
+		"sends, and a device that is asked its name can tell by whom. Most phones answer only while their Bluetooth settings " +
+		"are open, headphones and speakers while they wait to be paired. A dongle of Bluetooth 4.0 or later listens instead, " +
+		"and hears far more.";
 
 	function ago(ms) {
 		var s = Math.round(ms / 1000);
@@ -938,7 +1003,7 @@
 			reports: function (p) { return opts.call("pirate.bluetooth", "reports", p); }
 		};
 		var alive = true, paused = false, timer = null, drawT = null, waiting = false;
-		var seq = null, state = "", stat = null, problem = "", lost = 0, since = Date.now(), tally = [];
+		var seq = null, state = "", stat = null, problem = "", lost = 0, since = Date.now(), tally = [], rounds = 0;
 		var devs = new Devices(), rows = {}, open = {}, shown = "", chipsKey = "", want = { kind: "", q: "", sort: "signal" };
 
 		function button(label, cls, fn) {
@@ -961,16 +1026,18 @@
 			el("span", { text: "Maker" }), el("span", { text: "Address" }), el("span", { text: "Heard" }));
 		var empty = el("div", { class: "placeholder" });
 		var about = el("dl", { class: "kv" });
+		var foot = el("p", { class: "descr bt-foot", text: FOOT_LISTENS });
+
+		// One found by asking is found again at the next search, which may be
+		// half a minute on: it counts as there for a minute
+		function quiet(d) { return d.classic ? 60000 : devs.quiet; }
 		var body = el("div", { class: "bt-body" },
 			el("div", { class: "toolbar bt-controls" }, search, sortSel), chips, stats, head, listEl, empty);
 
 		node.appendChild(el("div", { class: "bt" },
 			el("div", { class: "toolbar bt-top" }, dot, line, pauseBtn),
 			note, body,
-			el("details", { class: "raw" }, el("summary", { text: "The adapter" }), about),
-			el("p", { class: "descr bt-foot", text: "It only listens. Nothing here asks a device anything or connects to it, so a device that " +
-				"does not advertise is not seen, and one that is seen cannot tell. Phones, watches and trackers change their addresses " +
-				"every few minutes: one of them may be several lines here, until the old ones are let go (five minutes unheard)." })));
+			el("details", { class: "raw" }, el("summary", { text: "The adapter" }), about), foot));
 
 		/* ---- a device's line ---- */
 
@@ -1037,18 +1104,19 @@
 			kv("It is", s.what ? capital(s.what) : "Not said");
 			kv("Kind", KIND_NAME[s.kind]);
 			kv("Address", d.addr + ": " + k[1]);
-			kv("Heard", d.n + (d.n === 1 ? " time" : " times") + ", first at " + clockTime(d.first) + (d.every ? ", " + every(d.every) : ""));
+			kv(d.classic ? "Found" : "Heard", d.n + (d.n === 1 ? " time" : " times") + ", first at " + clockTime(d.first) + (d.every ? ", " + every(d.every) : ""));
 			kv("Signal", d.rssi == null ? "the adapter does not say" : d.rssi + " dBm now, between " + d.lo + " and " + d.hi);
-			kv("Advertises", d.pdu != null ? (d.connectable ? "and can be connected to" : "only: it cannot be connected to") + " (" + PDU[d.pdu] + ")" :
+			if (d.classic) kv("Answers", "an inquiry: it is set to be found (classic Bluetooth)");
+			else kv("Advertises", d.pdu != null ? (d.connectable ? "and can be connected to" : "only: it cannot be connected to") + " (" + PDU[d.pdu] + ")" :
 				d.connectable ? "and can be connected to" : "only: it cannot be connected to");
 			s.facts.forEach(function (f) { kv(f[0], f[1]); });
-			kv("As sent", d.sent ? hex(d.sent, " ") : "");
+			kv("As sent", d.sent && !d.classic ? hex(d.sent, " ") : "");
 			clear(r.more).appendChild(spark(d, now));
 			r.more.appendChild(dl);
 		}
 
 		function paint(d, r, now) {
-			var s = d.seen, gone = now - d.last > devs.quiet, lvl = d.level == null ? null : Math.round(d.level);
+			var s = d.seen, gone = now - d.last > quiet(d), lvl = d.level == null ? null : Math.round(d.level);
 			var bars = lvl == null || gone ? 0 : lvl >= -55 ? 5 : lvl >= -65 ? 4 : lvl >= -75 ? 3 : lvl >= -85 ? 2 : 1;
 			if (r.txt.bars !== bars) {
 				r.txt.bars = bars;
@@ -1075,6 +1143,7 @@
 				s.tags.forEach(function (t) {
 					r.tags.appendChild(el("span", { class: "b" + (t[1] === "bad" ? " sec-open" : t[1] === "warn" ? " sec-warn" : ""), text: t[0] }));
 				});
+				if (d.classic) r.tags.appendChild(el("span", { class: "b", text: "classic" }));
 			}
 			if (!!open[d.id] !== !r.more.hidden) {
 				r.more.hidden = !open[d.id];
@@ -1119,18 +1188,19 @@
 				lookalike = s.usb === "0a12:0001" && (s.maker !== 10 || s.hci_revision !== s.lmp_subversion);
 				if (s.usb === "0a12:0001") kv("CSR's own", lookalike ? "no: it answers as another chip under CSR's number (a look-alike). It listens all the same." : "yes, by what it answers");
 			}
-			if (state === "listening") kv("Listening", "a passive scan" + (s.extended ? ", with the extended commands" : "") + ": it sends nothing");
-			if (s.heard != null) kv("Heard this time", s.heard + " advertisements");
+			if (state === "listening" && s.classic) kv("Searching", "by inquiry, ten seconds at a time, and asking what it finds for its name: it sends");
+			else if (state === "listening") kv("Listening", "a passive scan" + (s.extended ? ", with the extended commands" : "") + ": it sends nothing");
+			if (s.heard != null && !s.classic) kv("Heard this time", s.heard + " advertisements");
 		}
 
 		function draw() {
 			if (!alive) return;
-			var now = Date.now(), all, vis, counts = {}, inRange = 0, ids, seenIds = {}, rate = 0, text, k, tooOld;
+			var now = Date.now(), all, vis, counts = {}, inRange = 0, ids, seenIds = {}, rate = 0, text, k, asks = !!(stat && stat.classic);
 			devs.prune(now);
 			all = devs.list();
 			all.forEach(function (d) {
 				counts[d.seen.kind] = (counts[d.seen.kind] || 0) + 1;
-				if (now - d.last <= devs.quiet) inRange++;
+				if (now - d.last <= quiet(d)) inRange++;
 			});
 			chipsDraw(counts, all.length);
 			vis = order(all.filter(function (d) { return (!want.kind || d.seen.kind === want.kind) && matches(d, want.q); }), want.sort);
@@ -1150,35 +1220,38 @@
 			}
 			tally = tally.filter(function (t) { return now - t.t <= 5000; });
 			tally.forEach(function (t) { rate += t.n; });
-			stats.textContent = all.length ? inRange + " heard now, " + devs.total + " since " + clockTime(since).slice(0, 5) +
-				" · " + Math.round(rate / 5) + " advertisements a second" + (lost ? " · " + lost + " missed (this page was slow to ask)" : "") : "";
+			stats.textContent = !all.length ? "" : asks ?
+				inRange + " found now, " + devs.total + " since " + clockTime(since).slice(0, 5) + " · " + rounds + (rounds === 1 ? " search" : " searches") :
+				inRange + " heard now, " + devs.total + " since " + clockTime(since).slice(0, 5) +
+				" · " + Math.round(rate / 5) + " advertisements a second" + (lost ? " · " + lost + " missed (this page was slow to ask)" : "");
 
 			// What is to be said in place of the list, or over it
-			// An adapter from before Bluetooth 4.0 (HCI version 6) has no Low
-			// Energy: nothing to try again, and nothing wrong with it
-			tooOld = state === "failed" && !!stat && stat.hci_version != null && stat.hci_version < 6;
-			text = paused ? "Paused" : state === "listening" ? "Listening" + (stat && (stat.product || stat.adapter) ? " on " + (stat.product || stat.adapter) : "") :
-				state === "absent" ? "No Bluetooth adapter" : tooOld ? "No Low Energy on this dongle" : state === "failed" ? "The adapter failed" :
+			// (an adapter from before Low Energy searches, where another listens)
+			text = paused ? "Paused" : state === "listening" ? (asks ? "Searching" : "Listening") + (stat && (stat.product || stat.adapter) ? " on " + (stat.product || stat.adapter) : "") :
+				state === "absent" ? "No Bluetooth adapter" : state === "failed" ? "The adapter failed" :
 				state === "idle" || state === "starting" ? "Starting the adapter…" : problem ? "No answer" : "Looking for the adapter…";
 			if (opts.demo && !paused) text += " (demo: a made-up neighbourhood)";
 			line.textContent = text;
 			dot.className = "bt-dot" + (paused ? "" : state === "listening" ? " on" : state === "failed" || problem ? " bad" : "");
-			pauseBtn.textContent = paused ? "Listen" : "Pause";
+			pauseBtn.textContent = paused ? (asks ? "Search" : "Listen") : asks ? "Stop" : "Pause";
+			if (foot.textContent !== (asks ? FOOT_ASKS : FOOT_LISTENS)) foot.textContent = asks ? FOOT_ASKS : FOOT_LISTENS;
 			pauseBtn.hidden = !paused && state !== "listening";
 			clear(note);
 			if (problem) note.appendChild(el("div", { class: "alert warn", text: problem }));
-			else if (tooOld) note.appendChild(el("div", { class: "alert warn", text: "This dongle is Bluetooth " + (BT_VERSION[stat.hci_version] || "from before 4.0") +
-				": it has no Low Energy, and what Low Energy devices advertise is all this page listens to. A dongle of Bluetooth 4.0 or later will do." }));
 			else if (state === "failed" && stat && stat.error) note.appendChild(el("div", { class: "alert warn", text: "The adapter: " + stat.error + ". Trying again every few seconds." }));
 			else if (state === "absent" && stat && stat.error) note.appendChild(el("div", { class: "alert warn", text: stat.error.replace(/^./, function (c) { return c.toUpperCase(); }) + "." }));
 			head.hidden = listEl.hidden = !vis.length;
-			body.hidden = (state === "absent" || tooOld) && !all.length;
+			body.hidden = state === "absent" && !all.length;
 			clear(empty);
 			empty.hidden = !!vis.length;
 			if (!vis.length) {
-				if (state === "absent" || tooOld) { empty.hidden = true; }
-				else if (all.length) empty.appendChild(el("b", { text: "None of the " + all.length + " heard match" }));
-				else if (state === "listening") {
+				if (state === "absent") { empty.hidden = true; }
+				else if (all.length) empty.appendChild(el("b", { text: "None of the " + all.length + (asks ? " found match" : " heard match") }));
+				else if (state === "listening" && asks) {
+					empty.appendChild(el("b", { text: rounds ? "Nothing found yet" : "Searching…" }));
+					empty.appendChild(el("div", { text: "A search takes ten seconds. Only devices that are set to be found answer it: a phone while its " +
+						"Bluetooth settings are open, headphones and speakers while they wait to be paired, many TVs and printers at any time." }));
+				} else if (state === "listening") {
 					empty.appendChild(el("b", { text: "Nothing heard yet" }));
 					empty.appendChild(el("div", { text: "What advertises nearby shows here within a few seconds." }));
 				} else empty.appendChild(el("b", { text: paused ? "Paused" : "Waiting for the adapter…" }));
@@ -1212,10 +1285,11 @@
 			if (r.lost) lost += r.lost;
 			if (r.data) {
 				records(b64dec(r.data)).forEach(function (rec) {
-					if (rec.evt !== 0x3e) return;
 					// (when it was heard, on this clock: as long ago as the router says)
 					var at = now - ((r.now - rec.t) >>> 0);
-					reportsIn(rec.p).forEach(function (rep) {
+					// (a search of the older way has ended)
+					if (rec.evt === 0x01) { rounds++; return; }
+					(rec.evt === 0x3e ? reportsIn(rec.p) : classicIn(rec.evt, rec.p)).forEach(function (rep) {
 						if (devs.heard(rep, at)) n++;
 					});
 				});
@@ -1292,7 +1366,7 @@
 
 	// (pure: the parts with no page to them, for tests/bt/)
 	window.PirateBT = { mount: mount, pure: {
-		records: records, reportsIn: reportsIn, addrKind: addrKind, adParts: adParts, partsOf: partsOf, describe: describe,
+		records: records, reportsIn: reportsIn, classicIn: classicIn, addrKind: addrKind, adParts: adParts, partsOf: partsOf, describe: describe,
 		Devices: Devices, order: order, matches: matches, titleOf: titleOf, demoAdapter: demoAdapter,
 		b64dec: b64dec, b64enc: b64enc, utf8: utf8, unhex: unhex, hex: hex, KINDS: KINDS, PDU: PDU
 	} };

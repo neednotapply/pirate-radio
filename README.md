@@ -10,8 +10,10 @@ computer. On its network it answers at **`http://pirateradio.local/`**.
 (This project was called slate-sdr. An upgrade that keeps settings carries
 them over, and a card labelled `SLATESDR` keeps working.)
 
-Nothing in this firmware transmits. HackRF boards with a dead transmit path
-work fine.
+The radios only receive: nothing in this firmware transmits with them, and
+HackRF boards with a dead transmit path work fine. One thing sends, and
+says so: a Bluetooth dongle from before Low Energy, which can only find
+what is about by asking (see *A Bluetooth dongle*).
 
 | Job | Radio | What | Live | On the card |
 |---|---|---|---|---|
@@ -661,15 +663,29 @@ heard.
   strongly it was heard over the last two minutes, everything its
   advertisement says, and the advertisement as it was sent.
 
-It only listens. The adapter scans passively: it asks nothing of the
-devices it hears and connects to none. So a device that does not advertise
-is not seen, a name that a device gives only when asked is not shown, and
+With a dongle of Bluetooth 4.0 or later it only listens. The adapter scans
+passively for Low Energy advertising: it asks nothing of the devices it
+hears and connects to none. So a device that does not advertise is not
+seen, a name that a device gives only when asked is not shown, and
 nothing that is seen can tell. What a device is taken for is a reading of
 what it advertises, no more: a name is its own word, a maker is whoever's
 number is on its data. Phones, watches and trackers change their address
 every few minutes, and are a line for each address they had until one not
 heard for five minutes is let go. Nothing is kept or written: the list is
 the page's, and goes with it.
+
+An older dongle (Bluetooth 2.0, 2.1 or 3.0) has no Low Energy, which is
+what nearly everything advertises with now, and so nothing to listen to.
+With one the page searches the older way, and says that it does: ten
+seconds at a time the dongle sends an inquiry, which the devices that are
+set to be found answer with their address and their class (a phone, a TV,
+headphones), and each one found is then asked its name. **That
+transmits**, and a device that is asked its name can tell by whom. It
+also finds far less: most phones answer only while their Bluetooth
+settings are open, headphones and speakers while they wait to be paired,
+many TVs and printers at any time; trackers, beacons and watches not at
+all. What is found this way is marked *classic*. **Stop** ends the
+searching within ten seconds, as leaving the page does.
 
 The router does none of the reckoning. `pirate-bluetooth` (its own package)
 has the kernel's adapter (`hci0`, through an HCI socket; nothing of BlueZ)
@@ -679,9 +695,10 @@ asked, and hands on what the adapter reports as it is, on ubus as
 the names of makers and services from Nordic Semiconductor's
 [bluetooth-numbers-database](https://github.com/NordicSemiconductor/bluetooth-numbers-database)
 (`bt/names.js`, made by `scripts/bt-names.py`). An adapter that takes only
-Bluetooth 5's extended scan commands is given those; a dongle the kernel
-has no driver for is said to be one. `logread -e pirate-bluetooth` shows it
-starting and stopping.
+Bluetooth 5's extended scan commands is given those; one from before
+Bluetooth 4.0 is given inquiries and name requests, whose answers are
+handed on in the same way; a dongle the kernel has no driver for is said
+to be one. `logread -e pirate-bluetooth` shows it starting and stopping.
 
 **The USB port's power:** a device on the USB port that has stopped
 answering wants pulling out and plugging in again. The full image does
@@ -734,8 +751,11 @@ the GL-AR300M.
 - **Bluetooth:** both images include the kernel's Bluetooth support and
   its driver for USB dongles (`kmod-bluetooth`, `kmod-btusb`), and
   `pirate-bluetooth` for the Bluetooth page. Nothing of BlueZ is in the
-  image: there is no `bluetoothctl` or `hcitool`. The dongle shares the
-  USB port with the radios, so use the powered hub.
+  image: there is no `bluetoothctl` or `hcitool`. A dongle of Bluetooth
+  4.0 or later is the one to have: it listens, sends nothing and hears
+  nearly everything. An older one can only search by inquiry, which
+  transmits and finds little. The dongle shares the USB port with the
+  radios, so use the powered hub.
 - **The law:** what you may receive, decode and record differs by country.
 
 ## Tested so far, and what isn't
@@ -818,13 +838,17 @@ Tested in this repository's tests and builds:
   event, to be asked for from where the last answer ended; more than is
   held, and how many were let go; the scan switched off and the adapter
   let go when nobody asks, and when the daemon stops; an adapter that takes
-  only the extended scan commands, one from before Bluetooth 4.0, one that
+  only the extended scan commands; one from before Bluetooth 4.0, which is
+  sent no Low Energy command but inquiries, one after another, a name
+  asked for once of a device that tells it, twice of one that answers no
+  page and never of one that said it, what was found and told handed on
+  as it came, and the inquiry called off when nobody asks; one that
   answers nothing, one that goes away while it listens; unplugged),
   against mock radios and tools on that same userland, and the rename from
   slate-sdr (settings, card mount, card folder) and pirateradio.local, and
   the web UI's receiver (the bridge as built for the router, answering a
   handshake with its simulated radio; its job among the others; the radio
-  taken back from a page that listens; old settings given the job): 931
+  taken back from a page that listens; old settings given the job): 939
   checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
@@ -843,16 +867,19 @@ Tested in this repository's tests and builds:
   SoapySDR library behind it, whose driver spoils a stream that is stopped
   and started again, as the HackRF's does (8 tests, in the same run).
 - The Bluetooth page's own reckoning has tests that need no router either
-  (`node tests/bt/run.js`, 20 tests, in the same job): the advertising
+  (`node tests/bt/run.js`, 23 tests, in the same job): the advertising
   reports in what the router hands on, in the form every LE adapter has
   and in Bluetooth 5's; an advertisement's structures and what they say
   of a device, made a byte at a time after the Bluetooth specification
   and the makers' published formats (its name; a beacon's contents; an
   AirTag with its owner and without; whose a tracker is; headphones by
   the model they say; a RuuviTag's readings, by Ruuvi's own example);
-  the devices heard, one for an address, how strongly and how often; and
-  the made-up neighbourhood of the UI's demo mode, which goes through
-  the same reckoning as a real one.
+  the devices heard, one for an address, how strongly and how often;
+  what an adapter from before Low Energy finds by asking, in each of the
+  forms an inquiry's results come in, with the names it is told, each
+  device a line of its own by its class and then its name; and the
+  made-up neighbourhood of the UI's demo mode, which goes through the
+  same reckoning as a real one.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -1051,10 +1078,12 @@ Not yet run:
   at once on the same port, so the fault is the first dongle's. The
   kernel's driver sets the second up as an adapter of CSR's own, of
   Bluetooth 2.0, and the daemon brought it up through the kernel's HCI
-  socket, read its address and versions, and said what it is: older than
-  Bluetooth 4.0, with no Low Energy to listen to. So the driver, the
-  socket and the daemon's first steps have run on the device. A scan, and
-  what an adapter with Low Energy hears, have not.
+  socket, read its address and versions, and stopped there: it had
+  nothing then for an adapter without Low Energy. It has now, the search
+  by inquiry, which no dongle has been through yet: it is tested against
+  `tests/fakebt` and made-up results alone. So the driver, the socket and
+  the daemon's first steps have run on the device, and neither kind of
+  scan has.
 - The USB port's power, beyond a first use. On the device it has been
   used at boot (the router found the first dongle silent, switched the
   port off and on by itself, twice, and said so) and by hand, through

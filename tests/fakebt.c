@@ -3,7 +3,10 @@
  * kernel's HCI socket, on a Unix socket (SOCK_SEQPACKET: an HCI packet a
  * message, led by its type), for testing pirate-bluetooth without a dongle.
  * It answers the few HCI commands pirate-bluetooth has, and while its scan
- * is on it reports the advertising of three devices, one every 100 ms.
+ * is on it reports the advertising of three devices, one every 100 ms. As
+ * an adapter from before Low Energy (-o) it takes inquiries instead, each
+ * of which finds three other devices and is over in 300 ms, and tells the
+ * name of the one that has one to tell.
  *
  *   fakebt -l socket [-c fifo] [-n] [-x] [-o] [-q]
  *
@@ -11,18 +14,22 @@
  *   -c  a FIFO: "adv <hex>" makes it report an advertisement with these
  *       bytes for its data, from AA:BB:CC:DD:EE:FF at -60 dBm (while it
  *       scans); "many <n>" n of its own at once; "error" a hardware error;
- *       "quit" ends it
+ *       "slow": its inquiries take a minute from now on (and it says
+ *       "slow"); "quit" ends it
  *   -n  nobody advertises by themselves: it reports only what the FIFO says
  *   -x  a Bluetooth 5 adapter as the kernel leaves one: the scan commands
  *       every LE adapter has are refused (Command Disallowed), the extended
  *       ones taken, and what it hears comes as extended advertising reports
- *   -o  one from before Bluetooth 4.0: it knows no Low Energy command
+ *   -o  one from before Bluetooth 4.0: it knows no Low Energy command, and
+ *       takes inquiries and name requests
  *   -q  one that answers nothing
  *
  * Prints an event a line to stdout: "open", "close", "version", "address",
  * "scan on passive" ("active"; "filtered" after it when duplicates are to
  * be left out), "scan off", "xscan on passive", "xscan off", "refused
- * <opcode>", "unknown <opcode>".
+ * <opcode>", "unknown <opcode>"; and of the older way "inquiry <how long,
+ * x 1.28 s>", "inquiry over", "inquiry cancel", and "name <address> psrm
+ * <how it listens for a page> clock <its offset, as it was sent>".
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -47,6 +54,11 @@ static int lfd = -1, cfd = -1, ffd = -1;
 static bool opt_n, opt_x, opt_old, opt_q;
 static bool scanning, active;
 static unsigned turn;
+/* (the older way: an inquiry is out, and what it finds has been said; when
+ * it is over; when the name that was asked for is due, and whose) */
+static bool inquiring, inq_said;
+static int64_t inq_end, name_due, inq_ms = 300;
+static uint8_t name_addr[6];
 
 /* Three devices that advertise: who (address type, address as it is sent,
  * lowest byte first), how (the advertising PDU: 0 can be connected to, 3
@@ -134,6 +146,15 @@ static void done(uint16_t op, uint8_t status)
 	complete(op, &status, 1);
 }
 
+/* Command Status: a command whose answer comes later has begun, or (a
+ * status other than 0) will not */
+static void begun(uint16_t op, uint8_t status)
+{
+	uint8_t p[4] = { status, 1, op & 0xff, op >> 8 };
+
+	send_evt(0x0f, p, sizeof(p));
+}
+
 /* A command it does not know: Command Status, Unknown HCI Command */
 static void unknown(uint16_t op)
 {
@@ -207,6 +228,86 @@ static void cast_report(unsigned i)
 
 	/* (a little stronger and weaker from one time to the next) */
 	report(c->addr_type, c->addr, c->pdu, c->rssi + (int)(turn / NCAST % 3) - 1, data, n);
+}
+
+/* ---------- the older way ---------- */
+
+/* Three devices an inquiry finds: who (the address as it is sent, lowest
+ * byte first), its class (lowest byte first), how far its clock is off,
+ * how strong, its name (none: it answers no page), and the form it is
+ * reported in: 0x02 the plain Inquiry Result, 0x22 the one with how strong,
+ * 0x2f the one with what the device says of itself (here its name) */
+struct found {
+	uint8_t addr[6], cod[3];
+	uint16_t clock;
+	int8_t rssi;
+	const char *name;
+	uint8_t form;
+};
+static const struct found FOUND[] = {
+	/* A TV, 11:22:33:44:55:66 (class 0x08043c: audio and video, a display with loudspeakers) */
+	{ { 0x66, 0x55, 0x44, 0x33, 0x22, 0x11 }, { 0x3c, 0x04, 0x08 }, 0x1234, 0, "Living Room TV", 0x02 },
+	/* A phone, 21:43:65:87:A9:CB (0x5a020c: a smartphone), which answers no page */
+	{ { 0xcb, 0xa9, 0x87, 0x65, 0x43, 0x21 }, { 0x0c, 0x02, 0x5a }, 0x0abc, -58, NULL, 0x22 },
+	/* Headphones, 0F:1E:2D:3C:4B:5A (0x240404: a headset), which say their name themselves */
+	{ { 0x5a, 0x4b, 0x3c, 0x2d, 0x1e, 0x0f }, { 0x04, 0x04, 0x24 }, 0x7fff, -70, "Pocket Buds", 0x2f },
+};
+#define NFOUND (sizeof(FOUND) / sizeof(FOUND[0]))
+
+/* What an inquiry finds: an event a device, each of one answer */
+static void found_all(void)
+{
+	size_t i;
+
+	for (i = 0; i < NFOUND; i++) {
+		const struct found *f = &FOUND[i];
+		uint8_t p[255];
+		size_t o = 0;
+
+		memset(p, 0, sizeof(p));
+		p[o++] = 1;             /* one answer */
+		memcpy(p + o, f->addr, 6);
+		o += 6;
+		p[o++] = 1;             /* how it listens for a page (R1) */
+		p[o++] = 0;             /* (kept) */
+		if (f->form == 0x02)
+			p[o++] = 0;     /* (the plain form keeps two) */
+		memcpy(p + o, f->cod, 3);
+		o += 3;
+		p[o++] = f->clock & 0xff;
+		p[o++] = f->clock >> 8;
+		if (f->form != 0x02)
+			p[o++] = (uint8_t)f->rssi;
+		if (f->form == 0x2f) {
+			/* what it says of itself, in 240 bytes: its whole name, and nothing after */
+			size_t l = strlen(f->name);
+
+			p[o] = 1 + l;
+			p[o + 1] = 0x09;
+			memcpy(p + o + 2, f->name, l);
+			o += 240;
+		}
+		send_evt(f->form, p, o);
+	}
+}
+
+/* The answer to a name asked for: Remote Name Request Complete (status,
+ * the address, the name in 248 bytes); of one that answers no page, Page
+ * Timeout */
+static void name_answer(void)
+{
+	uint8_t p[255];
+	size_t i;
+
+	memset(p, 0, sizeof(p));
+	p[0] = 0x04;
+	memcpy(p + 1, name_addr, 6);
+	for (i = 0; i < NFOUND; i++)
+		if (!memcmp(FOUND[i].addr, name_addr, 6) && FOUND[i].name) {
+			p[0] = 0;
+			memcpy(p + 7, FOUND[i].name, strlen(FOUND[i].name));
+		}
+	send_evt(0x07, p, sizeof(p));
 }
 
 /* ---------- what it is told ---------- */
@@ -301,6 +402,51 @@ static void on_cmd(const uint8_t *b, size_t n)
 			done(op, 0);
 		}
 		break;
+	case 0x0401:
+		/* Inquiry: the access code, how long (x 1.28 s), how many answers.
+		 * It begins, finds its three at once, and is over in 300 ms whatever
+		 * was asked for (a minute, once it was told "slow") */
+		if (!opt_old) {
+			unknown(op);
+		} else if (inquiring || n < 5) {
+			say("refused %04x", op);
+			begun(op, 0x0c);
+		} else {
+			say("inquiry %u", p[3]);
+			inquiring = true;
+			inq_said = false;
+			inq_end = now_ms() + inq_ms;
+			begun(op, 0);
+		}
+		break;
+	case 0x0402:
+		/* Inquiry Cancel: of one that is out */
+		if (!opt_old) {
+			unknown(op);
+		} else if (!inquiring) {
+			refused(op);
+		} else {
+			inquiring = false;
+			say("inquiry cancel");
+			done(op, 0);
+		}
+		break;
+	case 0x0419:
+		/* Remote Name Request: the address, how the device listens for a
+		 * page, a byte kept, how far its clock is off. Answered 100 ms on */
+		if (!opt_old) {
+			unknown(op);
+		} else if (n < 10) {
+			say("refused %04x", op);
+			begun(op, 0x0c);
+		} else {
+			say("name %02X:%02X:%02X:%02X:%02X:%02X psrm %u clock %04x",
+			    p[5], p[4], p[3], p[2], p[1], p[0], p[6], p[8] | p[9] << 8);
+			memcpy(name_addr, p, 6);
+			name_due = now_ms() + 100;
+			begun(op, 0);
+		}
+		break;
 	default:
 		unknown(op);
 	}
@@ -333,6 +479,9 @@ static void on_line(char *l)
 			if (i % 64 == 63)
 				pump();
 		}
+	} else if (!strcmp(l, "slow")) {
+		inq_ms = 60000;
+		say("slow");
 	} else if (!strcmp(l, "error")) {
 		uint8_t code = 0x42;
 
@@ -430,6 +579,8 @@ int main(int argc, char **argv)
 				close(cfd);
 				cfd = -1;
 				scanning = false;
+				inquiring = false;
+				name_due = 0;
 				say("close");
 			}
 		}
@@ -453,6 +604,20 @@ int main(int argc, char **argv)
 		if (scanning && !opt_n && now_ms() - last >= TICK_MS) {
 			last = now_ms();
 			cast_report(turn++);
+		}
+		if (inquiring && !inq_said) {
+			inq_said = true;
+			found_all();
+		} else if (inquiring && now_ms() >= inq_end) {
+			uint8_t ok = 0;
+
+			inquiring = false;
+			say("inquiry over");
+			send_evt(0x01, &ok, 1);
+		}
+		if (name_due && now_ms() >= name_due) {
+			name_due = 0;
+			name_answer();
 		}
 	}
 	return 0;
