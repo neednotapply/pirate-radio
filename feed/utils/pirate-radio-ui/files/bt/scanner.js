@@ -1125,7 +1125,7 @@
 
 		function draw() {
 			if (!alive) return;
-			var now = Date.now(), all, vis, counts = {}, inRange = 0, ids, seenIds = {}, rate = 0, text, k;
+			var now = Date.now(), all, vis, counts = {}, inRange = 0, ids, seenIds = {}, rate = 0, text, k, tooOld;
 			devs.prune(now);
 			all = devs.list();
 			all.forEach(function (d) {
@@ -1154,8 +1154,11 @@
 				" · " + Math.round(rate / 5) + " advertisements a second" + (lost ? " · " + lost + " missed (this page was slow to ask)" : "") : "";
 
 			// What is to be said in place of the list, or over it
+			// An adapter from before Bluetooth 4.0 (HCI version 6) has no Low
+			// Energy: nothing to try again, and nothing wrong with it
+			tooOld = state === "failed" && !!stat && stat.hci_version != null && stat.hci_version < 6;
 			text = paused ? "Paused" : state === "listening" ? "Listening" + (stat && (stat.product || stat.adapter) ? " on " + (stat.product || stat.adapter) : "") :
-				state === "absent" ? "No Bluetooth adapter" : state === "failed" ? "The adapter failed" :
+				state === "absent" ? "No Bluetooth adapter" : tooOld ? "No Low Energy on this dongle" : state === "failed" ? "The adapter failed" :
 				state === "idle" || state === "starting" ? "Starting the adapter…" : problem ? "No answer" : "Looking for the adapter…";
 			if (opts.demo && !paused) text += " (demo: a made-up neighbourhood)";
 			line.textContent = text;
@@ -1164,14 +1167,16 @@
 			pauseBtn.hidden = !paused && state !== "listening";
 			clear(note);
 			if (problem) note.appendChild(el("div", { class: "alert warn", text: problem }));
+			else if (tooOld) note.appendChild(el("div", { class: "alert warn", text: "This dongle is Bluetooth " + (BT_VERSION[stat.hci_version] || "from before 4.0") +
+				": it has no Low Energy, and what Low Energy devices advertise is all this page listens to. A dongle of Bluetooth 4.0 or later will do." }));
 			else if (state === "failed" && stat && stat.error) note.appendChild(el("div", { class: "alert warn", text: "The adapter: " + stat.error + ". Trying again every few seconds." }));
 			else if (state === "absent" && stat && stat.error) note.appendChild(el("div", { class: "alert warn", text: stat.error.replace(/^./, function (c) { return c.toUpperCase(); }) + "." }));
 			head.hidden = listEl.hidden = !vis.length;
-			body.hidden = state === "absent" && !all.length;
+			body.hidden = (state === "absent" || tooOld) && !all.length;
 			clear(empty);
 			empty.hidden = !!vis.length;
 			if (!vis.length) {
-				if (state === "absent") { empty.hidden = true; }
+				if (state === "absent" || tooOld) { empty.hidden = true; }
 				else if (all.length) empty.appendChild(el("b", { text: "None of the " + all.length + " heard match" }));
 				else if (state === "listening") {
 					empty.appendChild(el("b", { text: "Nothing heard yet" }));

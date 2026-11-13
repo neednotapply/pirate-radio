@@ -1,14 +1,13 @@
 #!/bin/sh /etc/rc.common
-# The USB port at boot. A device that is plugged in while the router starts
-# has its power before the port is ready for it; some do not get over the
-# wait (a Bluetooth dongle did not), answer nothing when the kernel asks what
-# they are, and stay that way until their power goes. Where this firmware
-# can switch the port's power (a full source build), pirate-router
-# usb_recover switches the port off and on if what is plugged in has not
-# answered, twice at most; elsewhere it does nothing. Run once at start,
-# beside the rest of the boot, and early in it: before the jobs and the
-# sharing of drives start, so that nothing is in use when the port goes off.
-# The Status page has the same switch by hand.
+# The USB port at boot. What is plugged in while the router starts and has
+# not answered when the kernel asked what it was gets a second try, with
+# its power gone in between. Where this firmware can switch the port's
+# power (a full source build), pirate-router usb_recover switches the port
+# off and on if what is plugged in has not answered, twice at most;
+# elsewhere it does nothing. Run once at start, beside the rest of the
+# boot, and early in it: before the jobs and the sharing of drives start, so
+# that nothing is in use when the port goes off. The Status page has the
+# same switch by hand.
 
 START=15
 USE_PROCD=1

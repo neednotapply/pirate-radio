@@ -281,10 +281,9 @@ cmd_usb_power_cycle() {
 }
 
 # At boot (the pirate-usbport init script): if what is plugged into the USB
-# port has not answered, the port is switched off and on, twice at most.
-# Some devices do not get over the wait for the port to come up with their
-# power already on (a Bluetooth dongle did not), and only losing it brings
-# them back. Nothing that answered is on the port then, so nothing is
+# port has not answered, the port is switched off and on, twice at most: a
+# second try, with its power gone in between, for a device that did not
+# take the first. Nothing that answered is on the port then, so nothing is
 # interrupted.
 cmd_usb_recover() {
 	local n=0

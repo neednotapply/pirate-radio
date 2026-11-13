@@ -693,13 +693,13 @@ back as if replugged. What a hub with its own power feeds keeps that
 power.
 
 At boot the router does the same by itself, early on and before its jobs
-start, if what is plugged in has not answered: a device that is in while
-the router starts has its power before the port is ready for it, and some
-do not get over the wait (a Bluetooth dongle here answered nothing after a
-reboot, whatever was tried from software). The port is switched off and
-on, twice at most, and only when nothing on it has answered, so nothing
-that works is interrupted; `logread -e pirate-router` says when it was.
-The Status page says when the last thing plugged in did not answer.
+start, if what is plugged in has not answered when the kernel asked what
+it was. The port is switched off and on, twice at most, and only when
+nothing on it has answered, so nothing that works is interrupted;
+`logread -e pirate-router` says when it was. The Status page says when
+the last thing plugged in did not answer. It is a second try and no more:
+the Bluetooth dongle it was written for, silent since a reboot, stayed
+silent whatever its power did, and was at fault itself.
 
 The quick image has no such switch: OpenWrt's kernel holds the line that
 powers the port on for good. The full build's device tree hands the line
@@ -1041,22 +1041,30 @@ Not yet run:
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that
   has a password, the sign-in path has been run on the hardware.
-- The Bluetooth page with a dongle. Its daemon is tested only against
-  `tests/fakebt` and its page against made-up advertisements: the kernel's
-  driver, its HCI socket and what a real dongle hears have not been run,
-  on the device or anywhere. The dongle that waits for it names itself a
-  CSR8510 A10 (`0a12:0001`); many under that name are other chips, which
-  the kernel's driver tells apart only when it sets one up. The driver is
-  on the router, and has not had the dongle to set up: after the reboot
-  that brought the driver, the dongle answered nothing (`device descriptor
-  read/64, error -71`), to the kernel at boot or when the port was tried
-  again from software.
-- The USB port's power, on the device. The patched device tree has not
-  been booted there, so the switch has not been used, at boot or by hand;
-  and whether losing its power brings that dongle back is a reading of
-  what was seen, not something tried. That the microSD card's slot keeps
-  its power when the port loses it is expected (its reader is a chip on
-  the board, on the other USB controller), and not seen yet either.
+- The Bluetooth page hearing anything. Its page is tested against made-up
+  advertisements and its daemon against `tests/fakebt`. On the device two
+  dongles have been tried, both under CSR's number (`0a12:0001`). The
+  first, a "CSR8510 A10", answered when it was plugged into the running
+  router and never after the next reboot (`device descriptor read/64,
+  error -71`): not at boot, not with its power cut (ten times, once for
+  30 seconds), not pulled out and plugged in by hand. The second answers
+  at once on the same port, so the fault is the first dongle's. The
+  kernel's driver sets the second up as an adapter of CSR's own, of
+  Bluetooth 2.0, and the daemon brought it up through the kernel's HCI
+  socket, read its address and versions, and said what it is: older than
+  Bluetooth 4.0, with no Low Energy to listen to. So the driver, the
+  socket and the daemon's first steps have run on the device. A scan, and
+  what an adapter with Low Energy hears, have not.
+- The USB port's power, beyond a first use. On the device it has been
+  used at boot (the router found the first dongle silent, switched the
+  port off and on by itself, twice, and said so) and by hand, through
+  rpcd as the Status page calls it. The kernel sees what is plugged in go
+  and come back, a dongle that works is set up again within four
+  seconds, and the microSD card stays mounted through it: its reader is
+  on the other USB controller and keeps its power. It has not brought
+  back a device that had stopped answering: the one it was tried on was
+  at fault itself. Not run there: the button on the Status page, and a
+  drive on the port being ejected first.
 
 ## Layout
 
