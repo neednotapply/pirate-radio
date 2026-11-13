@@ -199,14 +199,16 @@ static struct uloop_process up_proc;
 static bool up_pending, is_up, extended, stopping;
 static uint8_t legacy_status;
 
-/* The older way: the devices found, for their names (named: it has told
- * its name, in the record numbered name_seq; that counts while the record
- * is still held for a page to take); what is under way */
+/* The older way: the devices found, for their names (round: the search
+ * that found it last; asked: the one it was last asked its name in;
+ * named: it has told its name, in the record numbered name_seq, which
+ * counts while the record is still held for a page to take); what is
+ * under way */
 struct seen {
 	bool used, named;
 	uint8_t tries, addr[6], psrm;
 	uint16_t clock;
-	uint32_t round;
+	uint32_t round, asked;
 	uint64_t name_seq;
 };
 static struct seen seen[SEEN];
@@ -574,7 +576,8 @@ static void search_begin(void)
 
 /* The next device this inquiry found whose name is not known is asked for
  * it: its address, how it listens for a page, and how far its clock is off
- * (measured: bit 15). One that does not answer is asked twice at most */
+ * (measured: bit 15). Each is asked once in a search, and one that does
+ * not answer in two searches at most */
 static bool name_ask(void)
 {
 	uint8_t p[10];
@@ -583,12 +586,13 @@ static bool name_ask(void)
 	if (names_asked >= NAMES_A_ROUND)
 		return false;
 	for (i = 0; i < SEEN; i++)
-		if (seen[i].used && seen[i].round == round_no && seen[i].tries < 2 &&
+		if (seen[i].used && seen[i].round == round_no && seen[i].asked != round_no && seen[i].tries < 2 &&
 		    (!seen[i].named || seen[i].name_seq < seq_first))
 			break;
 	if (i == SEEN)
 		return false;
 	seen[i].tries++;
+	seen[i].asked = round_no;
 	names_asked++;
 	memcpy(naming_addr, seen[i].addr, 6);
 	memcpy(p, seen[i].addr, 6);

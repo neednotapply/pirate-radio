@@ -2746,6 +2746,8 @@ if [ "$FAIL" != 0 ]; then
 	tail -n 30 "$BT/daemon.log" "$BT/daemon2.log" 2> /dev/null | sed 's/^/  pirate-bluetooth: /'
 	tail -n 30 "$BT/fake.log" | sed 's/^/  fakebt: /'
 	tail -n 10 "$BT/ubusd.log" | sed 's/^/  ubusd: /'
+	# (what the older way handed on: all but the long record's filling)
+	echo "  the older way's records: $(echo "$d" | sed 's/AAAAAAAAAAAAAAAA*/A../g' | cut -c1-900)"
 fi
 kill "$BT_DAEMON" "$BT_FAKE" "$BT_UBUSD" 2> /dev/null
 
