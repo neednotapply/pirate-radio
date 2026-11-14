@@ -163,6 +163,7 @@ struct hci_filter {
 #define NAME_MS       12000  /* a name's answer, at most (a device that answers no page is given up on after 5 s) */
 #define GAP_MS        2000   /* between the last of one search and the next */
 #define NAMES_A_ROUND 4      /* names asked for after one inquiry, at most */
+#define NAME_AGAIN    5      /* searches before one that did not tell it in two is asked its name again */
 #define SEEN          48     /* devices found, kept for their names */
 
 enum state { ST_ABSENT, ST_IDLE, ST_STARTING, ST_LISTENING, ST_FAILED };
@@ -201,6 +202,7 @@ static uint8_t legacy_status;
 
 /* The older way: the devices found, for their names (round: the search
  * that found it last; asked: the one it was last asked its name in;
+ * tries: how many times running it did not tell it, two at most counted;
  * named: it has told its name, in the record numbered name_seq, which
  * counts while the record is still held for a page to take); what is
  * under way */
@@ -576,8 +578,10 @@ static void search_begin(void)
 
 /* The next device this inquiry found whose name is not known is asked for
  * it: its address, how it listens for a page, and how far its clock is off
- * (measured: bit 15). Each is asked once in a search, and one that does
- * not answer in two searches at most */
+ * (measured: bit 15). Each is asked once in a search at most, and one that
+ * did not tell it in two searches running, again only every NAME_AGAIN
+ * searches: a phone may be found just as its Bluetooth settings close,
+ * and be set to be found again later */
 static bool name_ask(void)
 {
 	uint8_t p[10];
@@ -586,12 +590,14 @@ static bool name_ask(void)
 	if (names_asked >= NAMES_A_ROUND)
 		return false;
 	for (i = 0; i < SEEN; i++)
-		if (seen[i].used && seen[i].round == round_no && seen[i].asked != round_no && seen[i].tries < 2 &&
+		if (seen[i].used && seen[i].round == round_no && seen[i].asked != round_no &&
+		    (seen[i].tries < 2 || round_no - seen[i].asked >= NAME_AGAIN) &&
 		    (!seen[i].named || seen[i].name_seq < seq_first))
 			break;
 	if (i == SEEN)
 		return false;
-	seen[i].tries++;
+	if (seen[i].tries < 2)
+		seen[i].tries++;
 	seen[i].asked = round_no;
 	names_asked++;
 	memcpy(naming_addr, seen[i].addr, 6);

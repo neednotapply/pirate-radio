@@ -670,12 +670,18 @@
 	// The devices heard: one for each address (a public and a random address
 	// alike are two), which for the many that change theirs every few minutes
 	// is one for each address they have had. keep: one not heard for so long
-	// is forgotten (ms); quiet: after so long it counts as gone quiet
+	// is let go (ms); quiet: after so long it counts as gone quiet. One found
+	// by asking has the one address, and is asked its name once while the
+	// router holds what it said: let go, it is put aside (GONE of them at
+	// most, the last let go), and found again it is back as it was, name
+	// and all
+	var GONE = 64;
 	function Devices(o) {
 		o = o || {};
 		this.keep = o.keep || 300000;
 		this.quiet = o.quiet || 30000;
 		this.all = {};
+		this.gone = {};
 		this.total = 0;
 		this.adverts = 0;
 	}
@@ -688,6 +694,11 @@
 		if (!r.addr || r.addrType === 0xff) return null;
 		id = (r.classic ? "c" : r.addrType & 1 ? "r" : "p") + r.addr;
 		d = this.all[id];
+		// (one found by asking that was let go: back as it was)
+		if (!d && r.classic && this.gone[id]) {
+			d = this.all[id] = this.gone[id];
+			delete this.gone[id];
+		}
 		if (!d) {
 			d = this.all[id] = { id: id, addr: r.addr, addrType: r.addrType, classic: !!r.classic,
 				addrKind: r.classic ? "classic" : addrKind(r.addrType, r.addr),
@@ -706,7 +717,8 @@
 				d.every = g[Math.floor((g.length - 1) / 4)];
 			}
 		}
-		d.n++;
+		// (a name told when it was asked is no time it was found)
+		if (!(r.classic && r.response)) d.n++;
 		this.adverts++;
 		if (at > d.last) d.last = at;
 		if (!r.response) {
@@ -754,10 +766,22 @@
 		return Object.keys(all).map(function (k) { return all[k]; });
 	};
 
-	// Those not heard for too long are let go; how many went
+	// Those not heard for too long are let go; how many went. One found by
+	// asking is put aside, with the GONE others let go last
 	Devices.prototype.prune = function (now) {
-		var n = 0, k;
-		for (k in this.all) if (now - this.all[k].last > this.keep) { delete this.all[k]; n++; }
+		var n = 0, k, d, ids, gone = this.gone;
+		for (k in this.all) {
+			d = this.all[k];
+			if (now - d.last <= this.keep) continue;
+			delete this.all[k];
+			n++;
+			if (d.classic) gone[k] = d;
+		}
+		ids = Object.keys(gone);
+		if (ids.length > GONE) {
+			ids.sort(function (a, b) { return gone[a].last - gone[b].last; });
+			ids.slice(0, ids.length - GONE).forEach(function (k) { delete gone[k]; });
+		}
 		return n;
 	};
 

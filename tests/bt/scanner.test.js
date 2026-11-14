@@ -416,12 +416,53 @@ test("devices found by asking: each a line of its own, by its class and then its
 		t += 13000;
 		found(0x02, [TV]);
 	}
-	equal(by[TV.addr].n + " " + by[TV.addr].every + " " + (t - by[TV.addr].last), "7 null 0", "found seven times in all, last just now; no pace of advertising");
+	equal(by[TV.addr].n + " " + by[TV.addr].every + " " + (t - by[TV.addr].last), "6 null 0",
+		"found six times in all (the name it told is no time it was found), last just now; no pace of advertising");
 	equal(pure.titleOf(by[TV.addr]), "Living Room TV", "and it keeps its name");
 	// What advertises from the same address is another line
 	const le = devs.heard(pure.reportsIn(advert({ addr: TV.addr, type: 0, data: "020106" }))[0], t);
 	equal(devs.list().length + " " + le.id + " " + le.classic, "4 p11:22:33:44:55:66 false", "the same address heard advertising is a line of its own");
 	ok(pure.matches(by[TV.addr], "classic") && !pure.matches(le, "classic"), "and \"classic\" finds those found by asking");
+});
+
+test("devices found by asking: let go when not found for a while, back as they were when found again", function () {
+	// As it went on the router: a phone found and asked its name, silent for seven minutes, found again
+	const devs = new pure.Devices();
+	let t = 1000000, i;
+	function found(list) { pure.classicIn(0x22, inquiry(0x22, list)).forEach(function (r) { devs.heard(r, t); }); }
+	function one(a) { return devs.list().filter(function (d) { return d.addr === a; })[0]; }
+	found([PHONE, TV]);
+	t += 1000;
+	pure.classicIn(0x07, named(0, PHONE.addr, "Joker")).forEach(function (r) { devs.heard(r, t); });
+	for (i = 0; i < 6; i++) {
+		t += 12200;
+		found([PHONE]);
+	}
+	equal(pure.titleOf(one(PHONE.addr)) + " " + one(PHONE.addr).n + " " + devs.total, "Joker 7 2", "the phone, found seven times and told its name once; two found");
+	t += 7 * 60000;
+	equal(devs.prune(t) + " " + devs.list().length, "2 0", "seven minutes on, both let go");
+	// The router asked its name once, and does not again: the phone is found with none
+	found([PHONE]);
+	const back = one(PHONE.addr);
+	equal(pure.titleOf(back) + " " + back.n + " " + back.first + " " + devs.total + " " + devs.list().length, "Joker 8 1000000 2 1",
+		"back as it was: its name, how often it was found and since when; not counted again");
+	// One that advertises is known by no such address: heard again after it was let go, it is new
+	const a = { addr: "C0:00:00:00:00:0A", data: "0809 5a756c75 2031 31" };
+	devs.heard(pure.reportsIn(advert(a))[0], t);
+	t += 300001;
+	devs.prune(t);
+	equal(devs.heard(pure.reportsIn(advert(a))[0], t).n + " " + devs.total, "1 4", "one that advertises: new again");
+	// 64 are put aside at most, those let go last
+	const many = new pure.Devices();
+	function find(k, at) {
+		const d = { addr: "00:00:00:00:00:" + ("0" + k.toString(16)).slice(-2).toUpperCase(), cod: PHONE.cod, clock: 0, rssi: -60 };
+		pure.classicIn(0x22, inquiry(0x22, [d])).forEach(function (r) { many.heard(r, at); });
+	}
+	for (i = 0; i < 70; i++) find(i, 1000 + i);
+	many.prune(1000000);
+	find(5, 1000000);
+	find(6, 1000000);
+	equal(many.total + " " + many.list().length, "71 2", "of 70 let go, the sixth found again is new, the seventh back");
 });
 
 test("the demo's neighbourhood goes the same way as a real one", async function () {

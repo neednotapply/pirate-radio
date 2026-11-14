@@ -684,8 +684,12 @@ transmits**, and a device that is asked its name can tell by whom. It
 also finds far less: most phones answer only while their Bluetooth
 settings are open, headphones and speakers while they wait to be paired,
 many TVs and printers at any time; trackers, beacons and watches not at
-all. What is found this way is marked *classic*. **Stop** ends the
-searching within ten seconds, as leaving the page does.
+all. What is found this way is marked *classic*, and keeps its line: a
+device not found for five minutes leaves the list, and is back on it as
+it was, name and all, when it is found again. One that does not tell
+its name is asked again at the next search, and then every minute or
+so. **Stop** ends the searching within ten seconds, as leaving the page
+does.
 
 The router does none of the reckoning. `pirate-bluetooth` (its own package)
 has the kernel's adapter (`hci0`, through an HCI socket; nothing of BlueZ)
@@ -840,15 +844,16 @@ Tested in this repository's tests and builds:
   let go when nobody asks, and when the daemon stops; an adapter that takes
   only the extended scan commands; one from before Bluetooth 4.0, which is
   sent no Low Energy command but inquiries, one after another, a name
-  asked for once of a device that tells it, twice of one that answers no
-  page and never of one that said it, what was found and told handed on
-  as it came, and the inquiry called off when nobody asks; one that
-  answers nothing, one that goes away while it listens; unplugged),
+  asked for once of a device that tells it, of one that answers no page
+  twice running and again five searches on, and never of one that said
+  it, what was found and told handed on as it came, and the inquiry
+  called off when nobody asks; one that answers nothing, one that goes
+  away while it listens; unplugged),
   against mock radios and tools on that same userland, and the rename from
   slate-sdr (settings, card mount, card folder) and pirateradio.local, and
   the web UI's receiver (the bridge as built for the router, answering a
   handshake with its simulated radio; its job among the others; the radio
-  taken back from a page that listens; old settings given the job): 939
+  taken back from a page that listens; old settings given the job): 940
   checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
@@ -867,7 +872,7 @@ Tested in this repository's tests and builds:
   SoapySDR library behind it, whose driver spoils a stream that is stopped
   and started again, as the HackRF's does (8 tests, in the same run).
 - The Bluetooth page's own reckoning has tests that need no router either
-  (`node tests/bt/run.js`, 23 tests, in the same job): the advertising
+  (`node tests/bt/run.js`, 24 tests, in the same job): the advertising
   reports in what the router hands on, in the form every LE adapter has
   and in Bluetooth 5's; an advertisement's structures and what they say
   of a device, made a byte at a time after the Bluetooth specification
@@ -877,9 +882,10 @@ Tested in this repository's tests and builds:
   the devices heard, one for an address, how strongly and how often;
   what an adapter from before Low Energy finds by asking, in each of the
   forms an inquiry's results come in, with the names it is told, each
-  device a line of its own by its class and then its name; and the
-  made-up neighbourhood of the UI's demo mode, which goes through the
-  same reckoning as a real one.
+  device a line of its own by its class and then its name, and back on
+  it as it was, name and all, when it is found again after it was let
+  go; and the made-up neighbourhood of the UI's demo mode, which goes
+  through the same reckoning as a real one.
 - Both images build on GitHub Actions, and the tests pass there.
 - The full build's configuration resolves: `./build-full.sh --config-only`
   keeps `CONFIG_KERNEL_RELAY`, the spectral options and upstream ath10k.
@@ -1068,9 +1074,10 @@ Not yet run:
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that
   has a password, the sign-in path has been run on the hardware.
-- The Bluetooth page hearing anything. Its page is tested against made-up
-  advertisements and its daemon against `tests/fakebt`. On the device two
-  dongles have been tried, both under CSR's number (`0a12:0001`). The
+- The Bluetooth page, beyond one phone found the older way. Its page is
+  tested against made-up advertisements and its daemon against
+  `tests/fakebt`. On the device two dongles have been tried, both under
+  CSR's number (`0a12:0001`). The
   first, a "CSR8510 A10", answered when it was plugged into the running
   router and never after the next reboot (`device descriptor read/64,
   error -71`): not at boot, not with its power cut (ten times, once for
@@ -1080,10 +1087,23 @@ Not yet run:
   Bluetooth 2.0, and the daemon brought it up through the kernel's HCI
   socket, read its address and versions, and stopped there: it had
   nothing then for an adapter without Low Energy. It has now, the search
-  by inquiry, which no dongle has been through yet: it is tested against
-  `tests/fakebt` and made-up results alone. So the driver, the socket and
-  the daemon's first steps have run on the device, and neither kind of
-  scan has.
+  by inquiry, and that dongle has been through it: on the router it is
+  sent an inquiry every twelve seconds, each ends as it should, the page
+  says "Searching", and the searching stops when the page is left. With
+  nothing near that was set to be found, nothing answered. A phone put
+  into pairing mode beside the router did: 49 times in ten searches, in
+  the form of result with how strong (about -50 dBm), and asked its name
+  it told it; when it left that mode it answered no more. In a browser
+  the page listed it, as "Phone": the phone had been silent for seven
+  minutes and found again, and the page had let it go after five and
+  made a new line of it, without the name the router had passed on once
+  and would not ask for again. The page now keeps such a line and puts
+  it back as it was: the router's records of that afternoon, replayed
+  through the page's own code, keep the phone's name throughout. That
+  has not been run on the router yet. Not seen with a real device: one
+  that says its name itself (the form of result that only later
+  adapters give), and one that does not tell its name when asked.
+  Listening with an adapter that has Low Energy has not been run at all.
 - The USB port's power, beyond a first use. On the device it has been
   used at boot (the router found the first dongle silent, switched the
   port off and on by itself, twice, and said so) and by hand, through

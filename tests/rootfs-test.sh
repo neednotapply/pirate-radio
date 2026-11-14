@@ -2713,13 +2713,22 @@ st=$(bt status)
 check "bluetooth: the older way: one search after another" [ "$(grep -c '^inquiry over$' "$BT/fake.log")" -ge 3 ]
 check "bluetooth: the older way: how many searches have ended, said" [ "$(echo "$st" | jsonfilter -e '@.searches')" -ge 3 ]
 check "bluetooth: the older way: the TV is asked its name, with how it listens for a page and its clock's offset" grep -q '^name 11:22:33:44:55:66 psrm 1 clock 9234$' "$BT/fake.log"
-check "bluetooth: the older way: asked once of one that tells, twice of one that answers no page, never of one that said it" [ "$(grep -c '^name 11:22:33:44:55:66 ' "$BT/fake.log") $(grep -c '^name 21:43:65:87:A9:CB ' "$BT/fake.log") $(grep -c '^name 0F:1E:2D:3C:4B:5A ' "$BT/fake.log")" = "1 2 0" ]
+check "bluetooth: the older way: asked once of one that tells, twice running of one that answers no page, never of one that said it" [ "$(grep -c '^name 11:22:33:44:55:66 ' "$BT/fake.log") $(grep -c '^name 21:43:65:87:A9:CB ' "$BT/fake.log") $(grep -c '^name 0F:1E:2D:3C:4B:5A ' "$BT/fake.log")" = "1 2 0" ]
 # What the page is handed: the first search's two short results as they
 # came (the third is long), then its end, the TV's name cut where it ends,
 # and the phone's that never came; then the next search's first byte. The
 # pattern is made from tests/fakebt.c: the times in it are not known here
 d=$(echo "$r" | jsonfilter -e '@.data')
 check "bluetooth: the older way: what was found and told is handed on as it came, a record an event" sh -c "case '$d' in FA??????AgFmVUQzIhEBAAA8BAg0EhQA??????IBy6mHZUMhAQAMAlq8*Bg??????AQAaA??????HAGZVRDMiEUxpdmluZyBSb29tIFRWDA??????BwTLqYdlQyEU*) ;; *) exit 1 ;; esac"
+# The phone is asked again five searches after the second time, at the
+# seventh, and not in between: eight searches on, three times
+i=0
+while [ "$(grep -c '^inquiry over$' "$BT/fake.log")" -lt 8 ] && [ $i -lt 40 ]; do
+	bt reports > /dev/null
+	sleep 1
+	i=$((i + 1))
+done
+check "bluetooth: the older way: one that answers no page is asked again five searches on, one that told it not" [ "$(grep -c '^name 21:43:65:87:A9:CB ' "$BT/fake.log") $(grep -c '^name 11:22:33:44:55:66 ' "$BT/fake.log")" = "3 1" ]
 # Nobody asking, with an inquiry out (the stand-in told to take a minute
 # over them): it is called off, and the adapter let go
 echo slow > "$BT/fifo"
