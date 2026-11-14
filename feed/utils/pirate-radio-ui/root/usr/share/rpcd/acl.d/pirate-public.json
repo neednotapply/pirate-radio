@@ -1,0 +1,20 @@
+{
+	"unauthenticated": {
+		"description": "Pirate Radio: what a page that has not signed in may see. Reading only: everything that changes something, and what is private (messages, files, the network's devices, captures, keys), needs the root password",
+		"read": {
+			"ubus": {
+				"pirate.recon": [ "dashboard", "uplink", "survey_networks", "survey_gps", "threats_rogue" ],
+				"pirate.router": [ "status", "ports", "wifi_status", "wifi_scan" ],
+				"pirate.sdr": [ "devices" ],
+				"pirate.bluetooth": [ "status", "reports" ],
+				"pirate.dreampi": [ "status", "log", "dcnow" ],
+				"pirate.firmware": [ "status" ],
+				"pirate.usb": [ "status" ],
+				"pirate.phone": [ "status" ],
+				"pirate.flipper": [ "status", "info", "screen" ],
+				"pirate.portapack": [ "status", "info", "screen" ],
+				"pirate.meshcore": [ "public" ]
+			}
+		}
+	}
+}

@@ -115,11 +115,14 @@ cp "$u/usr/sbin/pirate-usb" "$ov/usr/sbin/"
 cp "$u/usr/libexec/pirate-usb-list" "$ov/usr/libexec/"
 cp "$u/usr/libexec/rpcd/pirate.usb" "$ov/usr/libexec/rpcd/"
 cp "$u/usr/share/rpcd/acl.d/pirate-usb.json" "$ov/usr/share/rpcd/acl.d/"
+# What a page that has not signed in may see
+cp "$u/usr/share/rpcd/acl.d/pirate-public.json" "$ov/usr/share/rpcd/acl.d/"
 cp "$u/etc/hotplug.d/block/05-pirate-usb" "$ov/etc/hotplug.d/block/"
 cp "$u/etc/hotplug.d/block/20-pirate-usb-card" "$ov/etc/hotplug.d/block/"
 cp "$u/etc/uci-defaults/96-pirate-usb" "$ov/etc/uci-defaults/"
 chmod 755 "$ov/usr/sbin/pirate-usb" "$ov/usr/libexec/pirate-usb-list" "$ov/usr/libexec/rpcd/pirate.usb"
 cp "$here/feed/utils/pirate-radio-ui/files/pirate-upload" "$ov/www/cgi-bin/pirate-upload"
+cp "$here/feed/utils/pirate-radio-ui/files/pirate-phone-dl" "$ov/www/cgi-bin/pirate-phone-dl"
 # The page, for the check that the ACL lets through every call it makes
 cp "$here/feed/utils/pirate-radio-ui/files/app.js" "$ov/www/app.js"
 # First boot (the hostname) and <hostname>.local on the router's DNS
@@ -133,7 +136,7 @@ chmod 755 "$ov/usr/sbin/pirate-router" "$ov/usr/sbin/pirate-capture" "$ov/usr/sb
 	"$ov/usr/libexec/rpcd/pirate.handshake" "$ov/usr/libexec/rpcd/pirate.firmware" \
 	"$ov/usr/libexec/rpcd/pirate.sdr" "$ov/usr/libexec/rpcd/pirate.recon" \
 	"$ov/usr/libexec/pirate-radio-devices" "$ov/usr/libexec/pirate-survey-merge" \
-	"$ov/www/cgi-bin/pirate-upload"
+	"$ov/www/cgi-bin/pirate-upload" "$ov/www/cgi-bin/pirate-phone-dl"
 
 # The decoders and libraries OpenWrt itself packages come from its
 # repository when online; offline, <directory> must hold them too.

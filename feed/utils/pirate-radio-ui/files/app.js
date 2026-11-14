@@ -13,6 +13,31 @@
 	var NULL_SID = "00000000000000000000000000000000";
 	var DEMO = /[?&]demo=1/.test(location.search) || location.protocol === "file:";
 	var SID = null;
+	// What a page that has not signed in may call: rpcd lets its
+	// unauthenticated session make these calls (pirate-public.json; a test
+	// sees that the two lists are the same), readings only, none of them
+	// private. Pages ask for nothing else before a sign-in, and the demo
+	// plays rpcd by it when it is opened with &guest=1
+	var PUBLIC_CALLS = {
+		"pirate.recon": ["dashboard", "uplink", "survey_networks", "survey_gps", "threats_rogue"],
+		"pirate.router": ["status", "ports", "wifi_status", "wifi_scan"],
+		"pirate.sdr": ["devices"],
+		"pirate.bluetooth": ["status", "reports"],
+		"pirate.dreampi": ["status", "log", "dcnow"],
+		"pirate.firmware": ["status"],
+		"pirate.usb": ["status"],
+		"pirate.phone": ["status"],
+		"pirate.flipper": ["status", "info", "screen"],
+		"pirate.portapack": ["status", "info", "screen"],
+		"pirate.meshcore": ["public"]
+	};
+	var demoSignedIn = !/[?&]guest=1/.test(location.search);
+	// Signed in with the root password, or a visitor
+	function signedIn() { return DEMO ? demoSignedIn : !!SID; }
+	// Whether this page may make a call now
+	function canCall(object, method) {
+		return signedIn() || (PUBLIC_CALLS[object] || []).indexOf(method) >= 0;
+	}
 
 	/* ---------- ubus JSON-RPC client ---------- */
 
@@ -34,6 +59,15 @@
 	function dropSession() {
 		SID = null;
 		try { sessionStorage.removeItem("pirate_sid"); } catch (e) {}
+		sessionCookie(null);
+	}
+	// The session for the router's own CGIs as well (a firmware image sent
+	// up, a file from the phone), which ask rpcd whether it may: a cookie
+	// that only this site's own pages send, gone with the session
+	function sessionCookie(sid) {
+		try {
+			document.cookie = "pirate_sid=" + (sid || "") + "; Path=/cgi-bin; SameSite=Strict" + (sid ? "" : "; Max-Age=0");
+		} catch (e) {}
 	}
 
 	// ubus "call" returns [status, data]; status 0 == ok, 6 == permission. An
@@ -56,6 +90,8 @@
 	// keep === false: don't remember the session across reloads (the first-run
 	// probe, whose session must not outlive an unset password).
 	function login(user, pass, keep) {
+		// (the demo's visitor signs in with anything)
+		if (DEMO) { demoSignedIn = true; return Promise.resolve("0123456789abcdef0123456789abcdef"); }
 		return rpc("call", [NULL_SID, "session", "login",
 			{ username: user, password: pass, timeout: 3600 }]).then(function (r) {
 			if (!Array.isArray(r) || r[0] !== 0 || !r[1] || !r[1].ubus_rpc_session)
@@ -67,11 +103,22 @@
 	}
 	function rememberSession() {
 		try { sessionStorage.setItem("pirate_sid", SID); } catch (e) {}
+		sessionCookie(SID);
 	}
 
 	// call(): the one entry point the views use; serves demo data when offline.
+	// One that needs the password, asked by a visitor (or a session that has
+	// run out), brings up the sign-in over the page
 	function call(object, method, params) {
+		return answer(object, method, params).catch(function (e) {
+			if (String(e.message || e) === "unauthorized") askSignIn();
+			throw e;
+		});
+	}
+	function answer(object, method, params) {
 		if (DEMO) {
+			// (rpcd's way with a visitor, played)
+			if (!canCall(object, method)) return Promise.reject(new Error("unauthorized"));
 			var d = MOCK[object + ":" + method];
 			if (typeof d === "function") d = d(params || {});
 			// An answer that takes a while, as a radio's request does
@@ -975,6 +1022,13 @@
 		},
 		"pirate.access:term_status": function () { return { installed: true, enabled: DEMO_ACCESS.term, running: DEMO_ACCESS.term, port: 7681, sessions: [] }; },
 		"pirate.access:term_set": function (p) { DEMO_ACCESS.term = !!p.enabled; return MOCK["pirate.access:term_status"](); },
+		"pirate.meshcore:public": function () {
+			var ch = DEMO_MC.channels.filter(function (c) { return c.secret === "8b3387e9c5cdea6ac9e5edbaa115cd72"; })[0];
+			if (!ch) return { state: "ready", seq: 0 };
+			var msgs = DEMO_MC.msgs.filter(function (m) { return m.conv === ch.conv; }).slice(-100);
+			return { state: "ready", seq: msgs.reduce(function (a, m) { return Math.max(a, m.seq); }, 0),
+				channel: { index: ch.index, conv: ch.conv, name: ch.name }, messages: msgs };
+		},
 		"pirate.meshcore:status": function () {
 			var unread = 0, p = demoMcPos();
 			DEMO_MC.channels.concat(DEMO_MC.contacts).forEach(function (c) { unread += demoMcConv(c).unread; });
@@ -6447,6 +6501,7 @@
 				usePanel.appendChild(alertEl("warn", "The phone is in MIDI mode, but this firmware has no USB-audio driver yet. Reflash with the updated image (kmod-usb-audio) to see the MIDI port."));
 				return;
 			}
+			if (!canCall("pirate.phone", "midi")) { usePanel.appendChild(lockedNote("its MIDI ports")); return; }
 			var wrap = el("div", {}, el("div", { class: "muted", text: "Loading…" }));
 			usePanel.appendChild(wrap);
 			call("pirate.phone", "midi").then(function (r) {
@@ -6592,8 +6647,11 @@
 				});
 				devWrap.appendChild(dl);
 			}
-			// Plugged in: show its files
-			if (ready && !was) browse(path);
+			// Plugged in: show its files (a visitor: that they need the password)
+			if (ready && !was) {
+				if (canCall("pirate.flipper", "list")) browse(path);
+				else clear(fWrap).appendChild(lockedNote("its files"));
+			}
 		}
 		function status() {
 			return call("pirate.flipper", "status").then(showDevice).catch(function (e) {
@@ -7097,7 +7155,10 @@
 				});
 				devWrap.appendChild(dl);
 			}
-			if (ready && !was) browse(path);
+			if (ready && !was) {
+				if (canCall("pirate.portapack", "list")) browse(path);
+				else clear(fWrap).appendChild(lockedNote("its files"));
+			}
 		}
 		function status() {
 			return call("pirate.portapack", "status").then(showDevice).catch(function (e) {
@@ -7499,6 +7560,54 @@
 		VIEW.appendChild(el("div", { class: "placeholder", text: "Unknown section." }));
 	}
 
+	/* ---------- the Messenger, for a visitor: the public channel ---------- */
+
+	// What anyone with a MeshCore radio hears on its public channel, and
+	// nothing else of the radio's (pirate.meshcore public); newest first,
+	// looked at again every few seconds while the page is open
+	function renderMessengerPublic() {
+		clear(VIEW);
+		VIEW.appendChild(viewHead("Messenger", "MeshCore's public channel"));
+		var p = panel("Public channel");
+		var line = el("div", { class: "muted", text: "Loading…" });
+		var list = el("div");
+		p.appendChild(el("p", { class: "descr", text: "What anyone with a MeshCore radio hears on its public channel. " +
+			"Contacts, the other channels and direct messages are private: they need the router's password." }));
+		p.appendChild(el("div", { class: "toolbar" }, btn("Sign in", { onclick: askSignIn }), line));
+		p.appendChild(list);
+		VIEW.appendChild(p);
+		var gone = false, timer = null, seen = -1;
+		LEAVE = function () { gone = true; if (timer) clearTimeout(timer); };
+		function draw(r) {
+			var msgs = (r.messages || []).filter(function (m) { return !m.emoji; }).slice().reverse();
+			line.textContent = r.state === "absent" ? "No MeshCore radio is plugged in." :
+				r.state !== "ready" ? "The radio is connecting…" :
+				!r.channel ? "The radio has no public channel." :
+				r.channel.name + ": " + msgs.length + (msgs.length === 1 ? " message" : " messages");
+			if (r.seq === seen) return;
+			seen = r.seq;
+			clear(list);
+			if (!msgs.length) return;
+			list.appendChild(tableEl(["When", "From", "Message"], msgs.map(function (m) {
+				var said = m.reply_text ? el("div", {}, el("div", { class: "muted", text: "↪ " + (m.reply_from || "") +
+					(m.reply_from ? ": " : "") + m.reply_text }), m.text) : m.text;
+				return [mcTime(m.ts), m.out ? "this radio" : (m.from || ""), said];
+			})));
+		}
+		function look() {
+			call("pirate.meshcore", "public").then(function (r) {
+				if (!gone) draw(r || {});
+			}).catch(function (e) {
+				if (gone) return;
+				line.textContent = String(e.message || e) === "ubus status 4" ?
+					"The Messenger's service (pirate-meshcore) isn't running on this router." : "The router did not answer.";
+			}).then(function () {
+				if (!gone) timer = setTimeout(look, 5000);
+			});
+		}
+		look();
+	}
+
 	/* ---------- sections (the sidebar) / router ---------- */
 
 	var GROUPS = [
@@ -7509,6 +7618,13 @@
 		["USB devices", [["drives", "Drives"], ["phone", "Phone"], ["flipper", "Flipper"], ["portapack", "PortaPack"], ["bluetooth", "Bluetooth"], ["dreampi", "DreamPi"]]],
 		["System", [["status", "Status"], ["access", "Access"], ["terminal", "Terminal"], ["firmware", "Firmware"]]]
 	];
+	// Pages that are private through and through (the devices on the
+	// router's networks, captures, handshakes, SSH, the terminal): a visitor
+	// sees a lock on them, and is asked for the password
+	var LOCKED = { hosts: 1, clients: 1, capture: 1, handshake: 1, access: 1, terminal: 1 };
+	var LOCK_SVG = '<svg width="10" height="11" viewBox="0 0 10 11" aria-hidden="true">' +
+		'<rect x="1" y="5" width="8" height="6" rx="1" fill="currentColor"/>' +
+		'<path d="M3 5V3.5a2 2 0 0 1 4 0V5" stroke="currentColor" stroke-width="1.3" fill="none"/></svg>';
 	// Pages that were renamed, for old links
 	var ALIASES = { sdr: "receivers", router: "status" };
 	var TABS = [];
@@ -7530,11 +7646,20 @@
 					}
 				});
 				if (t[0] === current) { b.setAttribute("aria-current", "page"); here = t[1]; }
+				if (LOCKED[t[0]] && !signedIn())
+					b.appendChild(el("span", { class: "nav-lock", title: "Needs the router's password", html: LOCK_SVG }));
 				nav.appendChild(b);
 			});
 		});
 		$("top-title").textContent = here;
 		$("top-title").title = "";
+		var a = $("auth-btn");
+		if (a) {
+			a.hidden = false;
+			a.textContent = signedIn() ? "Sign out" : "Sign in";
+			a.title = signedIn() ? "Signed in with the router's password" :
+				"Open to anyone on the router's network; sign in for what is private";
+		}
 	}
 
 	// The sections: a drawer at any width, opened from the strip at the top,
@@ -7579,6 +7704,8 @@
 		showAddr();
 		renderTabs();
 		try { location.hash = id; } catch (e) {}
+		if (LOCKED[id] && !signedIn()) return renderLocked(id);
+		if (id === "messenger" && !signedIn()) return renderMessengerPublic();
 		if (id === "dashboard") return loadDashboard();
 		if (id === "messenger") return renderMessenger();
 		if (id === "receivers") return renderReceivers();
@@ -7616,7 +7743,12 @@
 	}
 
 	function onError(e) {
-		if (String(e.message || e) === "unauthorized" && !DEMO) { firstRun(); return; }
+		// What needs the password: the sign-in is up over the page already (call()),
+		// and the page stays as it is; a private one goes behind its lock
+		if (String(e.message || e) === "unauthorized") {
+			if (LOCKED[current] && !signedIn()) renderLocked(current);
+			return;
+		}
 		clear(VIEW).appendChild(el("div", { class: "placeholder" },
 			el("b", { text: "Couldn't reach the Slate" }),
 			el("div", { class: "muted", text: String(e.message || e) })));
@@ -7625,14 +7757,59 @@
 	/* ---------- login ---------- */
 
 	function showLogin() { $("login").hidden = false; var p = $("p"); if (p) p.focus(); }
-	function hideLogin() { $("login").hidden = true; }
+	function hideLogin() {
+		$("login").hidden = true;
+		$("p").value = "";
+		$("login-err").hidden = true;
+	}
+	// What needs the password: the sign-in, over the page (not over the
+	// first run's, which sets one)
+	function askSignIn() {
+		if (!$("setup").hidden) return;
+		showLogin();
+	}
+	function signOut() {
+		var sid = SID;
+		if (DEMO) demoSignedIn = false;
+		dropSession();
+		// (and rpcd forgets it, where it lets a session end itself)
+		if (sid) rpc("call", [sid, "session", "destroy", {}]).catch(function () {});
+		setTab(current);
+	}
+	// A page, or a part of one, that needs the password
+	function lockedNote(what) {
+		return el("div", { class: "placeholder" },
+			el("b", { text: "Sign in to see " + what }),
+			el("div", { class: "muted", text: "It's private, so it needs the router's password. The pages without a lock are " +
+				"open to anyone on the router's own network." }),
+			el("div", { class: "locked-act" }, btn("Sign in", { primary: true, onclick: askSignIn })));
+	}
+	function renderLocked(id) {
+		var name = (TABS.filter(function (t) { return t[0] === id; })[0] || [id, id])[1];
+		clear(VIEW);
+		VIEW.appendChild(viewHead(name));
+		VIEW.appendChild(lockedNote(name));
+	}
+	// (an index.html from before, still in the browser's cache, has neither)
+	if ($("login-cancel")) $("login-cancel").addEventListener("click", hideLogin);
+	if ($("auth-btn")) $("auth-btn").addEventListener("click", function () {
+		if (signedIn()) signOut(); else askSignIn();
+	});
 
 	// First run: a fresh flash has no root password, and rpcd then accepts any
 	// password (session.c: "password is not set"). So an empty-password sign-in
 	// that succeeds means no password exists yet: ask for one to be set before
 	// ever asking for one. If it fails, a password exists: the normal sign-in.
+	// Asked once in a tab: a router that has a password keeps it. Without one,
+	// the pages open to a visitor
 	function firstRun() {
-		login("root", "", false).then(showSetup).catch(showLogin);
+		var known = false;
+		try { known = sessionStorage.getItem("pirate_pw") === "1"; } catch (e) {}
+		if (known) { setTab(current); return; }
+		login("root", "", false).then(showSetup).catch(function () {
+			try { sessionStorage.setItem("pirate_pw", "1"); } catch (e) {}
+			setTab(current);
+		});
 	}
 	function showSetup() { $("setup").hidden = false; var p = $("np1"); if (p) p.focus(); }
 

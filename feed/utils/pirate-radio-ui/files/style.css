@@ -336,6 +336,25 @@ button.primary, .login-card button {
 	cursor: pointer;
 }
 .login-card button:hover { background: #e8ad52; border-color: #e8ad52; }
+/* "Not now": back to the page, which is open to visitors */
+.login-card button.ghost { margin-top: 0; font-weight: 500; background: transparent; border-color: var(--line-2); color: var(--muted); }
+.login-card button.ghost:hover { background: transparent; border-color: var(--line-3); color: var(--hi); }
+/* Sign in / Sign out, in the top strip */
+.auth-btn {
+	font: inherit;
+	font-size: 12px;
+	padding: 3px 10px;
+	border-radius: var(--r);
+	border: 1px solid var(--line-2);
+	background: transparent;
+	color: var(--txt);
+	cursor: pointer;
+	white-space: nowrap;
+}
+.auth-btn:hover { border-color: var(--accent); color: var(--hi); }
+/* A page that needs the password: its lock in the menu, and the way in */
+.nav-lock { display: inline-block; margin-left: 6px; color: var(--muted); vertical-align: -1px; }
+.locked-act { margin-top: 12px; }
 
 .loading { color: var(--muted); padding: 24px 2px; font-family: var(--mono); }
 

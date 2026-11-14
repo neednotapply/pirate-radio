@@ -10,7 +10,27 @@
 IMG=${PIRATE_FIRMWARE_IMG:-/tmp/pirate-firmware.img}
 MAX=${PIRATE_UPLOAD_MAX:-41943040}   # 40 MB; a sysupgrade image is well under this
 
+# A signed-in session, from the page's cookie (pirate_sid: 32 hex digits,
+# nothing else gets through), that rpcd lets make the call $1 $2. A
+# visitor's page has none (its session is rpcd's unauthenticated one, which
+# rpcd lets make neither). PIRATE_UBUS: a stand-in for ubus (tests)
+signed_in() {
+	local sid
+	sid=$(printf '%s\n' "$HTTP_COOKIE" | tr ';' '\n' | sed -n 's/^ *pirate_sid=\([0-9a-f]\{32\}\) *$/\1/p' | head -n 1)
+	[ -n "$sid" ] || return 1
+	[ "$("${PIRATE_UBUS:-ubus}" call session access \
+		"{\"ubus_rpc_session\":\"$sid\",\"scope\":\"ubus\",\"object\":\"$1\",\"function\":\"$2\"}" 2> /dev/null |
+		jsonfilter -e '@.access' 2> /dev/null)" = true ]
+}
+
 printf 'Content-Type: application/json\r\n\r\n'
+
+# Only a page signed in with the router's password (what it sends goes to
+# RAM, which a stranger on the network could otherwise fill)
+if ! signed_in pirate.firmware apply; then
+	echo '{ "ok": false, "error": "sign in first: sending a firmware image needs the router'\''s password" }'
+	exit 0
+fi
 
 len=${CONTENT_LENGTH:-0}
 case "$len" in ''|*[!0-9]*) len=0 ;; esac

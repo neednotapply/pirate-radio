@@ -10,6 +10,26 @@
 
 STAGE=${PIRATE_PHONE_STAGE:-/tmp/pirate-phone}
 
+# A signed-in session, from the page's cookie (pirate_sid: 32 hex digits,
+# nothing else gets through), that rpcd lets make the call $1 $2. A
+# visitor's page has none (its session is rpcd's unauthenticated one, which
+# rpcd lets make neither). PIRATE_UBUS: a stand-in for ubus (tests)
+signed_in() {
+	local sid
+	sid=$(printf '%s\n' "$HTTP_COOKIE" | tr ';' '\n' | sed -n 's/^ *pirate_sid=\([0-9a-f]\{32\}\) *$/\1/p' | head -n 1)
+	[ -n "$sid" ] || return 1
+	[ "$("${PIRATE_UBUS:-ubus}" call session access \
+		"{\"ubus_rpc_session\":\"$sid\",\"scope\":\"ubus\",\"object\":\"$1\",\"function\":\"$2\"}" 2> /dev/null |
+		jsonfilter -e '@.access' 2> /dev/null)" = true ]
+}
+
+# Only for a page signed in with the router's password: what is on the
+# phone is private
+if ! signed_in pirate.phone pull; then
+	printf 'Status: 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nsign in first: files from the phone need the router'\''s password\n'
+	exit 0
+fi
+
 # The query string: f=<name>. Parameter expansion, not echo|sed: the staged
 # names `pirate-phone pull` writes can start with "-", which echo mangles.
 # They are already limited to [A-Za-z0-9._-], so there is nothing to decode.

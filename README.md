@@ -178,6 +178,26 @@ the left (on a phone, the menu button at the top opens them):
 | USB devices | Drives, Phone, Flipper, PortaPack, DreamPi |
 | System | Status (its system, jacks, radios and slots), Access, Terminal, Firmware |
 
+**Without a password:** the UI opens for anyone on the router's own network
+(its Wi-Fi and LAN jacks; the firewall keeps the network it joins out), to
+look at: the Dashboard, the radios (tuning one that is free, in *Listen*),
+Sensors, the Wi-Fi Survey (with where each network was seen) and Threats,
+Uplink, Bluetooth, Status, DreamPi, the firmware's version, what is plugged
+in (drives, a phone, a Flipper or PortaPack with its live screen), and on
+the Messenger MeshCore's public channel, which anyone with a radio hears
+anyway. What is private needs the root password: Clients, Hosts, Capture,
+Handshakes, Access and Terminal (a lock beside them in the menu), the
+Messenger's contacts, other channels and direct messages, files on a
+drive, phone, Flipper or PortaPack, and every change (a radio given a
+feature, a network joined, a button pressed, a firmware flashed). Pressing
+one brings up the sign-in over the page; *Not now* goes back to it, and
+*Sign in* / *Sign out* sit at the top. rpcd decides, not the page: its
+unauthenticated session may make the calls listed in
+`pirate-public.json` (readings only) and nothing else, and the CGIs that
+take a firmware image or hand on a file from the phone ask rpcd whether the
+page's session may. A freshly flashed router still asks for a password to
+be set first.
+
 *Receivers* lists each radio it detects and the features it can do in plain
 language — *Listen in the browser*, *Live SDR on my computer*, *Decode
 aircraft/sensors/ships*, *Spectrum sweep*, *Record raw IQ*, *rtl_tcp server*.
@@ -880,7 +900,12 @@ Tested in this repository's tests and builds:
   handshake with its simulated radio; its job among the others; the radio
   taken back from a page that listens; old settings given the job; an
   ESP32 board, which gpsd keeps off, and `pirate-esp` with nothing
-  plugged in): 946 checks.
+  plugged in; what a page may see without the password, readings only,
+  ones its own ACL has, none of them private, and the page's own list of
+  them the same; the firmware upload and the phone's files refused to a
+  page not signed in, a session rpcd does not let, and what is no session
+  id; the Messenger's public channel, found by its key, with nothing of
+  another conversation): 959 checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
   made by the formula, the engine against a stand-in for the bridge, and
@@ -1100,6 +1125,17 @@ Not yet run:
   kept). It relies on rpcd accepting any password while root's is unset, so an
   empty-password sign-in that succeeds means "set one first". On a device that
   has a password, the sign-in path has been run on the hardware.
+- The UI without a password on the router. In the demo (`?demo=1&guest=1`,
+  where the page plays rpcd by its list of what a visitor may call), every
+  page opens as a visitor's should, without asking for the password; the
+  private ones show their lock; a button that needs it brings up the
+  sign-in and leaves the page as it was; signing in and out opens and
+  closes the rest. On the router, the upload CGI's question to rpcd was
+  run with a session made for it (let through), rpcd's unauthenticated one,
+  none, and one that had ended (each refused), and the checks on
+  `pirate-public.json` with the router's own tools. rpcd with that file,
+  and the Messenger's public channel from a real radio, come with the next
+  firmware.
 - The Bluetooth page, beyond one phone found the older way. Its page is
   tested against made-up advertisements and its daemon against
   `tests/fakebt`. On the device two dongles have been tried, both under

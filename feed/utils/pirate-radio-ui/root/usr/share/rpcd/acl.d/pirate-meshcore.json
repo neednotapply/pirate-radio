@@ -3,7 +3,7 @@
 		"description": "Grant access to the MeshCore radio: its contacts, channels and messages, sending, its adverts, name, GPS and settings, its command line and repeaters' (logged in to), and the packets it hears",
 		"read": {
 			"ubus": {
-				"pirate.meshcore": [ "status", "position", "contacts", "channels", "messages", "poll", "settings", "stats", "packets", "cli_log" ]
+				"pirate.meshcore": [ "status", "position", "contacts", "channels", "messages", "poll", "public", "settings", "stats", "packets", "cli_log" ]
 			}
 		},
 		"write": {

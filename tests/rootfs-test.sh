@@ -1117,9 +1117,31 @@ check "firmware: verify rejects a bad image" sh -c 'MOCK_SYSUP_FAIL=1 pirate-fir
 check "firmware: apply refuses an unverifiable image" sh -c 'MOCK_SYSUP_FAIL=1 pirate-firmware apply keep | jsonfilter -e "@.error" | grep -q "not flashing"'
 check "firmware: backup writes an archive and reports its size" sh -c '[ "$(pirate-firmware backup | jsonfilter -e "@.size")" -gt 0 ]'
 check "firmware: clear discards the staged image" sh -c 'pirate-firmware clear >/dev/null; pirate-firmware status | jsonfilter -e "@.staged" | grep -qx false'
-check "upload CGI: stages the posted body" sh -c 'printf hello | CONTENT_LENGTH=5 sh /www/cgi-bin/pirate-upload | tail -1 | jsonfilter -e "@.ok" | grep -qx true && [ -s "$PIRATE_FIRMWARE_IMG" ]'
-check "upload CGI: rejects an empty body" sh -c 'CONTENT_LENGTH=0 sh /www/cgi-bin/pirate-upload </dev/null | tail -1 | jsonfilter -e "@.error" | grep -q "no data"'
-check "upload CGI: rejects an oversize body" sh -c 'CONTENT_LENGTH=100 PIRATE_UPLOAD_MAX=10 sh /www/cgi-bin/pirate-upload </dev/null | tail -1 | jsonfilter -e "@.error" | grep -q "too large"'
+# The CGIs ask rpcd whether the page's session may make their call: here a
+# stand-in, which lets the session aaaa… (and none other)
+cat > "$T/ubus-session" <<-'EOF'
+	#!/bin/sh
+	case "$*" in
+	*'"ubus_rpc_session":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"'*) echo '{ "access": true }' ;;
+	*) echo '{ "access": false }' ;;
+	esac
+EOF
+chmod +x "$T/ubus-session"
+export CGI_UBUS="$T/ubus-session" CGI_OK="pirate_sid=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+rm -f "$PIRATE_FIRMWARE_IMG"
+check "upload CGI: a page not signed in is refused, and nothing staged" sh -c 'printf hello | CONTENT_LENGTH=5 PIRATE_UBUS=$CGI_UBUS sh /www/cgi-bin/pirate-upload | tail -1 | jsonfilter -e "@.error" | grep -q "^sign in first" && [ ! -e "$PIRATE_FIRMWARE_IMG" ]'
+check "upload CGI: a session rpcd does not let is refused" sh -c 'printf hello | CONTENT_LENGTH=5 PIRATE_UBUS=$CGI_UBUS HTTP_COOKIE="pirate_sid=00000000000000000000000000000000" sh /www/cgi-bin/pirate-upload | tail -1 | jsonfilter -e "@.error" | grep -q "^sign in first"'
+check "upload CGI: what is not a session id gets nowhere" sh -c 'printf hello | CONTENT_LENGTH=5 PIRATE_UBUS=$CGI_UBUS HTTP_COOKIE="pirate_sid=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"x\":\"" sh /www/cgi-bin/pirate-upload | tail -1 | jsonfilter -e "@.error" | grep -q "^sign in first"'
+check "upload CGI: stages the posted body" sh -c 'printf hello | CONTENT_LENGTH=5 PIRATE_UBUS=$CGI_UBUS HTTP_COOKIE="other=1; $CGI_OK" sh /www/cgi-bin/pirate-upload | tail -1 | jsonfilter -e "@.ok" | grep -qx true && [ -s "$PIRATE_FIRMWARE_IMG" ]'
+check "upload CGI: rejects an empty body" sh -c 'CONTENT_LENGTH=0 PIRATE_UBUS=$CGI_UBUS HTTP_COOKIE=$CGI_OK sh /www/cgi-bin/pirate-upload </dev/null | tail -1 | jsonfilter -e "@.error" | grep -q "no data"'
+check "upload CGI: rejects an oversize body" sh -c 'CONTENT_LENGTH=100 PIRATE_UPLOAD_MAX=10 PIRATE_UBUS=$CGI_UBUS HTTP_COOKIE=$CGI_OK sh /www/cgi-bin/pirate-upload </dev/null | tail -1 | jsonfilter -e "@.error" | grep -q "too large"'
+# A file pulled off the phone, for a signed-in page only
+export PIRATE_PHONE_STAGE="$T/phone-stage"
+mkdir -p "$PIRATE_PHONE_STAGE"
+printf 'a photo' > "$PIRATE_PHONE_STAGE/IMG_0001.jpg"
+check "phone download: a page not signed in is refused" sh -c 'QUERY_STRING=f=IMG_0001.jpg PIRATE_UBUS=$CGI_UBUS sh /www/cgi-bin/pirate-phone-dl | grep -q "^Status: 403" && ! QUERY_STRING=f=IMG_0001.jpg PIRATE_UBUS=$CGI_UBUS sh /www/cgi-bin/pirate-phone-dl | grep -q "a photo"'
+check "phone download: a signed-in page gets the file" sh -c 'QUERY_STRING=f=IMG_0001.jpg PIRATE_UBUS=$CGI_UBUS HTTP_COOKIE=$CGI_OK sh /www/cgi-bin/pirate-phone-dl | tail -1 | grep -qx "a photo"'
+check "phone download: signed in, still nothing but the staged file" sh -c 'QUERY_STRING=f=../../etc/passwd PIRATE_UBUS=$CGI_UBUS HTTP_COOKIE=$CGI_OK sh /www/cgi-bin/pirate-phone-dl | grep -q "^Status: 404"'
 
 echo "# pirate-radio-ui: GPS plug and play (pirate-gps)"
 [ -f /etc/config/gpsd ] || : > /etc/config/gpsd
@@ -2202,6 +2224,13 @@ check "meshcore: channels: the first free slot" [ "$(hj '@.free')" = 2 ]
 check "meshcore: messages it kept: fetched" [ "$(mc_msg ca1a1a1a1a1a1 'hello router' from)" = Alice ]
 check "meshcore: a contact's: SNR, hops" [ "$(mc_msg ca1a1a1a1a1a1 'hello router' snr | awk '{ print $1 + 0 }') $(mc_msg ca1a1a1a1a1a1 'hello router' hops)" = "10 1" ]
 check "meshcore: a channel's: who sent it" [ "$(mc_msg '#0' 'hi all' from) $(mc_msg '#0' 'hi all' snr | awk '{ print $1 + 0 }')" = "Bob -5.5" ]
+# For a page that has not signed in: the public channel, by its key, and
+# nothing else (not Alice's message to us, not #test)
+mc public > "$MC/public.json"
+pubj() { jsonfilter -i "$MC/public.json" -e "$1"; }
+check "meshcore: public: the public channel, found by its key" [ "$(pubj '@.channel.name') $(pubj '@.channel.conv')" = "Public #0" ]
+check "meshcore: public: its messages, and none of another conversation" [ "$(pubj '@.messages[*].conv' | sort -u | tr '\n' ' ')$(pubj "@.messages[@.text='hi all'].from")" = "#0 Bob" ]
+check "meshcore: public: what changed in it alone" [ "$(pubj '@.seq')" = "$(mc messages '{"conv":"#0"}' | jsonfilter -e '@.messages[*].seq' | sort -n | tail -n 1)" ]
 check "meshcore: unread: two" [ "$(mcs '@.unread')" = 2 ]
 check "meshcore: unread: on the contact" [ "$(mc contacts | jsonfilter -e '@.contacts[0].unread')" = 1 ]
 check "meshcore: read" mc_ok read '{"conv":"ca1a1a1a1a1a1"}'
@@ -2770,6 +2799,44 @@ if [ "$FAIL" != 0 ]; then
 	echo "  the older way's records: $(echo "$d" | sed 's/AAAAAAAAAAAAAAAA*/A../g' | cut -c1-900)"
 fi
 kill "$BT_DAEMON" "$BT_FAKE" "$BT_UBUSD" 2> /dev/null
+
+echo "# What a page may see without signing in (pirate-public.json)"
+PUB=/usr/share/rpcd/acl.d/pirate-public.json
+# The objects in it, and each one's methods
+pub_objs() { jsonfilter -i "$PUB" -e '@.unauthenticated.read.ubus' | grep -o '"pirate\.[a-z]*":' | tr -d '":'; }
+pub_methods() { jsonfilter -i "$PUB" -e "@.unauthenticated.read.ubus[\"$1\"][*]"; }
+check "public: ACL is valid JSON, rpcd's unauthenticated group, reading only" sh -c "jsonfilter -i $PUB -e '@.unauthenticated.read' > /dev/null && ! jsonfilter -i $PUB -e '@.unauthenticated.write' > /dev/null && [ \"\$(jsonfilter -i $PUB -e '@.*' | wc -l)\" = 1 ]"
+# Every call it lets through, one its page's own ACL has among its
+# readings, and in none of the writes
+pub_unread=""
+for o in $(pub_objs); do
+	for m in $(pub_methods "$o"); do
+		r=$(for f in /usr/share/rpcd/acl.d/pirate-*.json; do [ "$f" = "$PUB" ] || jsonfilter -i "$f" -e "@.*.read.ubus[\"$o\"][*]"; done)
+		w=$(for f in /usr/share/rpcd/acl.d/pirate-*.json; do [ "$f" = "$PUB" ] || jsonfilter -i "$f" -e "@.*.write.ubus[\"$o\"][*]"; done)
+		echo "$r" | grep -qx "$m" && ! echo "$w" | grep -qx "$m" || pub_unread="$pub_unread $o.$m"
+	done
+done
+check "public: only what the pages' own ACLs have as readings" [ -z "$pub_unread" ]
+# What is private stays out: messages and contacts, files, the network's
+# devices, captures and handshakes, SSH and the terminal
+pub_private=""
+for c in pirate.meshcore.messages pirate.meshcore.poll pirate.meshcore.contacts pirate.meshcore.channels \
+	pirate.meshcore.status pirate.meshcore.position pirate.meshcore.settings pirate.meshcore.packets pirate.meshcore.cli_log \
+	pirate.router.clients pirate.recon.hosts pirate.phone.files pirate.phone.midi pirate.usb.list \
+	pirate.flipper.list pirate.flipper.read pirate.flipper.storage pirate.portapack.list pirate.portapack.read; do
+	pub_methods "${c%.*}" | grep -qx "${c##*.}" && pub_private="$pub_private $c"
+done
+for o in pirate.access pirate.capture pirate.handshake; do pub_objs | grep -qx "$o" && pub_private="$pub_private $o"; done
+check "public: nothing private" [ -z "$pub_private" ]
+# The page knows the same list (its demo plays rpcd by it, and its pages
+# ask for nothing else before a sign-in)
+check "public: the page's own list of it is the same" sh -c '
+	sed -n "/^[[:space:]]*var PUBLIC_CALLS = {/,/^[[:space:]]*};/p" /www/app.js | sed "1s/.*/{/; \$s/.*/}/" > /tmp/pub-page.json
+	for o in $(jsonfilter -i /usr/share/rpcd/acl.d/pirate-public.json -e "@.unauthenticated.read.ubus" | grep -o "\"pirate\.[a-z]*\":" | tr -d "\":") $(grep -o "\"pirate\.[a-z]*\":" /tmp/pub-page.json | tr -d "\":"); do
+		a=$(jsonfilter -i /usr/share/rpcd/acl.d/pirate-public.json -e "@.unauthenticated.read.ubus[\"$o\"][*]" | sort | tr "\n" " ")
+		b=$(jsonfilter -i /tmp/pub-page.json -e "@[\"$o\"][*]" | sort | tr "\n" " ")
+		[ "$a" = "$b" ] || { echo "$o: ACL [$a] page [$b]"; exit 1; }
+	done'
 
 echo "# ESP32 boards (pirate-esp)"
 pe() { pirate-esp "$@" 2> /dev/null | jsonfilter -e '@.error'; }

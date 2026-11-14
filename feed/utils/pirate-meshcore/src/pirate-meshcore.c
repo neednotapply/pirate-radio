@@ -3293,7 +3293,8 @@ static int m_channels(struct ubus_context *c, struct ubus_object *obj, struct ub
 	return UBUS_STATUS_OK;
 }
 
-static void add_msg(struct blob_buf *b, const struct msg *m)
+/* A message, for one who sees one conversation only (only: it), or all */
+static void add_msg(struct blob_buf *b, const struct msg *m, const char *only)
 {
 	void *t = blobmsg_open_table(b, NULL);
 
@@ -3317,6 +3318,9 @@ static void add_msg(struct blob_buf *b, const struct msg *m)
 	if (m->reply && !m->emoji[0]) {
 		const struct msg *r = msg_by_id(m->reply);
 
+		/* (what it answers in another conversation is not that one's to see) */
+		if (r && only && strcmp(r->conv, only))
+			r = NULL;
 		blobmsg_add_u32(b, "reply", m->reply);
 		if (r) {
 			if (r->from[0])
@@ -3375,7 +3379,7 @@ static int m_messages(struct ubus_context *c, struct ubus_object *obj, struct ub
 	a = blobmsg_open_array(&rb, "messages");
 	for (i = start; i < nmsgs; i++)
 		if (!strcmp(msgs[i].conv, conv) && (!before || msgs[i].id < before))
-			add_msg(&rb, &msgs[i]);
+			add_msg(&rb, &msgs[i], NULL);
 	blobmsg_close_array(&rb, a);
 	blobmsg_add_u8(&rb, "more", start > 0 && n == limit);
 	ubus_send_reply(c, req, rb.head);
@@ -3408,8 +3412,58 @@ static int m_poll(struct ubus_context *c, struct ubus_object *obj, struct ubus_r
 	a = blobmsg_open_array(&rb, "messages");
 	for (i = i < 0 ? 0 : i + 1; i < nmsgs; i++)
 		if (msgs[i].seq > since)
-			add_msg(&rb, &msgs[i]);
+			add_msg(&rb, &msgs[i], NULL);
 	blobmsg_close_array(&rb, a);
+	ubus_send_reply(c, req, rb.head);
+	return UBUS_STATUS_OK;
+}
+
+/* MeshCore's public channel, for a page that has not signed in (the
+ * UI's visitors): found by its key (MeshCore's PUBLIC_GROUP_PSK), wherever
+ * it is kept and whatever it is called; its name and its newest messages,
+ * newest last, and nothing else of the radio's: no contact, no other
+ * channel, no direct message. Its seq is the newest change in it alone,
+ * so that one there tells nothing of the others */
+static const uint8_t PUBLIC_SECRET[16] = {
+	0x8b, 0x33, 0x87, 0xe9, 0xc5, 0xcd, 0xea, 0x6a, 0xc9, 0xe5, 0xed, 0xba, 0xa1, 0x15, 0xcd, 0x72,
+};
+
+static int m_public(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
+		    const char *method, struct blob_attr *msg)
+{
+	char conv[16] = "";
+	uint32_t newest = 0;
+	int i, ch = -1, start, n = 0;
+	void *a, *t;
+
+	(void)obj; (void)method; (void)msg;
+	for (i = 0; i < nchannels && ch < 0; i++)
+		if (!memcmp(channels[i].secret, PUBLIC_SECRET, sizeof(PUBLIC_SECRET)))
+			ch = i;
+	blob_buf_init(&rb, 0);
+	blobmsg_add_string(&rb, "state", state_name());
+	if (ch >= 0) {
+		snprintf(conv, sizeof(conv), "#%d", channels[ch].idx);
+		t = blobmsg_open_table(&rb, "channel");
+		blobmsg_add_u32(&rb, "index", channels[ch].idx);
+		blobmsg_add_string(&rb, "conv", conv);
+		blobmsg_add_string(&rb, "name", channels[ch].name);
+		blobmsg_close_table(&rb, t);
+		for (start = nmsgs - 1; start >= 0; start--)
+			if (!strcmp(msgs[start].conv, conv) && ++n == MAX_LIST)
+				break;
+		if (start < 0)
+			start = 0;
+		a = blobmsg_open_array(&rb, "messages");
+		for (i = start; i < nmsgs; i++)
+			if (!strcmp(msgs[i].conv, conv)) {
+				add_msg(&rb, &msgs[i], conv);
+				if (msgs[i].seq > newest)
+					newest = msgs[i].seq;
+			}
+		blobmsg_close_array(&rb, a);
+	}
+	blobmsg_add_u32(&rb, "seq", newest);
 	ubus_send_reply(c, req, rb.head);
 	return UBUS_STATUS_OK;
 }
@@ -4683,6 +4737,7 @@ static const struct ubus_method methods[] = {
 	UBUS_METHOD_NOARG("channels", m_channels),
 	UBUS_METHOD("messages", m_messages, p_messages),
 	UBUS_METHOD("poll", m_poll, p_since),
+	UBUS_METHOD_NOARG("public", m_public),
 	UBUS_METHOD("send", m_send, p_send),
 	UBUS_METHOD("resend", m_resend, p_id),
 	UBUS_METHOD("react", m_react, p_react),
