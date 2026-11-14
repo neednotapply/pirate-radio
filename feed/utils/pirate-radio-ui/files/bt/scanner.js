@@ -1003,7 +1003,7 @@
 			reports: function (p) { return opts.call("pirate.bluetooth", "reports", p); }
 		};
 		var alive = true, paused = false, timer = null, drawT = null, waiting = false;
-		var seq = null, state = "", stat = null, problem = "", lost = 0, since = Date.now(), tally = [], rounds = 0;
+		var seq = null, state = "", stat = null, problem = "", lost = 0, since = Date.now(), tally = [], rounds = 0, roundAt = 0;
 		var devs = new Devices(), rows = {}, open = {}, shown = "", chipsKey = "", want = { kind: "", q: "", sort: "signal" };
 
 		function button(label, cls, fn) {
@@ -1220,9 +1220,11 @@
 			}
 			tally = tally.filter(function (t) { return now - t.t <= 5000; });
 			tally.forEach(function (t) { rate += t.n; });
-			stats.textContent = !all.length ? "" : asks ?
-				inRange + " found now, " + devs.total + " since " + clockTime(since).slice(0, 5) + " · " + rounds + (rounds === 1 ? " search" : " searches") :
-				inRange + " heard now, " + devs.total + " since " + clockTime(since).slice(0, 5) +
+			// (one that searches says how the searching goes, whether or not anything has answered)
+			stats.textContent = asks && (state === "listening" || rounds) ?
+				(all.length ? inRange + " found now, " + devs.total + " since " + clockTime(since).slice(0, 5) + " · " : "") +
+				(rounds ? rounds + (rounds === 1 ? " search" : " searches") + " done, the last ended " + ago(now - roundAt) : "the first search is under way") :
+				!all.length ? "" : inRange + " heard now, " + devs.total + " since " + clockTime(since).slice(0, 5) +
 				" · " + Math.round(rate / 5) + " advertisements a second" + (lost ? " · " + lost + " missed (this page was slow to ask)" : "");
 
 			// What is to be said in place of the list, or over it
@@ -1248,7 +1250,8 @@
 				if (state === "absent") { empty.hidden = true; }
 				else if (all.length) empty.appendChild(el("b", { text: "None of the " + all.length + (asks ? " found match" : " heard match") }));
 				else if (state === "listening" && asks) {
-					empty.appendChild(el("b", { text: rounds ? "Nothing found yet" : "Searching…" }));
+					empty.appendChild(el("b", { text: !rounds ? "Searching…" : devs.total ?
+						"Nothing has answered in the last " + Math.round(devs.keep / 60000) + " minutes" : "Nothing has answered yet" }));
 					empty.appendChild(el("div", { text: "A search takes ten seconds. Only devices that are set to be found answer it: a phone while its " +
 						"Bluetooth settings are open, headphones and speakers while they wait to be paired, many TVs and printers at any time." }));
 				} else if (state === "listening") {
@@ -1288,7 +1291,7 @@
 					// (when it was heard, on this clock: as long ago as the router says)
 					var at = now - ((r.now - rec.t) >>> 0);
 					// (a search of the older way has ended)
-					if (rec.evt === 0x01) { rounds++; return; }
+					if (rec.evt === 0x01) { rounds++; roundAt = at; return; }
 					(rec.evt === 0x3e ? reportsIn(rec.p) : classicIn(rec.evt, rec.p)).forEach(function (rep) {
 						if (devs.heard(rep, at)) n++;
 					});
