@@ -1158,6 +1158,17 @@ check "gps hotplug: a PortaPack plugged in leaves gpsd stopped" [ "$(ghp ACTION=
 : > "$GD/dev/ttyUSB0"
 check "gps pnp: a GPS beside a PortaPack starts gpsd" [ "$(gsync)" = start ]
 rm -f "$GD/dev/ttyUSB0"
+# An ESP32 board on the chip's own USB takes /dev/ttyACM0 as well (an
+# ESP32-C5's, as the XIAO's is); then the PortaPack again
+mkusb 1-7 303a 1001 "38:44:BE:A3:FD:F0" "USB JTAG/serial debug unit"
+mkdir -p "$T/sys/bus/usb/devices/1-7/1-7:1.0"
+rm -f "$T/sys/class/tty/ttyACM0/device"
+ln -s "$T/sys/bus/usb/devices/1-7/1-7:1.0" "$T/sys/class/tty/ttyACM0/device"
+check "gps pnp: an ESP32 board is not a GPS" [ "$(gsync)" = stop ]
+check "gps hotplug: an ESP32 board plugged in leaves gpsd stopped" [ "$(ghp ACTION=add DEVNAME=ttyACM0)" = stop ]
+rm -f "$T/sys/class/tty/ttyACM0/device"
+rm -rf "$T/sys/bus/usb/devices/1-7"
+ln -s "$T/sys/bus/usb/devices/1-3/1-3:1.0" "$T/sys/class/tty/ttyACM0/device"
 check "status: notes a PortaPack in Mayhem mode" sh -c 'pirate-radio status | grep -q "^  note: PortaPack (1d50:6018) is in Mayhem mode"'
 check "status: a PortaPack in Mayhem mode is not a radio" sh -c '. /usr/share/pirate-radio/lib.sh; ! pirate_usb_radios | grep -q 1d50:6018'
 rm -f "$T/gps.active"
@@ -2759,6 +2770,13 @@ if [ "$FAIL" != 0 ]; then
 	echo "  the older way's records: $(echo "$d" | sed 's/AAAAAAAAAAAAAAAA*/A../g' | cut -c1-900)"
 fi
 kill "$BT_DAEMON" "$BT_FAKE" "$BT_UBUSD" 2> /dev/null
+
+echo "# ESP32 boards (pirate-esp)"
+pe() { pirate-esp "$@" 2> /dev/null | jsonfilter -e '@.error'; }
+check "esp: runs, and says how it is used" sh -c 'pirate-esp 2>&1 | grep -q "^usage: pirate-esp identify"; [ $? = 0 ] && { pirate-esp > /dev/null 2>&1; [ $? = 2 ]; }'
+check "esp: no board there, said so" [ "$(pe identify /dev/no-such-tty)" = "can't open /dev/no-such-tty: No such file or directory" ]
+check "esp: an offset not on a 4 KB boundary is refused before anything is touched" [ "$(pe flash /dev/no-such-tty 0x10001 /etc/hostname)" = "0x10001: not an offset in flash on a 4 KB boundary" ]
+check "esp: md5 of nothing is refused" [ "$(pe md5 /dev/no-such-tty 0 0)" = "0 0: not a part of flash (an offset and a size, within 16 MB)" ]
 
 echo "# phone (an Android phone on the USB port; pirate-phone)"
 PH="$T/phone"

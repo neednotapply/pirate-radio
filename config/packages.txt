@@ -123,6 +123,12 @@ kmod-bluetooth
 kmod-btusb
 pirate-bluetooth
 
+# An ESP32 board on the USB port: pirate-esp says what chip it has and
+# writes firmware to it, from the router, through the loader in the chip's
+# ROM (as esptool does from a computer). Its USB-serial drivers are above.
+# Nothing runs until it is asked.
+pirate-esp
+
 # An Android phone plugged into the USB port (the Pirate Radio UI's Phone
 # tab): each of the phone's "USB controlled by" modes made useful on the
 # router. USB debugging (adb) reads and switches the mode and reaches the
