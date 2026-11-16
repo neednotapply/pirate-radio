@@ -24,12 +24,27 @@
  * it). It is brought up when a page asks what it hears, and put down again
  * 10 s after the last one asked.
  *
- *   pirate-bluetooth [-d socket] [-s sysfs] [-u ubus-socket] [-i ms]
+ * Or, with no adapter of the kernel's, an ESP32 board running Pirate
+ * Radio's firmware (feed/utils/pirate-esp/firmware), on the chip's own USB
+ * (Espressif's 303a, a ttyACM port) or an M5Stack board's FTDI (0403:6001
+ * that says "M5stack", a ttyUSB port: the M5StickC and C Plus): its
+ * Bluetooth controller, spoken to in HCI as an adapter is, a line of text
+ * each way ("C <hex>" a command, "E <hex>" an event, as the firmware has
+ * it). Such a port is asked "hello" once when it comes (and again only once
+ * it has gone and come back): a board that answers "PIRATE-ESP ..." is one;
+ * any other (Biscuit, NEMO, say) is left alone. The board itself lets through only what a passive
+ * scan needs. Its port is held, with a lock file as UUCP's (pirate-esp
+ * keeps to them too), only while a page asks what it hears, and one that
+ * somebody else holds is not touched.
+ *
+ *   pirate-bluetooth [-d socket] [-s sysfs] [-t dev] [-k lock-dir] [-u ubus-socket] [-i ms]
  *
  *   -d  an adapter on a Unix socket (SOCK_SEQPACKET: an HCI packet a
  *       message, led by its type, as the kernel's HCI socket has them) in
  *       place of the kernel's; for tests (tests/fakebt)
  *   -s  where sysfs is (default /sys; for tests)
+ *   -t  where a board's port is (default /dev; for tests)
+ *   -k  where the ports' lock files are (default /var/lock; for tests)
  *   -u  ubusd's socket (default: libubus's)
  *   -i  how long after the last "reports" the adapter is put down, ms
  *       (default 10000)
@@ -78,8 +93,10 @@
 #include <strings.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -166,11 +183,18 @@ struct hci_filter {
 #define NAME_AGAIN    5      /* searches before one that did not tell it in two is asked its name again */
 #define SEEN          48     /* devices found, kept for their names */
 
+/* A board on a USB serial port */
+#define BOARD_BAUD  B500000  /* the firmware's (the chip's own USB takes no notice of it; an M5StickC's USB chip cannot make 921600) */
+#define HELLO_MS    2000     /* a port's answer to "hello", at most */
+#define HELLO_AGAIN 700      /* asked once more after this: the board may have been starting */
+#define LINE_MAX_B  600      /* a line from a board, at most */
+
 enum state { ST_ABSENT, ST_IDLE, ST_STARTING, ST_LISTENING, ST_FAILED };
 
 /* What is being waited for from the adapter */
 enum step {
 	S_NONE,
+	S_HELLO,                          /* a board: that it is there, at the start */
 	S_VERSION, S_ADDRESS,             /* what it is */
 	S_QUIET, S_PARAMS, S_ENABLE,      /* the scan, with the commands every LE adapter has */
 	S_XQUIET, S_XPARAMS, S_XENABLE,   /* the scan, with the extended ones */
@@ -186,7 +210,7 @@ struct waiter {
 	struct uloop_timeout t;
 };
 
-static const char *opt_dev, *opt_sysfs = "/sys";
+static const char *opt_dev, *opt_sysfs = "/sys", *opt_devdir = "/dev", *opt_lockdir = "/var/lock";
 static int opt_idle = IDLE_MS;
 static struct ubus_auto_conn conn;
 #define UBUS (&conn.ctx)
@@ -226,6 +250,22 @@ static char usb_id[16], usb_bcd[8], usb_product[64], usb_maker[64], address[18];
 static bool have_version;
 static unsigned hci_ver, hci_rev, lmp_ver, lmp_subver, maker;
 
+/* A board in place of the kernel's adapter: its port (ttyACM0), the USB
+ * device it is on (the port's name, the bus and the device's number), and
+ * what it said it is. A port that did not answer as a board is not asked
+ * again while it is the same (not_ours); one is being asked (pfd) */
+static bool board;
+static char board_tty[32], board_key[64], board_chip[16], board_fw[16];
+static char not_ours[64], probe_tty[32], probe_key[64];
+static int pfd = -1;
+static struct uloop_fd pufd;
+static struct uloop_timeout hello_t;
+static bool probe_again;
+/* (a line from the board as far as it has come; one too long is let go) */
+static char lbuf[LINE_MAX_B + 1];
+static size_t llen;
+static bool ljunk;
+
 static uint8_t ring[RING];
 static size_t ring_start, ring_end;
 static uint64_t seq_first, seq_next, heard;
@@ -236,6 +276,22 @@ static struct blob_buf rb;
 
 static void adapter_begin(void);
 static void waiters_answer(bool all);
+static bool board_send(const uint8_t *pkt, size_t n);
+static bool board_open(void);
+static bool port_lines(int *fdp, void (*each)(char *));
+static void board_line(char *s);
+static void lock_drop(const char *tty);
+
+/* hci0, or the board's port */
+static const char *adapter_name(void)
+{
+	static char n[16];
+
+	if (board)
+		return board_tty;
+	snprintf(n, sizeof(n), "hci%d", dev_id);
+	return n;
+}
 
 static int64_t now_ms(void)
 {
@@ -372,7 +428,8 @@ static void set_state(enum state s)
 	waiters_answer(s != ST_STARTING && s != ST_LISTENING);
 }
 
-/* The socket shut; the kernel's adapter put down, if this brought it up */
+/* The socket shut; the kernel's adapter put down, if this brought it up (a
+ * board's port let go, and its lock) */
 static void adapter_close(void)
 {
 	uloop_timeout_cancel(&cmd_t);
@@ -385,8 +442,10 @@ static void adapter_close(void)
 		uloop_fd_delete(&hufd);
 		close(hfd);
 		hfd = -1;
+		if (board)
+			lock_drop(board_tty);
 	}
-	if (is_up && !opt_dev) {
+	if (is_up && !opt_dev && !board) {
 		int s = socket(AF_BLUETOOTH, SOCK_RAW | SOCK_CLOEXEC, BTPROTO_HCI);
 
 		if (s >= 0) {
@@ -408,7 +467,7 @@ static void fail(const char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf(last_error, sizeof(last_error), fmt, ap);
 	va_end(ap);
-	logmsg("hci%d: %s", dev_id, last_error);
+	logmsg("%s: %s", adapter_name(), last_error);
 	adapter_close();
 	failed_at = now_ms();
 	set_state(ST_FAILED);
@@ -424,7 +483,7 @@ static bool hci_cmd(enum step next, uint16_t op, const void *p, uint8_t n)
 	pkt[3] = n;
 	if (n)
 		memcpy(pkt + 4, p, n);
-	if (write(hfd, pkt, 4 + n) != 4 + n) {
+	if (board ? !board_send(pkt, 4 + n) : write(hfd, pkt, 4 + n) != 4 + n) {
 		fail("the adapter took no command: %s", strerror(errno));
 		return false;
 	}
@@ -487,7 +546,7 @@ static void listening(bool ext)
 {
 	extended = ext;
 	step = S_NONE;
-	logmsg("hci%d: listening (a passive scan%s)", dev_id, ext ? ", extended" : "");
+	logmsg("%s: listening (a passive scan%s)", adapter_name(), ext ? ", extended" : "");
 	uloop_timeout_set(&probe_t, PROBE_MS);
 	set_state(ST_LISTENING);
 }
@@ -642,7 +701,7 @@ static void searching(void)
 	step = S_NONE;
 	inquiring = naming = false;
 	searches = 0;
-	logmsg("hci%d: searching (inquiries: an adapter from before Low Energy)", dev_id);
+	logmsg("%s: searching (inquiries: an adapter from before Low Energy)", adapter_name());
 	set_state(ST_LISTENING);
 	search_begin();
 }
@@ -752,6 +811,8 @@ static void cmd_timeout(struct uloop_timeout *t)
 		set_state(ST_IDLE);
 	} else if (step == S_PROBE) {
 		fail("the adapter stopped answering");
+	} else if (step == S_HELLO) {
+		fail("the board did not answer (hello)");
 	} else if (step != S_NONE) {
 		fail("the adapter did not answer (HCI command 0x%04x)", step_op());
 	}
@@ -862,9 +923,10 @@ static void adapter_lost(void)
 {
 	if (state == ST_ABSENT)
 		return;
-	logmsg("hci%d: gone", dev_id);
+	logmsg("%s: gone", adapter_name());
 	is_up = false;          /* (there is nothing left to put down) */
 	adapter_close();
+	board = false;          /* (a board is looked for afresh) */
 	last_error[0] = 0;
 	set_state(ST_ABSENT);
 }
@@ -876,6 +938,14 @@ static void hci_cb(struct uloop_fd *u, unsigned int events)
 
 	if (hfd < 0)
 		return;
+	if (board) {
+		/* (a line at a time; the port ending is the board gone) */
+		if ((events & ULOOP_READ) && !port_lines(&hfd, board_line))
+			adapter_lost();
+		else if (hfd >= 0 && (u->eof || u->error))
+			adapter_lost();
+		return;
+	}
 	if (events & ULOOP_READ) {
 		for (;;) {
 			r = read(hfd, p, sizeof(p));
@@ -897,9 +967,24 @@ static void hci_cb(struct uloop_fd *u, unsigned int events)
 		adapter_lost();
 }
 
-/* The adapter is up: a socket on it, and what it is asked first */
+/* The adapter is up: a socket on it, and what it is asked first (a board:
+ * its port, and whether it is there) */
 static void adapter_open(void)
 {
+	if (board) {
+		if (board_open()) {
+			hufd.fd = hfd;
+			hufd.cb = hci_cb;
+			uloop_fd_add(&hufd, ULOOP_READ);
+			if (write(hfd, "hello\n", 6) != 6) {
+				fail("the board's port took nothing: %s", strerror(errno));
+				return;
+			}
+			step = S_HELLO;
+			uloop_timeout_set(&cmd_t, CMD_MS);
+		}
+		return;
+	}
 	if (opt_dev) {
 		struct sockaddr_un a = { .sun_family = AF_UNIX };
 
@@ -973,7 +1058,7 @@ static void adapter_begin(void)
 		return;
 	last_error[0] = 0;
 	set_state(ST_STARTING);
-	if (opt_dev) {
+	if (opt_dev || board) {
 		is_up = true;
 		adapter_open();
 		return;
@@ -1006,7 +1091,7 @@ static void idle_cb(struct uloop_timeout *t)
 		/* (the answer to the command that is out first) */
 		uloop_timeout_set(t, 200);
 	} else if (state == ST_LISTENING && !stopping) {
-		logmsg("hci%d: nobody is listening: stopped", dev_id);
+		logmsg("%s: nobody is listening: stopped", adapter_name());
 		stopping = true;
 		uloop_timeout_cancel(&probe_t);
 		uloop_timeout_cancel(&search_t);
@@ -1148,11 +1233,409 @@ static void dongle_without_driver(void)
 		 usb_id, usb_product[0] ? " " : "", usb_product);
 }
 
+/* ---------- a board on a USB serial port ---------- */
+
+/* A port's lock file, as UUCP's (and picocom's, and pirate-esp's) */
+static void lock_path(char *p, size_t n, const char *tty)
+{
+	snprintf(p, n, "%s/LCK..%s", opt_lockdir, tty);
+}
+
+/* Who holds the port: a process still running other than this one, or 0 */
+static pid_t lock_holder(const char *tty)
+{
+	char p[300], s[32];
+	long pid;
+
+	lock_path(p, sizeof(p), tty);
+	if (!read_line(p, s, sizeof(s)))
+		return 0;
+	pid = strtol(s, NULL, 10);
+	if (pid <= 0 || pid == getpid() || (kill(pid, 0) < 0 && errno == ESRCH))
+		return 0;
+	return pid;
+}
+
+static void lock_take(const char *tty)
+{
+	char p[300], tmp[320], s[16];
+	int fd;
+
+	mkdir(opt_lockdir, 0755);
+	lock_path(p, sizeof(p), tty);
+	snprintf(tmp, sizeof(tmp), "%s.%d", p, (int)getpid());
+	fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+	if (fd < 0)
+		return;
+	snprintf(s, sizeof(s), "%10d\n", (int)getpid());
+	if (write(fd, s, strlen(s)) < 0)
+		logmsg("%s: its lock file: %s", tty, strerror(errno));
+	close(fd);
+	if (rename(tmp, p) < 0)
+		unlink(tmp);
+}
+
+static void lock_drop(const char *tty)
+{
+	char p[300], s[32];
+
+	lock_path(p, sizeof(p), tty);
+	if (read_line(p, s, sizeof(s)) && strtol(s, NULL, 10) == getpid())
+		unlink(p);
+}
+
+/* The USB device a port is on (its folder in sysfs, in <d>), and what tells
+ * it from another plugged into the same place later: the port's name, the
+ * bus and the device's number. False: no such port, or not on USB */
+static bool port_usb(const char *tty, char *d, size_t dn, char *key, size_t kn)
+{
+	char p[600], v[16], bus[16], dev[16];
+
+	snprintf(d, dn, "%s/class/tty/%s/device/..", opt_sysfs, tty);
+	snprintf(p, sizeof(p), "%s/idVendor", d);
+	if (!read_line(p, v, sizeof(v)) || !v[0])
+		return false;
+	snprintf(p, sizeof(p), "%s/busnum", d);
+	read_line(p, bus, sizeof(bus));
+	snprintf(p, sizeof(p), "%s/devnum", d);
+	read_line(p, dev, sizeof(dev));
+	snprintf(key, kn, "%s %s.%s", tty, bus, dev);
+	return true;
+}
+
+/* A port, raw, at the board's speed */
+static int port_open(const char *tty)
+{
+	char p[300];
+	struct termios t;
+	int fd;
+
+	snprintf(p, sizeof(p), "%s/%s", opt_devdir, tty);
+	fd = open(p, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0)
+		return -1;
+	if (!tcgetattr(fd, &t)) {
+		cfmakeraw(&t);
+		t.c_cflag |= CLOCAL | CREAD;
+		/* (closing it leaves DTR and RTS as they are, which a chip on its own
+		 * USB reads: so it is not restarted by it, as pirate-esp has it) */
+		t.c_cflag &= ~(CRTSCTS | HUPCL);
+		cfsetispeed(&t, BOARD_BAUD);
+		cfsetospeed(&t, BOARD_BAUD);
+		tcsetattr(fd, TCSANOW, &t);
+		tcflush(fd, TCIFLUSH);
+	}
+	return fd;
+}
+
+/* What has come on the port <*fdp>, a whole line at a time to <each> (which
+ * may close the port: then the rest is let go). False: the port has ended */
+static bool port_lines(int *fdp, void (*each)(char *))
+{
+	char b[512];
+	int fd = *fdp;
+	ssize_t r, i;
+
+	for (;;) {
+		r = read(fd, b, sizeof(b));
+		if (r < 0 && errno == EINTR)
+			continue;
+		if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+			return true;
+		if (r <= 0)
+			return false;
+		for (i = 0; i < r; i++) {
+			if (b[i] == '\n' || b[i] == '\r') {
+				lbuf[llen] = 0;
+				if (llen && !ljunk)
+					each(lbuf);
+				llen = 0;
+				ljunk = false;
+				if (*fdp != fd)
+					return true;
+			} else if (llen < LINE_MAX_B) {
+				lbuf[llen++] = b[i];
+			} else {
+				ljunk = true;
+			}
+		}
+	}
+}
+
+static int unhex1(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+	return -1;
+}
+
+/* Hex digits into bytes: how many, or -1 if it is not that */
+static int unhex(const char *s, uint8_t *b, size_t max)
+{
+	size_t n = 0;
+
+	while (*s) {
+		int hi = unhex1(s[0]), lo = hi < 0 ? -1 : unhex1(s[1]);
+
+		if (lo < 0 || n == max)
+			return -1;
+		b[n++] = hi << 4 | lo;
+		s += 2;
+	}
+	return n;
+}
+
+/* An HCI command to the board: "C <hex>", the command without its type */
+static bool board_send(const uint8_t *pkt, size_t n)
+{
+	static const char hexd[] = "0123456789abcdef";
+	char s[2 + 2 * (3 + 255) + 1];
+	size_t i, o = 0;
+
+	s[o++] = 'C';
+	s[o++] = ' ';
+	for (i = 1; i < n; i++) {
+		s[o++] = hexd[pkt[i] >> 4];
+		s[o++] = hexd[pkt[i] & 15];
+	}
+	s[o++] = '\n';
+	return write(hfd, s, o) == (ssize_t)o;
+}
+
+/* "PIRATE-ESP <protocol> <chip> <address> <firmware> <radio>": what a board
+ * says it is; false if the line is not that */
+static bool hello_parse(const char *s, char *chip, char *addr, char *fw, char *radio)
+{
+	int proto;
+
+	return !strncmp(s, "PIRATE-ESP ", 11) &&
+	       sscanf(s + 11, "%d %15s %17s %15s %47s", &proto, chip, addr, fw, radio) == 5 && proto >= 1;
+}
+
+/* A line from the board while it is in use: an HCI event, or (as it starts)
+ * what it is */
+static void board_line(char *s)
+{
+	char chip[16], addr[18], fw[16], radio[48];
+	uint8_t p[3 + 255];
+	int n;
+
+	if (hello_parse(s, chip, addr, fw, radio)) {
+		if (step == S_HELLO) {
+			if (strcmp(radio, "ready")) {
+				fail("the board's radio did not start (%s)", radio);
+				return;
+			}
+			uloop_timeout_cancel(&cmd_t);
+			step = S_NONE;
+			hci_cmd(S_VERSION, OP_READ_LOCAL_VERSION, NULL, 0);
+		} else {
+			/* (it started again: its radio has been reset, the scan with it) */
+			fail("the board started again");
+		}
+		return;
+	}
+	if (s[0] != 'E' || s[1] != ' ')
+		return;
+	n = unhex(s + 2, p + 1, sizeof(p) - 1);
+	if (n < 2 || n != 2 + p[2])
+		return;
+	p[0] = HCI_EVENT_PKT;
+	on_packet(p, 1 + n);
+}
+
+/* The board's port, to use it: held, and its lock taken */
+static bool board_open(void)
+{
+	pid_t who = lock_holder(board_tty);
+
+	if (who) {
+		fail("the board's port (%s) is in use, by process %d", board_tty, (int)who);
+		return false;
+	}
+	hfd = port_open(board_tty);
+	if (hfd < 0) {
+		fail("the board's port (%s) would not open: %s", board_tty, strerror(errno));
+		return false;
+	}
+	lock_take(board_tty);
+	llen = 0;
+	ljunk = false;
+	return true;
+}
+
+/* "ESP32-C3" of "esp32c3" */
+static void chip_name(char *d, size_t n, const char *chip)
+{
+	size_t i, o = 0;
+
+	for (i = 0; chip[i] && o + 2 < n; i++) {
+		if (i == 5 && !strncmp(chip, "esp32", 5))
+			d[o++] = '-';
+		d[o++] = chip[i] >= 'a' && chip[i] <= 'z' ? chip[i] - 32 : chip[i];
+	}
+	d[o] = 0;
+}
+
+static void probe_end(void)
+{
+	uloop_timeout_cancel(&hello_t);
+	if (pfd >= 0) {
+		uloop_fd_delete(&pufd);
+		close(pfd);
+		pfd = -1;
+		lock_drop(probe_tty);
+	}
+	llen = 0;
+	ljunk = false;
+}
+
+/* A line from a port being asked: a board, if it says what it is */
+static void probe_line(char *s)
+{
+	char chip[16], addr[18], fw[16], radio[48], d[512], key[64], name[24];
+
+	if (!hello_parse(s, chip, addr, fw, radio))
+		return;
+	probe_end();
+	if (!port_usb(probe_tty, d, sizeof(d), key, sizeof(key)) || strcmp(key, probe_key))
+		return;
+	board = true;
+	snprintf(board_tty, sizeof(board_tty), "%s", probe_tty);
+	snprintf(board_key, sizeof(board_key), "%s", probe_key);
+	snprintf(board_chip, sizeof(board_chip), "%s", chip);
+	snprintf(board_fw, sizeof(board_fw), "%s", fw);
+	snprintf(address, sizeof(address), "%s", addr);
+	have_version = false;
+	usb_identity(d);
+	chip_name(name, sizeof(name), chip);
+	snprintf(usb_product, sizeof(usb_product), "%s board, Pirate Radio firmware %s", name, fw);
+	logmsg("%s: a board on USB: %s %s (radio %s)", board_tty, usb_id, usb_product, radio);
+	if (strcmp(radio, "ready")) {
+		snprintf(last_error, sizeof(last_error), "the board's radio did not start (%s)", radio);
+		failed_at = now_ms();
+		set_state(ST_FAILED);
+	} else {
+		last_error[0] = 0;
+		set_state(ST_IDLE);
+	}
+}
+
+static void asked_cb(struct uloop_fd *u, unsigned int events)
+{
+	(void)events;
+	if (pfd < 0)
+		return;
+	if (!port_lines(&pfd, probe_line) || (pfd >= 0 && (u->eof || u->error)))
+		probe_end();
+}
+
+/* No answer yet: asked once more, then given up on */
+static void hello_cb(struct uloop_timeout *t)
+{
+	if (pfd < 0)
+		return;
+	if (!probe_again) {
+		probe_again = true;
+		if (write(pfd, "hello\n", 6) < 0)
+			logmsg("%s: %s", probe_tty, strerror(errno));
+		uloop_timeout_set(t, HELLO_MS - HELLO_AGAIN);
+		return;
+	}
+	logmsg("%s: not a board with Pirate Radio's firmware (no answer to hello): left alone", probe_tty);
+	snprintf(not_ours, sizeof(not_ours), "%s", probe_key);
+	probe_end();
+}
+
+/* Is the USB device at <d> an ESP32 board's: Espressif's own USB (303a),
+ * or an M5Stack board's FTDI (0403:6001 that says "M5stack": the M5StickC
+ * and C Plus)? A USB-to-serial chip that says nothing of the kind may be a
+ * GPS's, and is not asked (gpsd may have it, and its speed is gpsd's) */
+static bool board_usb(const char *d)
+{
+	char p[600], v[16], q[16], name[64];
+
+	snprintf(p, sizeof(p), "%s/idVendor", d);
+	if (!read_line(p, v, sizeof(v)))
+		return false;
+	if (!strcasecmp(v, "303a"))
+		return true;
+	snprintf(p, sizeof(p), "%s/idProduct", d);
+	read_line(p, q, sizeof(q));
+	snprintf(p, sizeof(p), "%s/product", d);
+	read_line(p, name, sizeof(name));
+	return !strcasecmp(v, "0403") && !strcasecmp(q, "6001") && !strcmp(name, "M5stack");
+}
+
+/* A port of an ESP32 board's not yet asked, and nobody else's: asked */
+static void board_look(void)
+{
+	char d[512], key[64];
+	struct dirent *e;
+	DIR *dir;
+
+	if (pfd >= 0)
+		return;
+	snprintf(d, sizeof(d), "%s/class/tty", opt_sysfs);
+	dir = opendir(d);
+	if (!dir)
+		return;
+	while ((e = readdir(dir))) {
+		if ((strncmp(e->d_name, "ttyACM", 6) && strncmp(e->d_name, "ttyUSB", 6)) ||
+		    strlen(e->d_name) >= sizeof(probe_tty))
+			continue;
+		if (!port_usb(e->d_name, d, sizeof(d), key, sizeof(key)) || !strcmp(key, not_ours))
+			continue;
+		if (!board_usb(d))
+			continue;
+		if (lock_holder(e->d_name))
+			continue;
+		pfd = port_open(e->d_name);
+		if (pfd < 0)
+			continue;
+		snprintf(probe_tty, sizeof(probe_tty), "%s", e->d_name);
+		snprintf(probe_key, sizeof(probe_key), "%s", key);
+		lock_take(probe_tty);
+		llen = 0;
+		ljunk = false;
+		pufd.fd = pfd;
+		pufd.cb = asked_cb;
+		uloop_fd_add(&pufd, ULOOP_READ);
+		probe_again = false;
+		if (write(pfd, "hello\n", 6) < 0)
+			logmsg("%s: %s", probe_tty, strerror(errno));
+		uloop_timeout_set(&hello_t, HELLO_AGAIN);
+		break;
+	}
+	closedir(dir);
+}
+
 static void present_cb(struct uloop_timeout *t)
 {
 	int id = find_adapter();
 	char d[512];
 
+	/* A board: still there, on the same USB device? */
+	if (board) {
+		char key[64];
+
+		if (!port_usb(board_tty, d, sizeof(d), key, sizeof(key)) || strcmp(key, board_key))
+			adapter_lost();
+		uloop_timeout_set(t, PRESENT_MS);
+		return;
+	}
+	/* (the port that would not answer, gone: asked again if it comes back) */
+	if (not_ours[0]) {
+		char tty[32], key[64];
+
+		sscanf(not_ours, "%31s", tty);
+		if (!port_usb(tty, d, sizeof(d), key, sizeof(key)) || strcmp(key, not_ours))
+			not_ours[0] = 0;
+	}
 	if (id < 0 || (state != ST_ABSENT && id != dev_id)) {
 		/* None, or another than the one that was there */
 		adapter_lost();
@@ -1172,6 +1655,9 @@ static void present_cb(struct uloop_timeout *t)
 			logmsg("hci%d: an adapter", id);
 		set_state(ST_IDLE);
 	}
+	/* None of the kernel's: a board, perhaps */
+	if (id < 0 && state == ST_ABSENT)
+		board_look();
 	uloop_timeout_set(t, PRESENT_MS);
 }
 
@@ -1246,16 +1732,17 @@ static bool arg_num(struct blob_attr *a, int64_t *v)
 static int m_status(struct ubus_context *c, struct ubus_object *obj, struct ubus_request_data *req,
 		    const char *method, struct blob_attr *msg)
 {
-	char name[16];
-
 	(void)obj; (void)method; (void)msg;
 	blob_buf_init(&rb, 0);
 	blobmsg_add_string(&rb, "state", state_name());
 	if (last_error[0])
 		blobmsg_add_string(&rb, "error", last_error);
 	if (state != ST_ABSENT) {
-		snprintf(name, sizeof(name), "hci%d", dev_id);
-		blobmsg_add_string(&rb, "adapter", name);
+		blobmsg_add_string(&rb, "adapter", adapter_name());
+		if (board) {
+			blobmsg_add_string(&rb, "board", board_chip);
+			blobmsg_add_string(&rb, "firmware", board_fw);
+		}
 		if (usb_id[0])
 			blobmsg_add_string(&rb, "usb", usb_id);
 		if (usb_bcd[0])
@@ -1353,7 +1840,7 @@ static void on_connect(struct ubus_context *c)
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: pirate-bluetooth [-d socket] [-s sysfs] [-u ubus-socket] [-i idle-ms]\n");
+	fprintf(stderr, "usage: pirate-bluetooth [-d socket] [-s sysfs] [-t dev] [-k lock-dir] [-u ubus-socket] [-i idle-ms]\n");
 	exit(2);
 }
 
@@ -1361,13 +1848,19 @@ int main(int argc, char **argv)
 {
 	int c, i;
 
-	while ((c = getopt(argc, argv, "d:s:u:i:")) != -1) {
+	while ((c = getopt(argc, argv, "d:s:t:k:u:i:")) != -1) {
 		switch (c) {
 		case 'd':
 			opt_dev = optarg;
 			break;
 		case 's':
 			opt_sysfs = optarg;
+			break;
+		case 't':
+			opt_devdir = optarg;
+			break;
+		case 'k':
+			opt_lockdir = optarg;
 			break;
 		case 'u':
 			conn.path = optarg;
@@ -1393,6 +1886,7 @@ int main(int argc, char **argv)
 	idle_t.cb = idle_cb;
 	flush_t.cb = flush_cb;
 	search_t.cb = search_cb;
+	hello_t.cb = hello_cb;
 	for (i = 0; i < MAX_WAITERS; i++)
 		waiters[i].t.cb = waiter_timeout;
 	conn.cb = on_connect;
@@ -1408,10 +1902,11 @@ int main(int argc, char **argv)
 		off[1] = op & 0xff;
 		off[2] = op >> 8;
 		off[3] = is_classic() ? 0 : extended ? 6 : 2;
-		if (write(hfd, off, 4 + off[3]) > 0)
+		if (board ? board_send(off, 4 + off[3]) : write(hfd, off, 4 + off[3]) > 0)
 			usleep(100000);
 	}
 	adapter_close();
+	probe_end();
 	uloop_done();
 	return 0;
 }

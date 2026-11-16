@@ -15,15 +15,30 @@ DEV_ROOT=${PIRATE_DEV_ROOT:-}
 SYSFS=${PIRATE_SYSFS:-/sys}
 DREAMPI_LIB=${PIRATE_DREAMPI_LIB:-/usr/share/dreampi/lib.sh}
 
-# usb_id <device>: the vid:pid of the USB device a serial device belongs to.
-usb_id() {
+# usb_dir <device>: the sysfs folder of the USB device a serial device
+# belongs to.
+usb_dir() {
 	local d
 	d=$(readlink -f "$1") || return 1
 	d="$SYSFS/class/tty/${d##*/}/device"
 	[ -e "$d" ] || return 1
 	d=$(readlink -f "$d") || return 1
 	while [ -n "$d" ] && [ ! -r "$d/idVendor" ]; do d=${d%/*}; done
-	[ -n "$d" ] && echo "$(cat "$d/idVendor"):$(cat "$d/idProduct")"
+	[ -n "$d" ] && echo "$d"
+}
+
+# usb_id <device>: the vid:pid of the USB device a serial device belongs to.
+usb_id() {
+	local d
+	d=$(usb_dir "$1") || return 1
+	echo "$(cat "$d/idVendor"):$(cat "$d/idProduct")"
+}
+
+# usb_product <device>: what that USB device says it is.
+usb_product() {
+	local d
+	d=$(usb_dir "$1") || return 1
+	cat "$d/product" 2> /dev/null
 }
 
 # is_gps <device>: not a serial device known to be something else, such as
@@ -32,13 +47,16 @@ usb_id() {
 # bootloader (239a:*: a MeshCore one such as a T-Echo, pirate-meshcore's;
 # its own GPS comes through it), an ESP32 board on the chip's own USB
 # (Espressif's 303a:*, pirate-esp's) or a USB modem DreamPi answers with,
-# which take /dev/ttyACM0 like a GPS would.
+# which take /dev/ttyACM0 like a GPS would; or an M5Stack board (the
+# M5StickC and C Plus: a first ESP32 behind an FTDI that says "M5stack",
+# pirate-esp's and pirate-bluetooth's), which takes /dev/ttyUSB0.
 is_gps() {
 	local id
 	id=$(usb_id "$1")
 	case "$id" in
 	1d50:6018 | 0483:5740 | 239a:* | 303a:*) return 1 ;;
 	esac
+	[ "$id" = 0403:6001 ] && [ "$(usb_product "$1")" = M5stack ] && return 1
 	if [ -n "$id" ] && [ -r "$DREAMPI_LIB" ]; then
 		# shellcheck disable=SC1090
 		. "$DREAMPI_LIB"

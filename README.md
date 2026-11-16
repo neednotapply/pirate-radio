@@ -724,6 +724,19 @@ Bluetooth 4.0 is given inquiries and name requests, whose answers are
 handed on in the same way; a dongle the kernel has no driver for is said
 to be one. `logread -e pirate-bluetooth` shows it starting and stopping.
 
+**Or an ESP32 board in the dongle's place:** with no dongle, a board
+that runs Pirate Radio's firmware (below) is the Bluetooth page's
+adapter: its radio has Low Energy (Bluetooth 5 on the C3, S3, C5 and
+C6), and only listens. `pirate-bluetooth` asks a port of Espressif's
+(`303a`, the chip's own USB) or an M5Stack's (its FTDI chip, `0403:6001`,
+which calls itself "M5stack") "hello" once, when it comes: a board that
+answers as the firmware does is used as a dongle is, and any other (one
+running Biscuit or NEMO, say) is left alone, and not asked again until
+it is plugged in again. The board's port is held only while a page
+listens through it, with a lock file as UUCP's
+(`/var/lock/LCK..ttyACM0`), which `pirate-esp` keeps to as well: a
+board is never flashed and listened through at once.
+
 **An ESP32 board:** plug one into the USB port and the router can say
 what it is and write firmware to it, as esptool does from a computer:
 `pirate-esp` talks to the loader in the chip's ROM, over the board's own
@@ -744,10 +757,31 @@ firmware this is for):
   on the rest).
 
 The answer is a line of JSON. Only the ROM's loader is used (esptool sends
-a faster one of its own first): slower, and nothing more to carry. gpsd
-keeps off a board on the chip's own USB (Espressif's `303a`); a board
+a faster one of its own first): slower, and nothing more to carry. What
+esptool's own loader does that the ROM's does not is done here: on the
+first ESP32, the flash is attached on the pins the chip's eFuses give
+(an ESP32-PICO-D4's, in an M5StickC, are not the usual ones, and the
+ROM's loader, told the usual ones, waits for ever on its flash). gpsd
+keeps off a board on the chip's own USB (Espressif's `303a`) and an
+M5Stack's (the FTDI chip that calls itself "M5stack"); another board
 with a USB-to-serial chip looks like a GPS on one, so stop gpsd
 (`/etc/init.d/pirate-gps stop`, and `start` after) before using it.
+
+**Pirate Radio's firmware for a board** (`feed/utils/pirate-esp/firmware`,
+built with ESP-IDF 5.5): the chip's Bluetooth controller, run by itself
+(no Bluetooth host on the board), spoken to by the router in HCI as a
+dongle is, a line of text each way over the board's USB (through a
+USB-to-serial chip, at 500000 baud: one the usual chips all make, and
+the M5StickC's too, which makes no 921600), so that what the chip prints
+as it starts is told apart from what it says. The board
+lets through only the commands that ask the radio what it is, set up a
+passive scan and turn it on or off; anything else (advertising, a
+connection, an active scan, which sends scan requests, a test that
+transmits) is refused on the board, whatever the router sends it. It
+is not in the image yet: built on a computer (`idf.py set-target esp32c3
+build` in that folder) and written with `pirate-esp flash` (the
+bootloader where the chip looks for it, the partition table at 0x8000,
+the firmware at 0x10000).
 
 **The USB port's power:** a device on the USB port that has stopped
 answering wants pulling out and plugging in again. The full image does
@@ -893,19 +927,27 @@ Tested in this repository's tests and builds:
   twice running and again five searches on, and never of one that said
   it, what was found and told handed on as it came, and the inquiry
   called off when nobody asks; one that answers nothing, one that goes
-  away while it listens; unplugged),
+  away while it listens; unplugged; an ESP32 board with Pirate Radio's
+  firmware, `tests/fakebt` on a pseudo-terminal as a ttyACM port of
+  Espressif's: found by its "hello", what it is, listened through as a
+  dongle is, its port held only meanwhile, by a lock file of the
+  daemon's; one that starts again while it listens, said and listened
+  through again; a port somebody else holds left alone, by the daemon
+  and by `pirate-esp`; a board with another firmware asked twice and
+  left alone from then on),
   against mock radios and tools on that same userland, and the rename from
   slate-sdr (settings, card mount, card folder) and pirateradio.local, and
   the web UI's receiver (the bridge as built for the router, answering a
   handshake with its simulated radio; its job among the others; the radio
   taken back from a page that listens; old settings given the job; an
-  ESP32 board, which gpsd keeps off, and `pirate-esp` with nothing
-  plugged in; what a page may see without the password, readings only,
+  ESP32 board and an M5StickC Plus, which gpsd keeps off, the same FTDI
+  chip by another name, which it takes as a GPS's, and `pirate-esp` with
+  nothing plugged in; what a page may see without the password, readings only,
   ones its own ACL has, none of them private, and the page's own list of
   them the same; the firmware upload and the phone's files refused to a
   page not signed in, a session rpcd does not let, and what is no session
   id; the Messenger's public channel, found by its key, with nothing of
-  another conversation): 959 checks.
+  another conversation): 979 checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
   made by the formula, the engine against a stand-in for the bridge, and
@@ -1173,8 +1215,34 @@ Not yet run:
   and read back three times: two erased stretches as the MD5 of that
   much 0xFF, the partition table the same twice; it ran Biscuit again
   after each. So the restart into the loader, the chip and its MAC, its
-  flash attached and read back are seen on a real chip, and the write is
-  not: it needs a board to be written over.
+  flash attached and read back are seen on a real chip. Writing was
+  first tried on an M5StickC Plus (the first ESP32, as an ESP32-PICO-D4,
+  its flash on the pins its eFuses give): the ROM's loader, told the
+  usual pins, answered nothing to the first erase or read, and with the
+  eFuse pins (what `pirate-esp` does now, built for the router and run
+  from `/tmp`, not yet from an image) its bootloader, partition table and
+  firmware were written and read back the same, the three in 44 s.
+- Pirate Radio's firmware on a board. It builds for the first ESP32 and
+  the C3, S3, C5 and C6 (with ESP-IDF 5.5.6 on a computer; not in CI
+  yet), and has run on one chip: the M5StickC Plus, written over
+  (from NEMO) from the router. Through its USB chip at 500000 baud it
+  answered "hello", refused advertising, an active scan, a connection
+  and a reset, said what its radio is (Bluetooth 4.2, Espressif's), and
+  in 20 s of passive scan heard 1412 advertisements from 30 devices, all
+  to a test program on the router that speaks as `pirate-bluetooth`
+  does; `pirate-bluetooth` itself has listened through a board only in
+  its tests. Two faults were found and fixed doing so: 921600 baud, the
+  speed first chosen, is one the M5StickC's USB chip does not make; and
+  the board read nothing the router sent through a USB-to-serial chip
+  (ESP-IDF's `uart_read_bytes` waits for all it is asked for). On the
+  router, the new
+  `pirate-bluetooth` asked the XIAO ESP32-C5 (on Biscuit) "hello"
+  twice, had no answer, said so and left it alone, its port's lock let
+  go. Of the boards on a USB-to-serial chip (the first ESP32's dev
+  boards), only an M5Stack's is looked for, by the name its FTDI chip
+  gives; the others are not yet. The M5StickC Plus fell off the
+  router's USB again and again before it was written over, its battery
+  low; it stayed on once charged.
 - The USB port's power, beyond a first use. On the device it has been
   used at boot (the router found the first dongle silent, switched the
   port off and on by itself, twice, and said so) and by hand, through
@@ -1196,8 +1264,8 @@ Not yet run:
 | `feed/utils/pirate-flipper/` | the Flipper tab's daemon (`src/pirate-flipper.c`: a Flipper Zero's RPC session, on ubus as `pirate.flipper`) and its init script |
 | `feed/utils/pirate-meshcore/` | the Messenger tab's daemon (`src/pirate-meshcore.c`: a MeshCore radio's companion protocol, on ubus as `pirate.meshcore`) and its init script |
 | `feed/utils/pirate-portapack/` | the PortaPack tab's daemon (`src/pirate-portapack.c`: a PortaPack/Mayhem serial command shell, on ubus as `pirate.portapack`) and its init script |
-| `feed/utils/pirate-esp/` | the ESP32 boards' flasher (`src/pirate-esp.c`: a board's chip and MAC, its flash read back and written, through the loader in the chip's ROM) |
-| `feed/utils/pirate-bluetooth/` | the Bluetooth tab's daemon (`src/pirate-bluetooth.c`: the kernel's Bluetooth adapter set to listen, and what it reports handed on, on ubus as `pirate.bluetooth`) and its init script |
+| `feed/utils/pirate-esp/` | the ESP32 boards' flasher (`src/pirate-esp.c`: a board's chip and MAC, its flash read back and written, through the loader in the chip's ROM), and Pirate Radio's firmware for a board (`firmware/`, ESP-IDF: its Bluetooth radio, listening only, for `pirate-bluetooth`) |
+| `feed/utils/pirate-bluetooth/` | the Bluetooth tab's daemon (`src/pirate-bluetooth.c`: the kernel's Bluetooth adapter, or an ESP32 board's, set to listen, and what it reports handed on, on ubus as `pirate.bluetooth`) and its init script |
 | `feed/utils/pirate-websdr/` | the Listen page's bridge on the router (`src/`: a radio's samples into a WebSocket, through SoapySDR, and the tuning back), and `DESIGN.md`: how the bridge, the engine and the page fit together, and what they say to each other |
 | `feed/utils/pirate-radio-ui/files/` | the web UI (`index.html`, `app.js`, `style.css`) and the firmware-upload CGI, served at `/` |
 | `feed/utils/pirate-radio-ui/files/sdr/` | the Listen page's receiver: the page's part (`receiver.js`) and the signal processing, which runs in a worker (`worker.js`, `dsp.js`; `siggen.js` is the simulated band of the demo mode) |

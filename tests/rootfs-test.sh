@@ -1188,6 +1188,17 @@ rm -f "$T/sys/class/tty/ttyACM0/device"
 ln -s "$T/sys/bus/usb/devices/1-7/1-7:1.0" "$T/sys/class/tty/ttyACM0/device"
 check "gps pnp: an ESP32 board is not a GPS" [ "$(gsync)" = stop ]
 check "gps hotplug: an ESP32 board plugged in leaves gpsd stopped" [ "$(ghp ACTION=add DEVNAME=ttyACM0)" = stop ]
+# An M5StickC Plus: its FTDI, which says "M5stack", takes /dev/ttyUSB0; an
+# FTDI that says anything else may be a GPS's
+mkusb 1-8 0403 6001 495261468D M5stack
+mkdir -p "$T/sys/bus/usb/devices/1-8/1-8:1.0" "$T/sys/class/tty/ttyUSB0"
+ln -s "$T/sys/bus/usb/devices/1-8/1-8:1.0" "$T/sys/class/tty/ttyUSB0/device"
+: > "$GD/dev/ttyUSB0"
+check "gps pnp: an M5StickC Plus is not a GPS" [ "$(gsync)" = stop ]
+echo "FT232R USB UART" > "$T/sys/bus/usb/devices/1-8/product"
+check "gps pnp: another FTDI may be a GPS's" [ "$(gsync)" = start ]
+rm -f "$GD/dev/ttyUSB0" "$T/sys/class/tty/ttyUSB0/device"
+rm -rf "$T/sys/bus/usb/devices/1-8" "$T/sys/class/tty/ttyUSB0"
 rm -f "$T/sys/class/tty/ttyACM0/device"
 rm -rf "$T/sys/bus/usb/devices/1-7"
 ln -s "$T/sys/bus/usb/devices/1-3/1-3:1.0" "$T/sys/class/tty/ttyACM0/device"
@@ -2791,8 +2802,71 @@ check "bluetooth: unplugged: absent" bt_is absent
 rm -rf "$BU"
 check "bluetooth: unplugged: nothing more to say" bt_err ""
 check "bluetooth: the daemon is still running" kill -0 "$BT_DAEMON"
+# An ESP32 board on its own USB (Espressif's 303a) running Pirate Radio's
+# firmware: tests/fakebt -b plays it on a pseudo-terminal, which a ttyACM
+# port of the stand-in sysfs is. A daemon without -d (and no adapter of the
+# kernel's) finds it by asking "hello"
+kill "$BT_DAEMON" "$BT_FAKE" 2> /dev/null
+wait "$BT_DAEMON" 2> /dev/null
+BD="$BT/dev"
+BK="$BT/lock"
+BE="$BS/bus/usb/devices/1-2"
+mkdir -p "$BD" "$BK" "$BE/1-2:1.0" "$BS/class/tty/ttyACM0"
+echo 303a > "$BE/idVendor"; echo 1001 > "$BE/idProduct"; echo 0101 > "$BE/bcdDevice"
+echo "USB JTAG/serial debug unit" > "$BE/product"; echo Espressif > "$BE/manufacturer"
+echo 1 > "$BE/busnum"; echo 5 > "$BE/devnum"
+ln -s "$BE/1-2:1.0" "$BS/class/tty/ttyACM0/device"
+: > "$BT/fake.log"
+fakebt -b "$BD/ttyACM0" -c "$BT/fifo" -n >> "$BT/fake.log" 2>&1 &
+BT_FAKE=$!
+pirate-bluetooth -s "$BS" -t "$BD" -k "$BK" -u "$BT/ubus.sock" -i 3000 > "$BT/daemon3.log" 2>&1 &
+BT_DAEMON=$!
+check "bluetooth: a board with Pirate Radio's firmware on its own USB: asked, and found" bt_is idle
+check "bluetooth: a board: what it is" [ "$(bts '@.adapter') $(bts '@.board') $(bts '@.firmware') $(bts '@.usb') $(bts '@.address')" = "ttyACM0 esp32c3 0.1.0 303a:1001 34:85:18:A1:B2:C3" ]
+check "bluetooth: a board: named as one" [ "$(bts '@.product')" = "ESP32-C3 board, Pirate Radio firmware 0.1.0" ]
+check "bluetooth: a board: its port let go once asked" [ ! -e "$BK/LCK..ttyACM0" ]
+check "bluetooth: a board: asked what it hears, it listens through it" bt_state listening
+check "bluetooth: a board: what it is, then a passive scan, every advertisement wanted" sh -c "grep -q '^version$' '$BT/fake.log' && grep -q '^scan on passive$' '$BT/fake.log'"
+check "bluetooth: a board: its port held while it listens, by a lock file of this daemon's" [ "$(tr -d ' ' < "$BK/LCK..ttyACM0")" = "$BT_DAEMON" ]
+s=$(bt reports | jsonfilter -e '@.seq')
+echo "adv 020106" > "$BT/fifo"
+d=$(bt reports "{\"seq\":${s:-0}}" | jsonfilter -e '@.data')
+check "bluetooth: a board: what it heard, a record as an adapter's" sh -c "case '$d' in FA??????PgIBAAD/7t3Mu6oDAgEGxA==) ;; *) exit 1 ;; esac"
+echo restart > "$BT/fifo"
+check "bluetooth: a board that starts again: said" bt_err "the board started again"
+check "bluetooth: a board that started again: asked, it listens again" bt_state listening
+: > "$BT/fake.log"
+sleep 5
+check "bluetooth: a board, nobody asking: the scan off, its port and its lock let go" sh -c "grep -q '^scan off$' '$BT/fake.log' && [ ! -e '$BK/LCK..ttyACM0' ] && [ \"\$(bts '@.state')\" = idle ]"
+# Somebody else holds the port: its lock file names a process that runs
+sleep 60 &
+BT_HOLD=$!
+printf '%10d\n' "$BT_HOLD" > "$BK/LCK..ttyACM0"
+bt reports > /dev/null
+check "bluetooth: a board whose port somebody else holds: left alone, and said" bt_err "the board's port (ttyACM0) is in use, by process $BT_HOLD"
+e=$(PIRATE_LOCK_DIR="$BK" pirate-esp identify "$BD/ttyACM0" 2> /dev/null | jsonfilter -e '@.error')
+check "esp: a port somebody else holds is refused (pirate-esp keeps to the same locks)" sh -c "case '$e' in '$BD/ttyACM0 is in use, by '*'process $BT_HOLD'*) ;; *) exit 1 ;; esac"
+kill "$BT_HOLD"
+rm -f "$BK/LCK..ttyACM0"
+# Unplugged; then a board on the same port with another firmware, which
+# answers no "hello": asked twice, and left alone from then on
+rm -rf "$BS/class/tty/ttyACM0"
+check "bluetooth: a board unplugged: absent" bt_is absent
+kill "$BT_FAKE"
+: > "$BT/fake.log"
+fakebt -b "$BD/ttyACM0" -c "$BT/fifo" -n -q >> "$BT/fake.log" 2>&1 &
+BT_FAKE=$!
+echo 6 > "$BE/devnum"
+mkdir -p "$BS/class/tty/ttyACM0"
+ln -s "$BE/1-2:1.0" "$BS/class/tty/ttyACM0/device"
+check "bluetooth: a board with another firmware: asked, and given up on" sh -c "i=0; while ! grep -q 'not a board with Pirate Radio' '$BT/daemon3.log' && [ \$i -lt 10 ]; do sleep 1; i=\$((i + 1)); done; [ \"\$(grep -c '^hello$' '$BT/fake.log')\" = 2 ]"
+sleep 5
+check "bluetooth: a board with another firmware: not asked again, and absent" [ "$(grep -c '^hello$' "$BT/fake.log") $(bts '@.state')" = "2 absent" ]
+check "bluetooth: a board with another firmware: its port not held" [ ! -e "$BK/LCK..ttyACM0" ]
+rm -rf "$BS/class/tty/ttyACM0"
+check "bluetooth: the daemon is still running, after the boards" kill -0 "$BT_DAEMON"
 if [ "$FAIL" != 0 ]; then
-	tail -n 30 "$BT/daemon.log" "$BT/daemon2.log" 2> /dev/null | sed 's/^/  pirate-bluetooth: /'
+	tail -n 30 "$BT/daemon.log" "$BT/daemon2.log" "$BT/daemon3.log" 2> /dev/null | sed 's/^/  pirate-bluetooth: /'
 	tail -n 30 "$BT/fake.log" | sed 's/^/  fakebt: /'
 	tail -n 10 "$BT/ubusd.log" | sed 's/^/  ubusd: /'
 	# (what the older way handed on: all but the long record's filling)

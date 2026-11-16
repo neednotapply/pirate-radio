@@ -4,3 +4,8 @@ __pycache__/
 # pirate-websdr built in its source directory (make -C feed/utils/pirate-websdr/src)
 feed/utils/pirate-websdr/src/*.o
 feed/utils/pirate-websdr/src/pirate-websdr
+# The ESP32 firmware built in its own folder (idf.py build): its settings as made
+feed/utils/pirate-esp/firmware/sdkconfig
+feed/utils/pirate-esp/firmware/sdkconfig.old
+feed/utils/pirate-esp/firmware/dependencies.lock
+feed/utils/pirate-esp/firmware/managed_components/

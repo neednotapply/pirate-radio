@@ -1,0 +1,13 @@
+# The Bluetooth controller alone, driven over VHCI by main.c: no Bluetooth
+# host on the board
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_ONLY=y
+CONFIG_BT_CONTROLLER_ENABLED=y
+
+# No console: the board's USB (or its UART) carries the protocol and nothing
+# else. (The ROM and the bootloader still say a few lines as it starts; the
+# router passes over them.)
+CONFIG_ESP_CONSOLE_NONE=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+CONFIG_LOG_DEFAULT_LEVEL_WARN=y

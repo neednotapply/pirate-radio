@@ -26,7 +26,10 @@
  *
  * Only the ROM's own loader is used (esptool sends a "stub" loader to the
  * chip's RAM first, by default, to go faster): there is nothing more to
- * carry, and every chip's ROM has the commands used here.
+ * carry, and every chip's ROM has the commands used here. What the stub
+ * does that the ROM does not is done here: on the first ESP32, the flash
+ * is attached on the pins the chip's eFuses give (an ESP32-PICO-D4's, in
+ * an M5StickC say, are not the usual ones).
  *
  * How a chip is put into its loader is what esptool does: on a board with
  * a USB-to-serial chip, the serial port's DTR and RTS lines drive its
@@ -42,6 +45,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -333,12 +337,73 @@ static void usb_id(struct port *p)
 	p->usb_jtag = !strcmp(p->usb, "303a:1001");
 }
 
+/* The port's lock file, as UUCP's (and picocom's): pirate-bluetooth keeps to
+ * them, and holds a board's port so while a page listens through it.
+ * PIRATE_LOCK_DIR: where they are, in place of /var/lock (tests) */
+static char lock_file[PATH_MAX];
+
+static void lock_drop(void)
+{
+	char s[32];
+	FILE *f;
+
+	if (!lock_file[0] || !(f = fopen(lock_file, "r")))
+		return;
+	if (fgets(s, sizeof(s), f) && strtol(s, NULL, 10) == getpid())
+		unlink(lock_file);
+	fclose(f);
+}
+
+static bool lock_take(const char *path)
+{
+	const char *dir = getenv("PIRATE_LOCK_DIR") ? getenv("PIRATE_LOCK_DIR") : "/var/lock";
+	const char *name = strrchr(path, '/');
+	char s[32], who[64] = "", tmp[PATH_MAX + 16];
+	long pid = 0;
+	FILE *f;
+
+	snprintf(lock_file, sizeof(lock_file), "%s/LCK..%s", dir, name ? name + 1 : path);
+	if ((f = fopen(lock_file, "r"))) {
+		if (fgets(s, sizeof(s), f))
+			pid = strtol(s, NULL, 10);
+		fclose(f);
+	}
+	if (pid > 0 && pid != getpid() && !(kill(pid, 0) < 0 && errno == ESRCH)) {
+		snprintf(tmp, sizeof(tmp), "/proc/%ld/comm", pid);
+		if ((f = fopen(tmp, "r"))) {
+			if (!fgets(who, sizeof(who), f))
+				who[0] = 0;
+			who[strcspn(who, "\n")] = 0;
+			fclose(f);
+		}
+		lock_file[0] = 0;
+		if (!strcmp(who, "pirate-bluetoot") || !strcmp(who, "pirate-bluetooth"))
+			return fail("%s is in use, by pirate-bluetooth (process %ld): the Bluetooth page listens "
+				    "through the board, and it lets go 10 s after the page stops asking", path, pid);
+		if (who[0])
+			return fail("%s is in use, by %s (process %ld)", path, who, pid);
+		return fail("%s is in use, by process %ld", path, pid);
+	}
+	mkdir(dir, 0755);
+	snprintf(tmp, sizeof(tmp), "%s.%d", lock_file, (int)getpid());
+	if (!(f = fopen(tmp, "w")))
+		return true;   /* (no lock to be had: the port all the same) */
+	fprintf(f, "%10d\n", (int)getpid());
+	fclose(f);
+	if (rename(tmp, lock_file) < 0)
+		unlink(tmp);
+	atexit(lock_drop);
+	return true;
+}
+
 static bool port_open(struct port *p, const char *path)
 {
 	struct termios t;
 
 	memset(p, 0, sizeof(*p));
 	p->path = path;
+	if (!lock_take(path))
+		return false;
 	p->fd = open(path, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
 	if (p->fd < 0)
 		return fail("can't open %s: %s", path, strerror(errno));
@@ -854,16 +919,45 @@ static bool write_image(struct port *p, const struct chip *c, const struct image
 	return true;
 }
 
-/* The flash set up for writing: attached (on the chips that can have it
- * on other pins: the usual ones), and its size; esptool's when it cannot
- * tell, 4 MB, or as much as the images need */
-static bool flash_setup(struct port *p, uint32_t end)
+/* Where the first ESP32's flash is, as its ROM works it out when it boots
+ * (the "configsip" of its boot text): the pins its eFuses give, packed
+ * five to a word as SPI_ATTACH takes them, or 0 for the usual ones. An
+ * ESP32-PICO-D4's flash is on others (GPIO16 and 17 among them), and the
+ * ROM's loader does not look: attached to the usual pins, it waits for
+ * ever on the flash's first read or erase. esptool's stub looks them up
+ * the same way. */
+static bool esp32_flash_pins(struct port *p, uint32_t *pins)
+{
+	uint32_t w3, w5, clk, q, d, cs, hd;
+
+	if (!read_reg(p, ESP32_EFUSE + 0x0c, &w3) || !read_reg(p, ESP32_EFUSE + 0x14, &w5))
+		return false;
+	clk = w5 & 0x1f;
+	q = w5 >> 5 & 0x1f;
+	d = w5 >> 10 & 0x1f;
+	cs = w5 >> 15 & 0x1f;
+	hd = w3 >> 4 & 0x1f;
+	*pins = clk || q || d || cs || hd ? clk | q << 6 | d << 12 | cs << 18 | hd << 24 : 0;
+	return true;
+}
+
+/* The flash set up for writing: attached (on the first ESP32, on the pins
+ * its eFuses give; on the others, the usual ones), and its size;
+ * esptool's when it cannot tell, 4 MB, or as much as the images need */
+static bool flash_setup(struct port *p, const struct chip *c, uint32_t end)
 {
 	uint8_t attach[8] = { 0 }, params[24];
-	uint32_t size = 4u << 20;
+	uint32_t size = 4u << 20, pins = 0;
 
 	while (size < end)
 		size <<= 1;
+	if (c->id == 0) {
+		if (!esp32_flash_pins(p, &pins))
+			return false;
+		if (pins)
+			fprintf(stderr, "its flash on the pins its eFuses give (%u)\n", (unsigned)pins);
+		put32(attach, pins);
+	}
 	if (!check(p, "attaching its flash", OP_SPI_ATTACH, attach, sizeof(attach), 0, 0, CMD_MS, NULL, NULL, 0))
 		return false;
 	put32(params, 0);
@@ -1011,7 +1105,7 @@ int main(int argc, char **argv)
 	}
 	if (md5) {
 		/* (nothing is written: the chip reads what it has) */
-		if (!flash_setup(&p, end) || !flash_md5(&p, md5_at, md5_n, sum)) {
+		if (!flash_setup(&p, c, end) || !flash_md5(&p, md5_at, md5_n, sum)) {
 			reset_run(&p);
 			return answer_error();
 		}
@@ -1026,7 +1120,7 @@ int main(int argc, char **argv)
 				reset_run(&p);
 				return answer_error();
 			}
-		if (!flash_setup(&p, end)) {
+		if (!flash_setup(&p, c, end)) {
 			reset_run(&p);
 			return answer_error();
 		}

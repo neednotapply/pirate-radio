@@ -8,14 +8,22 @@
  * of which finds three other devices and is over in 300 ms, and tells the
  * name of the one that has one to tell.
  *
- *   fakebt -l socket [-c fifo] [-n] [-x] [-o] [-q]
+ * As an ESP32 board running Pirate Radio's firmware (-b) it is on a
+ * pseudo-terminal instead, and speaks as the firmware does, a line each
+ * way: "hello" answered with "PIRATE-ESP 1 esp32c3 ...", "C <hex>" a
+ * command, "E <hex>" an event. It starts as a board does, with a line of
+ * the ROM's before it says what it is.
+ *
+ *   fakebt -l socket | -b link [-c fifo] [-n] [-x] [-o] [-q]
  *
  *   -l  the socket it listens on
+ *   -b  a board: the pseudo-terminal, a symlink to it made at <link>
  *   -c  a FIFO: "adv <hex>" makes it report an advertisement with these
  *       bytes for its data, from AA:BB:CC:DD:EE:FF at -60 dBm (while it
  *       scans); "many <n>" n of its own at once; "error" a hardware error;
  *       "slow": its inquiries take a minute from now on (and it says
- *       "slow"); "quit" ends it
+ *       "slow"); "restart": a board starts again (its scan off, the ROM's
+ *       line and what it is said again; it says "restart"); "quit" ends it
  *   -n  nobody advertises by themselves: it reports only what the FIFO says
  *   -x  a Bluetooth 5 adapter as the kernel leaves one: the scan commands
  *       every LE adapter has are refused (Command Disallowed), the extended
@@ -24,7 +32,8 @@
  *       takes inquiries and name requests
  *   -q  one that answers nothing
  *
- * Prints an event a line to stdout: "open", "close", "version", "address",
+ * Prints an event a line to stdout: "open", "close" (as a board: "hello"
+ * for each it is asked, which -q leaves unanswered), "version", "address",
  * "scan on passive" ("active"; "filtered" after it when duplicates are to
  * be left out), "scan off", "xscan on passive", "xscan off", "refused
  * <opcode>", "unknown <opcode>"; and of the older way "inquiry <how long,
@@ -45,6 +54,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
+#include <termios.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -52,6 +62,12 @@
 
 static int lfd = -1, cfd = -1, ffd = -1;
 static bool opt_n, opt_x, opt_old, opt_q;
+/* As a board: the pseudo-terminal's other side (cfd is its own), and a line
+ * from the daemon as far as it has come */
+static const char *opt_board;
+static int sfd = -1;
+static char bline[700];
+static size_t blen;
 static bool scanning, active;
 static unsigned turn;
 /* (the older way: an inquiry is out, and what it finds has been said; when
@@ -114,6 +130,24 @@ static size_t unhex(const char *s, uint8_t *out, size_t max)
 
 /* ---------- what it sends ---------- */
 
+/* A line to the daemon, as a board says it */
+static void board_say(const char *s)
+{
+	size_t n = strlen(s), o = 0;
+	ssize_t r;
+
+	while (o < n) {
+		r = write(cfd, s + o, n - o);
+		if (r < 0 && errno == EINTR)
+			continue;
+		if (r <= 0) {
+			perror("fakebt: write");
+			return;
+		}
+		o += r;
+	}
+}
+
 static void send_evt(uint8_t evt, const uint8_t *p, size_t n)
 {
 	uint8_t pkt[3 + 255];
@@ -124,8 +158,30 @@ static void send_evt(uint8_t evt, const uint8_t *p, size_t n)
 	pkt[1] = evt;
 	pkt[2] = n;
 	memcpy(pkt + 3, p, n);
+	if (opt_board) {
+		char s[3 + 2 * (2 + 255) + 1];
+		size_t i, o = 0;
+
+		s[o++] = 'E';
+		s[o++] = ' ';
+		for (i = 1; i < 3 + n; i++)
+			o += sprintf(s + o, "%02x", pkt[i]);
+		s[o++] = '\n';
+		s[o] = 0;
+		board_say(s);
+		return;
+	}
 	if (send(cfd, pkt, 3 + n, MSG_NOSIGNAL) < 0 && errno != EAGAIN)
 		perror("fakebt: send");
+}
+
+/* As a board starts: a line of the ROM's, then what it is (-q: a board with
+ * another firmware, which says nothing of the kind) */
+static void board_start(void)
+{
+	board_say("ESP-ROM:esp32c3-api1-20210207\r\n");
+	if (!opt_q)
+		board_say("PIRATE-ESP 1 esp32c3 34:85:18:A1:B2:C3 0.1.0 ready\n");
 }
 
 /* Command Complete: one more command may come, the command's opcode, what
@@ -452,12 +508,51 @@ static void on_cmd(const uint8_t *b, size_t n)
 	}
 }
 
+/* A line from the daemon, as a board takes it */
+static void board_got(char *l)
+{
+	uint8_t b[1 + 3 + 255];
+
+	if (!strcmp(l, "hello")) {
+		say("hello");
+		if (!opt_q)
+			board_say("PIRATE-ESP 1 esp32c3 34:85:18:A1:B2:C3 0.1.0 ready\n");
+	} else if (l[0] == 'C' && l[1] == ' ') {
+		b[0] = 0x01;
+		on_cmd(b, 1 + unhex(l + 2, b + 1, sizeof(b) - 1));
+	}
+}
+
+/* What the daemon has sent a board, without waiting for more */
+static void board_read(void)
+{
+	char buf[512];
+	ssize_t r, i;
+
+	while ((r = read(cfd, buf, sizeof(buf))) > 0) {
+		for (i = 0; i < r; i++) {
+			if (buf[i] == '\n' || buf[i] == '\r') {
+				bline[blen] = 0;
+				if (blen)
+					board_got(bline);
+				blen = 0;
+			} else if (blen < sizeof(bline) - 1) {
+				bline[blen++] = buf[i];
+			}
+		}
+	}
+}
+
 /* What the daemon has sent meanwhile, without waiting for more */
 static void pump(void)
 {
 	uint8_t buf[512];
 	ssize_t r;
 
+	if (opt_board) {
+		board_read();
+		return;
+	}
 	while (cfd >= 0 && (r = recv(cfd, buf, sizeof(buf), MSG_DONTWAIT)) > 0)
 		on_cmd(buf, r);
 }
@@ -479,6 +574,10 @@ static void on_line(char *l)
 			if (i % 64 == 63)
 				pump();
 		}
+	} else if (!strcmp(l, "restart") && opt_board) {
+		scanning = active = false;
+		say("restart");
+		board_start();
 	} else if (!strcmp(l, "slow")) {
 		inq_ms = 60000;
 		say("slow");
@@ -493,8 +592,31 @@ static void on_line(char *l)
 
 static void usage(void)
 {
-	fprintf(stderr, "usage: fakebt -l socket [-c fifo] [-n] [-x] [-o] [-q]\n");
+	fprintf(stderr, "usage: fakebt -l socket | -b link [-c fifo] [-n] [-x] [-o] [-q]\n");
 	exit(2);
+}
+
+/* A board: a pseudo-terminal (its other side held here, raw, so that it
+ * neither ends nor echoes when the daemon lets go of it), and a symlink to
+ * it where the daemon looks */
+static int board_up(void)
+{
+	struct termios t;
+
+	cfd = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+	if (cfd < 0 || grantpt(cfd) || unlockpt(cfd))
+		return -1;
+	sfd = open(ptsname(cfd), O_RDWR | O_NOCTTY | O_CLOEXEC);
+	if (sfd < 0 || tcgetattr(sfd, &t))
+		return -1;
+	cfmakeraw(&t);
+	tcsetattr(sfd, TCSANOW, &t);
+	fcntl(cfd, F_SETFL, fcntl(cfd, F_GETFL) | O_NONBLOCK);
+	unlink(opt_board);
+	if (symlink(ptsname(cfd), opt_board))
+		return -1;
+	board_start();
+	return 0;
 }
 
 int main(int argc, char **argv)
@@ -506,10 +628,13 @@ int main(int argc, char **argv)
 	int64_t last = 0;
 	int c;
 
-	while ((c = getopt(argc, argv, "l:c:nxoq")) != -1) {
+	while ((c = getopt(argc, argv, "l:b:c:nxoq")) != -1) {
 		switch (c) {
 		case 'l':
 			path = optarg;
+			break;
+		case 'b':
+			opt_board = optarg;
 			break;
 		case 'c':
 			fifo = optarg;
@@ -530,15 +655,22 @@ int main(int argc, char **argv)
 			usage();
 		}
 	}
-	if (!path || optind != argc)
+	if (!path == !opt_board || optind != argc)
 		usage();
 	signal(SIGPIPE, SIG_IGN);
-	lfd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
-	snprintf(a.sun_path, sizeof(a.sun_path), "%s", path);
-	unlink(path);
-	if (lfd < 0 || bind(lfd, (struct sockaddr *)&a, sizeof(a)) < 0 || listen(lfd, 1) < 0) {
-		perror("fakebt: socket");
-		return 1;
+	if (opt_board) {
+		if (board_up() < 0) {
+			perror("fakebt: pseudo-terminal");
+			return 1;
+		}
+	} else {
+		lfd = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
+		snprintf(a.sun_path, sizeof(a.sun_path), "%s", path);
+		unlink(path);
+		if (lfd < 0 || bind(lfd, (struct sockaddr *)&a, sizeof(a)) < 0 || listen(lfd, 1) < 0) {
+			perror("fakebt: socket");
+			return 1;
+		}
 	}
 	if (fifo) {
 		unlink(fifo);
@@ -565,7 +697,10 @@ int main(int argc, char **argv)
 		}
 		if (poll(p, n, TICK_MS) < 0 && errno != EINTR)
 			break;
-		if (p[0].revents && cfd < 0) {
+		if (opt_board) {
+			if (p[0].revents & POLLIN)
+				board_read();
+		} else if (p[0].revents && cfd < 0) {
 			cfd = accept(lfd, NULL, NULL);
 			if (cfd >= 0) {
 				scanning = active = false;

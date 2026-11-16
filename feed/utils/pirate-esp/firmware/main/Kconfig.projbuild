@@ -1,0 +1,30 @@
+menu "Pirate Radio"
+
+choice PIRATE_LINK
+	prompt "How the board talks to the router"
+	default PIRATE_LINK_USB_SERIAL_JTAG if SOC_USB_SERIAL_JTAG_SUPPORTED
+	default PIRATE_LINK_UART
+	help
+		The chip's own USB (a board plugged in by it, which the router sees as
+		Espressif's 303a:1001), or the chip's first UART through the board's
+		USB-to-serial chip (a CP210x, CH34x or FTDI).
+
+	config PIRATE_LINK_USB_SERIAL_JTAG
+		bool "The chip's own USB (USB Serial/JTAG)"
+		depends on SOC_USB_SERIAL_JTAG_SUPPORTED
+
+	config PIRATE_LINK_UART
+		bool "UART0, through the board's USB-to-serial chip"
+endchoice
+
+config PIRATE_UART_BAUD
+	int "The UART's speed"
+	depends on PIRATE_LINK_UART
+	default 500000
+	help
+		What the router's pirate-bluetooth opens the port at, so the two must
+		agree. 500000 is a speed the usual USB-to-serial chips all make, and
+		so does the M5StickC's (an emulated FTDI that answers nothing at
+		921600: its clock makes 115200, 500000 and 1500000, not that one).
+
+endmenu
