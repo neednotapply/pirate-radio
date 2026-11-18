@@ -1188,11 +1188,12 @@ rm -f "$T/sys/class/tty/ttyACM0/device"
 ln -s "$T/sys/bus/usb/devices/1-7/1-7:1.0" "$T/sys/class/tty/ttyACM0/device"
 check "gps pnp: an ESP32 board is not a GPS" [ "$(gsync)" = stop ]
 check "gps hotplug: an ESP32 board plugged in leaves gpsd stopped" [ "$(ghp ACTION=add DEVNAME=ttyACM0)" = stop ]
-# An M5StickC Plus: its FTDI, which says "M5stack", takes /dev/ttyUSB0; an
-# FTDI that says anything else may be a GPS's
+# An M5StickC Plus: its FTDI, which says "M5stack", takes /dev/ttyUSB0 (its
+# port inside the USB interface, as the kernel puts a USB-to-serial chip's);
+# an FTDI that says anything else may be a GPS's
 mkusb 1-8 0403 6001 495261468D M5stack
-mkdir -p "$T/sys/bus/usb/devices/1-8/1-8:1.0" "$T/sys/class/tty/ttyUSB0"
-ln -s "$T/sys/bus/usb/devices/1-8/1-8:1.0" "$T/sys/class/tty/ttyUSB0/device"
+mkdir -p "$T/sys/bus/usb/devices/1-8/1-8:1.0/ttyUSB0" "$T/sys/class/tty/ttyUSB0"
+ln -s "$T/sys/bus/usb/devices/1-8/1-8:1.0/ttyUSB0" "$T/sys/class/tty/ttyUSB0/device"
 : > "$GD/dev/ttyUSB0"
 check "gps pnp: an M5StickC Plus is not a GPS" [ "$(gsync)" = stop ]
 echo "FT232R USB UART" > "$T/sys/bus/usb/devices/1-8/product"
@@ -2837,7 +2838,8 @@ check "bluetooth: a board that starts again: said" bt_err "the board started aga
 check "bluetooth: a board that started again: asked, it listens again" bt_state listening
 : > "$BT/fake.log"
 sleep 5
-check "bluetooth: a board, nobody asking: the scan off, its port and its lock let go" sh -c "grep -q '^scan off$' '$BT/fake.log' && [ ! -e '$BK/LCK..ttyACM0' ] && [ \"\$(bts '@.state')\" = idle ]"
+st=$(bts '@.state')
+check "bluetooth: a board, nobody asking: the scan off, its port and its lock let go" sh -c "grep -q '^scan off$' '$BT/fake.log' && [ ! -e '$BK/LCK..ttyACM0' ] && [ '$st' = idle ]"
 # Somebody else holds the port: its lock file names a process that runs
 sleep 60 &
 BT_HOLD=$!
@@ -2864,6 +2866,29 @@ sleep 5
 check "bluetooth: a board with another firmware: not asked again, and absent" [ "$(grep -c '^hello$' "$BT/fake.log") $(bts '@.state')" = "2 absent" ]
 check "bluetooth: a board with another firmware: its port not held" [ ! -e "$BK/LCK..ttyACM0" ]
 rm -rf "$BS/class/tty/ttyACM0"
+# An M5StickC Plus: its FTDI chip (0403:6001, which says "M5stack") on
+# ttyUSB0, laid out as the kernel lays out a USB-to-serial chip's port:
+# inside the USB interface, the USB device two folders up (a ttyACM port's
+# is one). An FTDI chip that says anything else is not asked
+kill "$BT_FAKE"
+: > "$BT/fake.log"
+BM="$BS/bus/usb/devices/1-3"
+mkdir -p "$BM/1-3:1.0/ttyUSB0" "$BS/class/tty/ttyUSB0"
+echo 0403 > "$BM/idVendor"; echo 6001 > "$BM/idProduct"; echo 0500 > "$BM/bcdDevice"
+echo "FT232R USB UART" > "$BM/product"; echo FTDI > "$BM/manufacturer"
+echo 1 > "$BM/busnum"; echo 7 > "$BM/devnum"
+ln -s "$BM/1-3:1.0/ttyUSB0" "$BS/class/tty/ttyUSB0/device"
+fakebt -b "$BD/ttyUSB0" -c "$BT/fifo" -n >> "$BT/fake.log" 2>&1 &
+BT_FAKE=$!
+sleep 5
+check "bluetooth: an FTDI chip that says nothing of M5Stack: not asked (it may be a GPS's)" [ "$(grep -c '^hello$' "$BT/fake.log") $(bts '@.state')" = "0 absent" ]
+echo M5stack > "$BM/product"
+check "bluetooth: an M5StickC Plus, on a USB-to-serial chip's port: asked, and found" bt_is idle
+check "bluetooth: an M5StickC Plus: what it is" [ "$(bts '@.adapter') $(bts '@.usb')" = "ttyUSB0 0403:6001" ]
+check "bluetooth: an M5StickC Plus: asked what it hears, it listens through it" bt_state listening
+rm -rf "$BS/class/tty/ttyUSB0"
+check "bluetooth: an M5StickC Plus unplugged: absent" bt_is absent
+rm -rf "$BM"
 check "bluetooth: the daemon is still running, after the boards" kill -0 "$BT_DAEMON"
 if [ "$FAIL" != 0 ]; then
 	tail -n 30 "$BT/daemon.log" "$BT/daemon2.log" "$BT/daemon3.log" 2> /dev/null | sed 's/^/  pirate-bluetooth: /'

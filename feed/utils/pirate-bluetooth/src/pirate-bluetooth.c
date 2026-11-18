@@ -1286,15 +1286,22 @@ static void lock_drop(const char *tty)
 
 /* The USB device a port is on (its folder in sysfs, in <d>), and what tells
  * it from another plugged into the same place later: the port's name, the
- * bus and the device's number. False: no such port, or not on USB */
+ * bus and the device's number. False: no such port, or not on USB. (A
+ * ttyACM port's device is the USB interface, the USB device the folder
+ * above it; a ttyUSB port's, a USB-to-serial chip's, is a port inside the
+ * interface, one further down) */
 static bool port_usb(const char *tty, char *d, size_t dn, char *key, size_t kn)
 {
 	char p[600], v[16], bus[16], dev[16];
 
 	snprintf(d, dn, "%s/class/tty/%s/device/..", opt_sysfs, tty);
 	snprintf(p, sizeof(p), "%s/idVendor", d);
-	if (!read_line(p, v, sizeof(v)) || !v[0])
-		return false;
+	if (!read_line(p, v, sizeof(v)) || !v[0]) {
+		snprintf(d, dn, "%s/class/tty/%s/device/../..", opt_sysfs, tty);
+		snprintf(p, sizeof(p), "%s/idVendor", d);
+		if (!read_line(p, v, sizeof(v)) || !v[0])
+			return false;
+	}
 	snprintf(p, sizeof(p), "%s/busnum", d);
 	read_line(p, bus, sizeof(bus));
 	snprintf(p, sizeof(p), "%s/devnum", d);

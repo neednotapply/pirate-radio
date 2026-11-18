@@ -934,7 +934,10 @@ Tested in this repository's tests and builds:
   daemon's; one that starts again while it listens, said and listened
   through again; a port somebody else holds left alone, by the daemon
   and by `pirate-esp`; a board with another firmware asked twice and
-  left alone from then on),
+  left alone from then on; an M5StickC Plus, on a ttyUSB port inside
+  its USB interface as the kernel puts a USB-to-serial chip's, found and
+  listened through, and an FTDI chip that says nothing of M5Stack not
+  asked),
   against mock radios and tools on that same userland, and the rename from
   slate-sdr (settings, card mount, card folder) and pirateradio.local, and
   the web UI's receiver (the bridge as built for the router, answering a
@@ -947,7 +950,7 @@ Tested in this repository's tests and builds:
   them the same; the firmware upload and the phone's files refused to a
   page not signed in, a session rpcd does not let, and what is no session
   id; the Messenger's public channel, found by its key, with nothing of
-  another conversation): 979 checks.
+  another conversation): 984 checks.
 - The receiver in the web UI has tests of its own that need no router (the
   workflow's `websdr` job): the engine's signal processing against signals
   made by the formula, the engine against a stand-in for the bridge, and
@@ -1230,8 +1233,15 @@ Not yet run:
   and a reset, said what its radio is (Bluetooth 4.2, Espressif's), and
   in 20 s of passive scan heard 1412 advertisements from 30 devices, all
   to a test program on the router that speaks as `pirate-bluetooth`
-  does; `pirate-bluetooth` itself has listened through a board only in
-  its tests. Two faults were found and fixed doing so: 921600 baud, the
+  does. Then `pirate-bluetooth` itself (built for the router and run
+  from `/tmp` on a ubus of its own, not yet from an image) found it on
+  its USB chip's port, listened through it for 25 s (1855 records, none
+  lost: 31 devices, read with the page's own code), held its port
+  meanwhile and let it go when nobody asked; the build before would
+  have missed it, looking for a ttyUSB port's USB device where a ttyACM
+  port's is. The tests' board checks were run on the router too, all
+  passing. Two faults in the firmware were found and fixed on the way
+  there: 921600 baud, the
   speed first chosen, is one the M5StickC's USB chip does not make; and
   the board read nothing the router sent through a USB-to-serial chip
   (ESP-IDF's `uart_read_bytes` waits for all it is asked for). On the
